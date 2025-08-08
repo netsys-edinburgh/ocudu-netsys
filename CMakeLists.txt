@@ -6,4 +6,6 @@
 # the distribution.
 #
 
+set(SRSRAN_UPPER_PHY_TAP_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+
 add_subdirectory(lib)
