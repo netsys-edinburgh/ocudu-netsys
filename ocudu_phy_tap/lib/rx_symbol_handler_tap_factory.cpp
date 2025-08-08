@@ -11,6 +11,7 @@
 #include "rx_symbol_handler_tap_decorator.h"
 #include "srsran/phy/upper/upper_phy_factories.h"
 #include "srsran/srslog/logger.h"
+#include <external_processor_factories.h>
 
 using namespace srsran;
 
@@ -28,9 +29,18 @@ public:
                                                         unsigned                                             nof_rb_,
                                                         unsigned                                             nof_ports_,
                                                         const std::string& processor_arguments_) :
-    base_factory(std::move(factory_)), nof_rb(nof_rb_), nof_ports(nof_ports_), processor_arguments(processor_arguments_)
+    base_factory(std::move(factory_))
   {
     srsran_assert(base_factory, "Invalid Rx symbol handler factory.");
+
+    // [EXTERNAL CODE INSERTION START] Use your own external UL processor factory creation function here.
+
+    // Create the external UL processor factory.
+    processor_factory = create_external_ul_procesor_dummy_factory(nof_rb_, nof_ports_, processor_arguments_);
+
+    // [EXTERNAL CODE INSERTION END]
+
+    report_fatal_error_if_not(processor_factory, "Invalid external UL processor factory.");
   }
 
   /// Creates a new upper physical layer receive symbol handler tap decorator.
@@ -39,20 +49,19 @@ public:
     // Create the RX symbol handler.
     std::unique_ptr<upper_phy_rx_symbol_handler> rx_symbol_handler = base_factory->create(ul_processor_pool_);
 
+    // Create the external UL processor.
+    std::unique_ptr<external_ul_processor> external_processor = processor_factory->create();
+
     // Create and return the RX symbol handler tap decorator.
-    return std::make_unique<upper_phy_rx_symbol_handler_tap_decorator>(
-        std::move(rx_symbol_handler), nof_rb, nof_ports, processor_arguments);
+    return std::make_unique<upper_phy_rx_symbol_handler_tap_decorator>(std::move(rx_symbol_handler),
+                                                                       std::move(external_processor));
   }
 
 private:
   /// Factory that creates RX symbol handlers.
   std::shared_ptr<upper_phy_rx_symbol_handler_factory> base_factory;
-  /// Number of resource blocks to process in the resource grid.
-  unsigned nof_rb;
-  /// Number of ports to process.
-  unsigned nof_ports;
-  /// External processor arguments.
-  std::string processor_arguments;
+  /// Factory used to create external UL processors.
+  std::shared_ptr<external_ul_processor_factory> processor_factory;
 };
 
 } // namespace

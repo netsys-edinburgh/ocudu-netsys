@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include "external_ul_symbol_processor.h"
+#include "external_ul_processor.h"
 #include "srsran/phy/support/prach_buffer_context.h"
 #include "srsran/phy/upper/upper_phy_rx_symbol_handler.h"
 #include "srsran/srslog/logger.h"
@@ -27,16 +27,12 @@ public:
 
   /// Constructor that takes ownership of an RX symbol handler.
   explicit upper_phy_rx_symbol_handler_tap_decorator(std::unique_ptr<upper_phy_rx_symbol_handler> handler_,
-                                                     unsigned                                     nof_rb,
-                                                     unsigned                                     nof_ports,
-                                                     const std::string&                           processor_arguments) :
-    handler(std::move(handler_)),
-    processor(nof_rb, nof_ports, processor_arguments),
-    logger(srslog::fetch_basic_logger("PHY_TAP", true))
+                                                     std::unique_ptr<external_ul_processor>       processor_) :
+    handler(std::move(handler_)), processor(std::move(processor_)), logger(srslog::fetch_basic_logger("PHY_TAP", true))
   {
     srsran_assert(handler, "Invalid Rx symbol handler.");
 
-    // TODO: Set the log level based on the configuration arguments.
+    // TODO: Choose how to set the log level or if logging is required at all in the decorator.
     logger.set_level(srslog::basic_levels::debug);
   }
 
@@ -45,7 +41,7 @@ public:
   handle_rx_symbol(const upper_phy_rx_symbol_context& context, const shared_resource_grid& grid, bool is_valid) override
   {
     // Apply the external processing.
-    processor.process(context, grid);
+    processor->process(context, grid);
 
     // Pass the modified grid to the RX symbol handler.
     handler->handle_rx_symbol(context, grid, is_valid);
@@ -69,7 +65,7 @@ private:
   /// An instance of the upper physical layer receive symbol handler.
   std::unique_ptr<upper_phy_rx_symbol_handler> handler;
   /// UL symbol processor for processing the received symbols.
-  external_ul_symbol_processor processor;
+  std::unique_ptr<external_ul_processor> processor;
   /// Logger object.
   srslog::basic_logger& logger;
 };
