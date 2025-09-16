@@ -1,6 +1,6 @@
-add_library(external_processor_dummy_impl external_ul_processor_dummy_impl.cpp)
-target_include_directories(external_processor_dummy_impl PRIVATE ${SRSRAN_UPPER_PHY_TAP_SRC_DIR}/include)
+add_library(external_processor_example_impl external_ul_processor_example_impl.cpp)
+target_include_directories(external_processor_example_impl PRIVATE ${SRSRAN_UPPER_PHY_TAP_SRC_DIR}/include)
 
 add_library(external_processors external_processor_factories.cpp)
 target_include_directories(external_processors PRIVATE ${SRSRAN_UPPER_PHY_TAP_SRC_DIR}/include)
-target_link_libraries(external_processors external_processor_dummy_impl)
+target_link_libraries(external_processors external_processor_example_impl)

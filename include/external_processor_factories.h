@@ -26,17 +26,18 @@ public:
   virtual std::unique_ptr<external_ul_processor> create() = 0;
 };
 
-/// \brief Creates an external UL processor factory that produces dummy external UL processors.
+/// \brief Creates an external UL processor factory that produces example external UL processors.
 ///
-/// This factory is used to create an external UL processor that applies DSP processing to the UL symbols.
+/// This factory is used to create an external UL processor example that applies trivial DSP processing to the UL
+/// symbols.
 ///
 /// \param[in] nof_rb              The number of resource blocks to process in the resource grid.
 /// \param[in] nof_ports           The number of ports to process.
 /// \param[in] processor_arguments Custom arguments for the external processor, if any.
 std::shared_ptr<external_ul_processor_factory>
-create_external_ul_procesor_dummy_factory(unsigned           nof_rb,
-                                          unsigned           nof_ports,
-                                          const std::string& processor_arguments = "");
+create_external_ul_procesor_example_factory(unsigned           nof_rb,
+                                            unsigned           nof_ports,
+                                            const std::string& processor_arguments = "");
 
 // [EXTERNAL CODE INSERTION START] Declare your own external UL processor factory creation functions here.
 
