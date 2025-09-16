@@ -11,13 +11,12 @@
 #pragma once
 
 #include "external_ul_processor.h"
-#include "srsran/phy/support/shared_resource_grid.h"
 #include "srsran/phy/upper/upper_phy_rx_symbol_handler.h"
 #include "srsran/ran/cyclic_prefix.h"
 
 namespace srsran {
 
-class external_ul_processor_dummy_impl : public external_ul_processor
+class external_ul_processor_example_impl : public external_ul_processor
 {
 public:
   /// Number of symbols to process at once. For now, the entire slot is processed.
@@ -28,15 +27,18 @@ public:
   /// \param[in] nof_rb Number of resource blocks in the resource grid.
   /// \param[in] nof_ports_ Number of ports to process.
   /// \param[in] processor_arguments custom arguments for the processor.
-  explicit external_ul_processor_dummy_impl(unsigned           nof_rb,
-                                            unsigned           nof_ports_,
-                                            const std::string& processor_arguments) :
+  explicit external_ul_processor_example_impl(unsigned           nof_rb,
+                                              unsigned           nof_ports_,
+                                              const std::string& processor_arguments) :
     temp_buffer(nof_rb * NRE), nof_ports(nof_ports_)
   {
   }
 
   // See the interface for documentation.
-  void process(const upper_phy_rx_symbol_context& context, const shared_resource_grid& grid) override;
+  void process(resource_grid_writer&       grid_writer,
+               const resource_grid_reader& grid_reader,
+               slot_point                  slot,
+               unsigned                    symbol) override;
 
   /// Buffer for the temporary storage of the resource grid data.
   std::vector<cf_t> temp_buffer;

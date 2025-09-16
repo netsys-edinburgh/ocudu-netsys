@@ -10,7 +10,9 @@
 
 #pragma once
 
-#include "srsran/phy/upper/upper_phy_rx_symbol_handler.h"
+#include "srsran/phy/support/resource_grid_reader.h"
+#include "srsran/phy/support/resource_grid_writer.h"
+#include "srsran/ran/slot_point.h"
 
 namespace srsran {
 
@@ -25,11 +27,17 @@ public:
   /// \brief Processes the UL symbols in the resource grid.
   ///
   /// This method is where the actual processing of the UL symbols takes place. Any external DSP processing must be
-  /// called from this method.
+  /// implemented by this method. The \e grid_reader provides access to the resource grid symbols of the current \e
+  /// slot, up to the current \e symbol.
   ///
-  /// \param[in] context The context of the received UL symbol, including sector, slot, and symbol index.
-  /// \param[in] grid    The resource grid containing the UL symbols to process.
-  virtual void process(const upper_phy_rx_symbol_context& context, const shared_resource_grid& grid) = 0;
+  /// \param[out] grid_writer Resource grid writer, used to write the processed symbols back into the resource grid.
+  /// \param[in]  grid_reader Resource grid reader, containing the input symbols to be processed.
+  /// \param[in]  slot        Current slot.
+  /// \param[in]  symbol      Current symbol index within the slot.
+  virtual void process(resource_grid_writer&       grid_writer,
+                       const resource_grid_reader& grid_reader,
+                       slot_point                  slot,
+                       unsigned                    symbol) = 0;
 };
 
 } // namespace srsran
