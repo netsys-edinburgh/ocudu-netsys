@@ -20,9 +20,9 @@ class external_ul_processor_example_factory : public external_ul_processor_facto
 {
 public:
   /// Factory constructor.
-  explicit external_ul_processor_example_factory(unsigned           nof_rb_,
-                                                 unsigned           nof_ports_,
-                                                 const std::string& processor_arguments_) :
+  external_ul_processor_example_factory(unsigned           nof_rb_,
+                                        unsigned           nof_ports_,
+                                        const std::string& processor_arguments_) :
     nof_rb(nof_rb_), nof_ports(nof_ports_), processor_arguments(processor_arguments_)
   {
   }

@@ -11,25 +11,58 @@
 #include "external_ul_processor_example_impl.h"
 #include "srsran/phy/support/resource_grid_reader.h"
 #include "srsran/phy/support/resource_grid_writer.h"
+#include "srsran/srsvec/sc_prod.h"
 
 using namespace srsran;
 
-void external_ul_processor_example_impl::process(resource_grid_writer&       grid_writer,
-                                                 const resource_grid_reader& grid_reader,
-                                                 slot_point                  slot,
-                                                 unsigned                    symbol)
+void external_ul_processor_example_impl::process(
+    resource_grid_writer&                                     grid_writer,
+    const resource_grid_reader&                               grid_reader,
+    slot_point                                                slot,
+    unsigned                                                  symbol,
+    span<const uplink_pdu_slot_repository::pusch_pdu>         pusch_pdus,
+    span<const uplink_pdu_slot_repository::pucch_pdu>         pucch_pdus,
+    span<const pucch_processor::format1_common_configuration> pucch_f1_pdus,
+    span<const uplink_pdu_slot_repository::srs_pdu>           srs_pdus)
 {
-  // Save the resource grid.
+  // Log the slot and symbol being processed.
+  logger.debug("Processing symbol: slot={}, symbol={}", slot, symbol);
+
+  // Log each received PDU.
+  for (const auto& pusch_pdu : pusch_pdus) {
+    const auto& pdu = pusch_pdu.pdu;
+    logger.debug("  PUSCH PDU: rnti={:#x}, symb=[{}, {})",
+                 pdu.rnti,
+                 pdu.start_symbol_index,
+                 pdu.start_symbol_index + pdu.nof_symbols);
+  }
+
+  for (const auto& pucch_pdu : pucch_pdus) {
+    logger.debug("  PUCCH PDU: rnti={}, format={})", pucch_pdu.context.rnti, to_string(pucch_pdu.context.format));
+  }
+
+  for (const auto& pucch_f1_pdu : pucch_f1_pdus) {
+    logger.debug("  PUCCH Format 1 PDU: symb=[{}, {})",
+                 pucch_f1_pdu.start_symbol_index,
+                 pucch_f1_pdu.start_symbol_index + pucch_f1_pdu.nof_symbols);
+  }
+
+  for (const auto& srs_pdu : srs_pdus) {
+    logger.debug("  SRS PDU: rnti {}, symb=[{}, {})",
+                 srs_pdu.context.rnti,
+                 srs_pdu.config.resource.start_symbol,
+                 srs_pdu.config.resource.start_symbol.value() +
+                     static_cast<unsigned>(srs_pdu.config.resource.nof_symbols));
+  }
+
   for (unsigned i_port = 0; i_port != nof_ports; ++i_port) {
     // Copy the symbols into the temporary buffer.
     grid_reader.get(temp_buffer, i_port, symbol, 0);
 
     // [EXTERNAL CODE INSERTION START] Test your DSP processing here.
 
-    for (auto& i_re : temp_buffer) {
-      // Dummy processing: scale the resource elements by 0.1. This offsets the console RSRP measurements by 20 dB.
-      i_re *= 0.1f;
-    }
+    // Dummy processing: scale the resource elements by 0.1. This offsets the console RSRP measurements by 20 dB.
+    srsvec::sc_prod(temp_buffer, temp_buffer, 0.1f);
 
     // [EXTERNAL CODE INSERTION END]
 
