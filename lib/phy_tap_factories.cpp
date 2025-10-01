@@ -8,9 +8,9 @@
  *
  */
 
+#include "external_processor_factories.h"
 #include "phy_tap_impl.h"
 #include "srsran/phy/upper/upper_phy_factories.h"
-#include <external_processor_factories.h>
 
 using namespace srsran;
 
@@ -35,7 +35,10 @@ public:
   /// \brief Creates a new upper physical layer tap.
   std::unique_ptr<phy_tap> create() override
   {
-    return std::make_unique<phy_tap_impl>(std::move(processor_factory->create()));
+    std::unique_ptr<external_ul_processor> processor = processor_factory->create();
+    report_fatal_error_if_not(processor, "Invalid external UL processor.");
+
+    return std::make_unique<phy_tap_impl>(std::move(processor));
   }
 
 private:

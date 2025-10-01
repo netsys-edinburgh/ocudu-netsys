@@ -12,6 +12,7 @@
 
 #include "srsran/phy/support/resource_grid_reader.h"
 #include "srsran/phy/support/resource_grid_writer.h"
+#include "srsran/phy/upper/uplink_pdu_slot_repository.h"
 #include "srsran/ran/slot_point.h"
 
 namespace srsran {
@@ -27,17 +28,24 @@ public:
   /// \brief Processes the UL symbols in the resource grid.
   ///
   /// This method is where the actual processing of the UL symbols takes place. Any external DSP processing must be
-  /// implemented by this method. The \e grid_reader provides access to the resource grid symbols of the current \e
-  /// slot, up to the current \e symbol.
+  /// implemented by this method.
   ///
-  /// \param[out] grid_writer Resource grid writer, used to write the processed symbols back into the resource grid.
-  /// \param[in]  grid_reader Resource grid reader, containing the input symbols to be processed.
-  /// \param[in]  slot        Current slot.
-  /// \param[in]  symbol      Current symbol index within the slot.
-  virtual void process(resource_grid_writer&       grid_writer,
-                       const resource_grid_reader& grid_reader,
-                       slot_point                  slot,
-                       unsigned                    symbol) = 0;
+  /// \param[out] grid_writer   Resource grid writer, used to write the processed symbols back into the resource grid.
+  /// \param[in]  grid_reader   Resource grid reader, containing the input symbols to be processed.
+  /// \param[in]  slot          Current slot.
+  /// \param[in]  symbol        Current symbol index within the slot.
+  /// \param[in]  pusch_pdus    PUSCH PDUs scheduled in the slot up to the current symbol.
+  /// \param[in]  pucch_pdus    PUCCH PDUs scheduled in the slot up to the current symbol.
+  /// \param[in]  pucch_f1_pdus Common parameters of PUCCH Format 1 PDUs scheduled up to the current symbol.
+  /// \param[in]  srs_pdus      SRS PDUs scheduled in the slot up to the current symbol.
+  virtual void process(resource_grid_writer&                                     grid_writer,
+                       const resource_grid_reader&                               grid_reader,
+                       slot_point                                                slot,
+                       unsigned                                                  symbol,
+                       span<const uplink_pdu_slot_repository::pusch_pdu>         pusch_pdus,
+                       span<const uplink_pdu_slot_repository::pucch_pdu>         pucch_pdus,
+                       span<const pucch_processor::format1_common_configuration> pucch_f1_pdus,
+                       span<const uplink_pdu_slot_repository::srs_pdu>           srs_pdus) = 0;
 };
 
 } // namespace srsran
