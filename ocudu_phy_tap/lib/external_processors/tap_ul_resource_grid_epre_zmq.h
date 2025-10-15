@@ -1,0 +1,106 @@
+/*
+ *
+ * Copyright 2021-2025 Software Radio Systems Limited
+ *
+ * By using this file, you agree to the terms and conditions set
+ * forth in the LICENSE file which can be found at the top level of
+ * the distribution.
+ *
+ */
+
+#pragma once
+
+#include "external_ul_processor.h"
+#include "zmq_server_backend.h"
+#include "srsran/adt/detail/concurrent_queue_params.h"
+#include "srsran/ran/cyclic_prefix.h"
+#include "srsran/srslog/srslog.h"
+#include "srsran/support/executors/task_executor.h"
+#include "srsran/support/executors/task_worker.h"
+#include "srsran/support/memory_pool/bounded_object_pool.h"
+
+namespace srsran {
+
+/// \brief ZeroMQ backend for uplink resource grid energy per subcarrier measurements.
+///
+/// This class implements an external uplink processor that calculates the energy per subcarrier across ports and
+/// symbols from the resource grid data. The calculated measurements are then transmitted to a ZeroMQ backend for
+/// monitoring and analysis.
+class tap_ul_resource_grid_epre_zmq : public external_ul_processor
+{
+public:
+  /// Number of temporary buffers for processing.
+  static constexpr unsigned nof_temp_buffers = 16;
+
+  /// \brief Collects the necessary dependencies for the uplink tap processor.
+  ///
+  /// This nested class manages all the required components for the uplink tap processor, including the ZeroMQ backend,
+  /// task worker threads, and executor for asynchronous processing.
+  class dependencies
+  {
+  public:
+    /// \brief Constructs the dependencies with the specified backend address.
+    ///
+    /// \param backend_address The ZeroMQ address to bind.
+    dependencies(std::string backend_address) :
+      worker("ULPhyTap", default_queue_size), executor(worker), backend(backend_address)
+    {
+    }
+
+    /// Destructor that stops the internal task worker thread.
+    ~dependencies() { worker.stop(); }
+
+    /// Retrieves the task executor for asynchronous operations.
+    task_executor& get_executor() { return executor; }
+
+    /// Retrieves the ZeroMQ backend for sending measurements.
+    zmq_server_backend& get_backend() { return backend; }
+
+  private:
+    /// Default queue size for the task worker.
+    static constexpr unsigned default_queue_size = 2048;
+    /// Default queue policy for concurrent operations.
+    static constexpr concurrent_queue_policy default_queue_policy = concurrent_queue_policy::locking_mpsc;
+
+    /// Internal task worker thread.
+    general_task_worker<default_queue_policy> worker;
+    /// Executor implementation.
+    general_task_worker_executor<default_queue_policy> executor;
+    /// Uplink tap backend.
+    zmq_server_backend backend;
+  };
+
+  /// \brief Constructor that initializes the uplink tap processor.
+  ///
+  /// \param base_instance_ Optional base processor instance for chaining operations.
+  /// \param deps_          Shared dependencies required for processor operation.
+  tap_ul_resource_grid_epre_zmq(std::unique_ptr<external_ul_processor> base_instance_,
+                                std::shared_ptr<dependencies>          deps_) :
+    logger(srslog::fetch_basic_logger("PHY_TAP", true)),
+    base_instance(std::move(base_instance_)),
+    deps(std::move(deps_)),
+    temp_buffers(nof_temp_buffers)
+  {
+  }
+
+  // See the external_ul_processor interface for documentation.
+  void process(resource_grid_writer&                                     grid_writer,
+               const resource_grid_reader&                               grid_reader,
+               slot_point                                                slot,
+               unsigned                                                  symbol,
+               span<const uplink_pdu_slot_repository::pusch_pdu>         pusch_pdus,
+               span<const uplink_pdu_slot_repository::pucch_pdu>         pucch_pdus,
+               span<const pucch_processor::format1_common_configuration> pucch_f1_pdus,
+               span<const uplink_pdu_slot_repository::srs_pdu>           srs_pdus) override;
+
+  /// Logger object.
+  srslog::basic_logger& logger;
+  /// Optional instance for chaining.
+  std::unique_ptr<external_ul_processor> base_instance;
+  /// Shared dependencies.
+  std::shared_ptr<dependencies> deps;
+  /// Temporary pool of buffers.
+  bounded_object_pool<static_vector<float, MAX_RB * NOF_SUBCARRIERS_PER_RB>> temp_buffers;
+};
+
+} // namespace srsran

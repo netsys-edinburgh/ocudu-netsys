@@ -13,6 +13,7 @@
 #include "external_ul_processor.h"
 #include "srsran/ran/cyclic_prefix.h"
 #include "srsran/srslog/srslog.h"
+#include <regex>
 
 namespace srsran {
 
@@ -31,8 +32,21 @@ public:
   external_ul_processor_example_impl(unsigned nof_rb, unsigned nof_ports_, const std::string& processor_arguments) :
     temp_buffer(nof_rb * NRE), nof_ports(nof_ports_), logger(srslog::fetch_basic_logger("PHY_TAP", true))
   {
-    // TODO: Set the log level via processor arguments.
-    logger.set_level(srslog::basic_levels::info);
+    srslog::basic_levels log_level = srslog::basic_levels::info;
+
+    std::smatch match;
+    std::regex  log_level_regex(R"(log_level=([a-zA-Z]{1,}))");
+    bool        has_log_level = std::regex_search(processor_arguments, match, log_level_regex);
+    if (has_log_level) {
+      std::optional<srslog::basic_levels> found_log_level = srslog::str_to_basic_level(match[1].str());
+      if (found_log_level) {
+        log_level = *found_log_level;
+      } else {
+        fmt::print("Invalid log level '{}' for the external UL processor plugin.", match[1].str());
+      }
+    }
+
+    logger.set_level(log_level);
   }
 
   // See the interface for documentation.

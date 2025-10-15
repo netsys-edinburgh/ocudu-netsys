@@ -10,6 +10,9 @@
 
 #include "external_processor_factories.h"
 #include "external_ul_processor_example_impl.h"
+#include "tap_ul_resource_grid_epre_zmq.h"
+#include "zmq_server_backend.h"
+#include "srsran/support/executors/task_worker.h"
 
 using namespace srsran;
 
@@ -43,6 +46,52 @@ private:
   std::string processor_arguments;
 };
 
+/// \brief Factory for creating uplink resource grid energy per subcarrier tap processors.
+///
+/// This factory class implements the \ref external_ul_processor_factory interface to create tap processors that monitor
+/// and analyze uplink resource grid data. The created processors calculate energy per subcarrier measurements and
+/// transmit them to a ZeroMQ backend.
+class tap_ul_resource_grid_epre_zmq_factory : public external_ul_processor_factory
+{
+public:
+  /// \brief Constructs the tap processor factory with base factory and ZeroMQ backend address.
+  ///
+  /// \param base_factory_        Optional base processor factory for chaining operations.
+  /// \param backend_zmq_address_ The ZeroMQ address to bind.
+  tap_ul_resource_grid_epre_zmq_factory(std::shared_ptr<external_ul_processor_factory> base_factory_,
+                                        const std::string&                             backend_zmq_address_) :
+    base_factory(std::move(base_factory_)), backend_zmq_address(backend_zmq_address_)
+  {
+    srsran_assert(!backend_zmq_address.empty(), "The ZMQ address must cannot be empty.");
+  }
+
+  // See the external_ul_processor_factory interface for documentation.
+  std::unique_ptr<external_ul_processor> create() override
+  {
+    // Create shared dependencies if they have not been created yet.
+    if (!shared_deps) {
+      shared_deps = std::make_shared<tap_ul_resource_grid_epre_zmq::dependencies>(backend_zmq_address);
+    }
+
+    // Create base instance if the base factory is present.
+    std::unique_ptr<external_ul_processor> base_instance;
+    if (base_factory) {
+      base_instance = base_factory->create();
+    }
+
+    // Create actual processor wrapper.
+    return std::make_unique<tap_ul_resource_grid_epre_zmq>(std::move(base_instance), shared_deps);
+  }
+
+private:
+  /// Shared dependencies for all the taps.
+  std::shared_ptr<tap_ul_resource_grid_epre_zmq::dependencies> shared_deps;
+  /// Base external UL processor factory.
+  std::shared_ptr<external_ul_processor_factory> base_factory;
+  /// ZMQ backend address to bind.
+  std::string backend_zmq_address;
+};
+
 // [EXTERNAL CODE INSERTION START] Define your own external UL processor factories here.
 
 // [EXTERNAL CODE INSERTION END]
@@ -55,8 +104,19 @@ srsran::create_external_ul_procesor_example_factory(unsigned           nof_rb,
                                                     unsigned           nof_ports,
                                                     const std::string& processor_arguments)
 {
+  // Create base plugin factory.
+  std::shared_ptr<external_ul_processor_factory> factory =
+      std::make_shared<external_ul_processor_example_factory>(nof_rb, nof_ports, processor_arguments);
+
+  // Try parsing the UL tap ZMQ binding address.
+  std::smatch match;
+  std::regex  backend_zmq_address_regex(R"(tap_ul_epre=([^,]*))");
+  if (std::regex_search(processor_arguments, match, backend_zmq_address_regex)) {
+    factory = std::make_shared<tap_ul_resource_grid_epre_zmq_factory>(std::move(factory), match[1].str());
+  }
+
   // Create and return the external UL processor dummy factory.
-  return std::make_shared<external_ul_processor_example_factory>(nof_rb, nof_ports, processor_arguments);
+  return factory;
 }
 
 // [EXTERNAL CODE INSERTION START] Define your own external UL processor factory creation functions here.
