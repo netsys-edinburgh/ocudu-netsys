@@ -29,6 +29,9 @@ namespace srsran {
 class tap_ul_resource_grid_epre_zmq : public external_ul_processor
 {
 public:
+  /// Number of symbols in a slot. Used for quiet slot processing.
+  static constexpr unsigned nof_slot_symbols = MAX_NSYMB_PER_SLOT;
+
   /// Number of temporary buffers for processing.
   static constexpr unsigned nof_temp_buffers = 16;
 
@@ -93,6 +96,9 @@ public:
                span<const pucch_processor::format1_common_configuration> pucch_f1_pdus,
                span<const uplink_pdu_slot_repository::srs_pdu>           srs_pdus) override;
 
+  // See the interface for documentation.
+  void process_quiet(const resource_grid_reader& grid_reader, slot_point slot) override;
+
   /// Logger object.
   srslog::basic_logger& logger;
   /// Optional instance for chaining.
@@ -101,6 +107,18 @@ public:
   std::shared_ptr<dependencies> deps;
   /// Temporary pool of buffers.
   bounded_object_pool<static_vector<float, MAX_RB * NOF_SUBCARRIERS_PER_RB>> temp_buffers;
+  /// Index of the last processed symbol.
+  unsigned last_processed_symbol = 0;
+  /// Number of the symbols in the current grid.
+  unsigned nof_symbols = 0;
+  /// Number of ports in the current grid.
+  unsigned nof_ports = 0;
+  /// Number of subcarrierrs in the current grid.
+  unsigned nof_subc = 0;
+
+private:
+  /// Computes the EPRE of a set of symbols.
+  void compute_epre(const resource_grid_reader& grid_reader);
 };
 
 } // namespace srsran

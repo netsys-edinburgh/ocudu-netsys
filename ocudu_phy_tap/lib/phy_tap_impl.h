@@ -41,6 +41,13 @@ public:
     processor->process(grid_writer, grid_reader, slot, symbol, pusch_pdus, pucch_pdus, pucch_f1_pdus, srs_pdus);
   }
 
+  // See interface for documentation.
+  void handle_quiet_grid(const resource_grid_reader& grid_reader, slot_point slot) override
+  {
+    // Apply the external processing.
+    processor->process_quiet(grid_reader, slot);
+  }
+
 private:
   /// UL symbol processor for processing the received symbols.
   std::unique_ptr<external_ul_processor> processor;

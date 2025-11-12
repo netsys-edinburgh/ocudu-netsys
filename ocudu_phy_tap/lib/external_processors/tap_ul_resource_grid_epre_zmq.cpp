@@ -15,6 +15,35 @@
 
 using namespace srsran;
 
+void tap_ul_resource_grid_epre_zmq::compute_epre(const resource_grid_reader& grid_reader)
+{
+  auto prb_epre_buffer = temp_buffers.get();
+  if (!prb_epre_buffer) {
+    logger.warning("Failed to get temporary buffer.");
+    return;
+  }
+
+  // Prepare buffer size.
+  prb_epre_buffer->resize(nof_subc);
+
+  // Calculate the accumulated energy per subcarrier.
+  for (unsigned i_port = 0; i_port != nof_ports; ++i_port) {
+    for (unsigned i_symbol = 0; i_symbol != nof_symbols; ++i_symbol) {
+      if ((i_symbol == 0) && (i_port == 0)) {
+        srsvec::modulus_square(*prb_epre_buffer, grid_reader.get_view(i_port, i_symbol));
+      } else {
+        srsvec::modulus_square_and_add(*prb_epre_buffer, grid_reader.get_view(i_port, i_symbol), *prb_epre_buffer);
+      }
+    }
+  }
+
+  bool success = deps->get_executor().defer(
+      [this, buff = std::move(prb_epre_buffer)]() { deps->get_backend().send_buffer(*buff); });
+  if (!success) {
+    logger.warning("Failed to defer send buffer task.");
+  }
+}
+
 void tap_ul_resource_grid_epre_zmq::process(resource_grid_writer&                                     grid_writer,
                                             const resource_grid_reader&                               grid_reader,
                                             slot_point                                                slot,
@@ -25,9 +54,10 @@ void tap_ul_resource_grid_epre_zmq::process(resource_grid_writer&               
                                             span<const uplink_pdu_slot_repository::srs_pdu>           srs_pdus)
 {
   // Get resource grid dimensions.
-  unsigned nof_symbols = grid_reader.get_nof_symbols();
-  unsigned nof_ports   = grid_reader.get_nof_ports();
-  unsigned nof_subc    = grid_reader.get_nof_subc();
+  nof_symbols           = grid_reader.get_nof_symbols();
+  nof_ports             = grid_reader.get_nof_ports();
+  nof_subc              = grid_reader.get_nof_subc();
+  last_processed_symbol = symbol;
 
   // Invoke base instance processing if present.
   if (base_instance) {
@@ -36,30 +66,17 @@ void tap_ul_resource_grid_epre_zmq::process(resource_grid_writer&               
 
   // Process EPRE if it is the last received symbol.
   if (symbol == nof_symbols - 1) {
-    auto prb_epre_buffer = temp_buffers.get();
-    if (!prb_epre_buffer) {
-      logger.warning("Failed to get temporary buffer.");
-      return;
-    }
-
-    // Prepare buffer size.
-    prb_epre_buffer->resize(nof_subc);
-
-    // Calculate the accumulated energy per subcarrier.
-    for (unsigned i_port = 0; i_port != nof_ports; ++i_port) {
-      for (unsigned i_symbol = 0; i_symbol != nof_symbols; ++i_symbol) {
-        if ((i_symbol == 0) && (i_port == 0)) {
-          srsvec::modulus_square(*prb_epre_buffer, grid_reader.get_view(i_port, i_symbol));
-        } else {
-          srsvec::modulus_square_and_add(*prb_epre_buffer, grid_reader.get_view(i_port, i_symbol), *prb_epre_buffer);
-        }
-      }
-    }
-
-    bool success = deps->get_executor().defer(
-        [this, buff = std::move(prb_epre_buffer)]() { deps->get_backend().send_buffer(*buff); });
-    if (!success) {
-      logger.warning("Failed to defer send buffer task.");
-    }
+    compute_epre(grid_reader);
   }
+}
+
+void tap_ul_resource_grid_epre_zmq::process_quiet(const resource_grid_reader& grid_reader, slot_point slot)
+{
+  // Invoke base instance processing if present.
+  if (base_instance) {
+    base_instance->process_quiet(grid_reader, slot);
+  }
+
+  // Process EPRE.
+  compute_epre(grid_reader);
 }
