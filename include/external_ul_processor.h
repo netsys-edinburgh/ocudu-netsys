@@ -25,10 +25,11 @@ class external_ul_processor
 public:
   /// Default destructor.
   virtual ~external_ul_processor() = default;
+
   /// \brief Processes the UL symbols in the resource grid.
   ///
-  /// This method is where the actual processing of the UL symbols takes place. Any external DSP processing must be
-  /// implemented by this method.
+  /// This method is where the actual processing of the UL symbols takes place. It is called on a symbol basis and will
+  /// process the indicated symbol. Any external DSP processing must be implemented by this method.
   ///
   /// \param[out] grid_writer   Resource grid writer, used to write the processed symbols back into the resource grid.
   /// \param[in]  grid_reader   Resource grid reader, containing the input symbols to be processed.
@@ -46,6 +47,16 @@ public:
                        span<const uplink_pdu_slot_repository::pucch_pdu>         pucch_pdus,
                        span<const pucch_processor::format1_common_configuration> pucch_f1_pdus,
                        span<const uplink_pdu_slot_repository::srs_pdu>           srs_pdus) = 0;
+
+  /// \brief Processes the non-allocated UL symbols in the resource grid.
+  ///
+  /// This method is where the actual processing of non-allocated UL symbols takes place and is called on a slot basis
+  /// and will process all unallocated symbols in the indicated slot. Any external DSP processing must be implemented by
+  /// this method.
+  ///
+  /// \param[in]  grid_reader   Resource grid reader, containing the input symbols to be processed.
+  /// \param[in]  slot          Current slot.
+  virtual void process_quiet(const resource_grid_reader& grid_reader, slot_point slot) = 0;
 };
 
 } // namespace srsran

@@ -21,8 +21,8 @@ namespace srsran {
 class external_ul_processor_example_impl : public external_ul_processor
 {
 public:
-  /// Number of symbols to process at once. For now, the entire slot is processed.
-  static constexpr unsigned nof_symbols = MAX_NSYMB_PER_SLOT;
+  /// Number of symbols in a slot. Used for quiet slot processing.
+  static constexpr unsigned nof_slot_symbols = MAX_NSYMB_PER_SLOT;
 
   /// \brief Constructor that initializes the external processor.
   ///
@@ -47,6 +47,16 @@ public:
     }
 
     logger.set_level(log_level);
+
+    std::regex enable_quiet_processing_regex(R"(enable_quiet_processing=([a-zA-Z]{1,}))");
+    bool has_enable_quiet_processing = std::regex_search(processor_arguments, match, enable_quiet_processing_regex);
+    if (has_enable_quiet_processing) {
+      std::string parsed_text = match[1].str();
+      std::transform(parsed_text.begin(), parsed_text.end(), parsed_text.begin(), ::tolower);
+      if (parsed_text == "true") {
+        enable_quiet_processing = true;
+      }
+    }
   }
 
   // See the interface for documentation.
@@ -59,10 +69,17 @@ public:
                span<const pucch_processor::format1_common_configuration> pucch_f1_pdus,
                span<const uplink_pdu_slot_repository::srs_pdu>           srs_pdus) override;
 
+  // See the interface for documentation.
+  void process_quiet(const resource_grid_reader& grid_reader, slot_point slot) override;
+
   /// Buffer for the temporary storage of the resource grid data.
   std::vector<cf_t> temp_buffer;
   /// Number of ports to process.
   unsigned nof_ports;
+  /// Index of the last processed symbol.
+  unsigned last_processed_symbol = 0;
+  /// Enables or disables the processing of quiet UL symbols.
+  bool enable_quiet_processing = false;
   /// Logger object.
   srslog::basic_logger& logger;
 };

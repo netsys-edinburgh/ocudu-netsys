@@ -27,6 +27,7 @@ void external_ul_processor_example_impl::process(
 {
   // Log the slot and symbol being processed.
   logger.debug("Processing symbol: slot={}, symbol={}", slot, symbol);
+  last_processed_symbol = symbol;
 
   // Log each received PDU.
   for (const auto& pusch_pdu : pusch_pdus) {
@@ -59,7 +60,7 @@ void external_ul_processor_example_impl::process(
     // Copy the symbols into the temporary buffer.
     grid_reader.get(temp_buffer, i_port, symbol, 0);
 
-    // [EXTERNAL CODE INSERTION START] Test your DSP processing here.
+    // [EXTERNAL CODE INSERTION START] Insert your DSP processing here.
 
     // Dummy processing: scale the resource elements by 0.1. This offsets the console RSRP measurements by 20 dB.
     srsvec::sc_prod(temp_buffer, temp_buffer, 0.1f);
@@ -68,5 +69,38 @@ void external_ul_processor_example_impl::process(
 
     // Write the processed symbols back to the resource grid.
     grid_writer.put(i_port, symbol, 0, temp_buffer);
+  }
+}
+
+void external_ul_processor_example_impl::process_quiet(const resource_grid_reader& grid_reader, slot_point slot)
+{
+  // Processing of unallocated UL symbols needs to be explicitly requested.
+  if (!enable_quiet_processing) {
+    return;
+  }
+
+  // Update the symbol index. Note that the resulting index is an estimation based on the processing of allocated
+  // symbols.
+  if (last_processed_symbol == nof_slot_symbols - 1) {
+    last_processed_symbol = 0;
+  } else if (last_processed_symbol > 0) {
+    ++last_processed_symbol;
+  }
+
+  for (unsigned symbol_ix = last_processed_symbol; symbol_ix != nof_slot_symbols; ++symbol_ix) {
+    // Log the slot and symbol being processed.
+    logger.debug("Processing unallocated symbol: slot={}, symbol={}", slot, symbol_ix);
+
+    for (unsigned i_port = 0; i_port != nof_ports; ++i_port) {
+      // Copy the symbols into the temporary buffer.
+      grid_reader.get(temp_buffer, i_port, symbol_ix, 0);
+
+      // [EXTERNAL CODE INSERTION START] Insert your DSP processing here.
+
+      // Dummy processing: scale the resource elements by 0.1. This offsets the console RSRP measurements by 20 dB.
+      srsvec::sc_prod(temp_buffer, temp_buffer, 0.1f);
+
+      // [EXTERNAL CODE INSERTION END]
+    }
   }
 }
