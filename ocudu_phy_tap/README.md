@@ -49,3 +49,20 @@ All the sections of the code that may be modifed to extend the plugin as describ
 
 If you need modifications in other parts of the code, it is best to open issues and engage with the srsRAN team, as
 modifications in unmarked sections may lead to incompatibilities with the srsRAN codebase.
+
+## Configuration of the external UL processor
+
+Currently, two main features can be configured using the `phy_tap_arguments` parameter:
+
+- Enable processing of quiet (i.e., unallocated) UL symbols, by setting `enable_quiet_processing=true`. By default, this is disabled.
+- Set a specific log level using `log_level=$LEVEL$`. Supported log levels (`$LEVEL$` values) are (from lowest to highest detail): `none`, `error`, `warning`, `info`, and `debug`.
+
+The following example shows an excerpt from a gNB configuration file (yml) that enables quiet UL symbol processing and sets the log level to `warning`:
+
+```
+expert_phy:
+  enable_phy_tap: true
+  phy_tap_arguments: enable_quiet_processing=true,log_level=warning
+```
+
+Alternatively, those same configuration parameters can be passed through the console when starting the gNB binary by adding `expert_phy --enable_phy_tap=true --enable_quiet_processing=true,log_level=warning`
