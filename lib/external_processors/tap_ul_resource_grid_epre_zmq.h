@@ -86,7 +86,7 @@ public:
   {
   }
 
-  // See the external_ul_processor interface for documentation.
+  // See the interface for documentation.
   void process(resource_grid_writer&                                     grid_writer,
                const resource_grid_reader&                               grid_reader,
                slot_point                                                slot,
@@ -98,6 +98,9 @@ public:
 
   // See the interface for documentation.
   void process_quiet(const resource_grid_reader& grid_reader, slot_point slot) override;
+
+  // See the interface for documentation.
+  void process_prach(prach_buffer& buffer, const prach_buffer_context& context) override;
 
   /// Logger object.
   srslog::basic_logger& logger;

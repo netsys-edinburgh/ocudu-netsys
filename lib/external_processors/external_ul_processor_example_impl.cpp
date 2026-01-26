@@ -11,6 +11,8 @@
 #include "external_ul_processor_example_impl.h"
 #include "srsran/phy/support/resource_grid_reader.h"
 #include "srsran/phy/support/resource_grid_writer.h"
+#include "srsran/ran/prach/prach_preamble_information.h"
+#include "srsran/srsvec/conversion.h"
 #include "srsran/srsvec/sc_prod.h"
 
 using namespace srsran;
@@ -101,6 +103,45 @@ void external_ul_processor_example_impl::process_quiet(const resource_grid_reade
       srsvec::sc_prod(temp_buffer, temp_buffer, 0.1f);
 
       // [EXTERNAL CODE INSERTION END]
+    }
+  }
+}
+
+void external_ul_processor_example_impl::process_prach(prach_buffer& buffer, const prach_buffer_context& context)
+{
+  // Log the PRACH occasion being processed.
+  logger.debug("Processing PRACH: slot={}, format={}", context.slot, to_string(context.format));
+
+  // Obtain the preamble information. This includes useful parameters such as the number of OFDM symbols containing
+  // PRACH for each time domain occasion.
+  prach_preamble_information preamble_info =
+      is_long_preamble(context.format)
+          ? get_prach_preamble_long_info(context.format)
+          : get_prach_preamble_short_info(context.format, to_ra_subcarrier_spacing(context.pusch_scs), true);
+
+  // Iterate over all receive ports, PRACH symbols, time domain and frequency domain occasions,
+  for (unsigned i_port = 0, i_port_end = context.ports.size(); i_port != i_port_end; ++i_port) {
+    for (unsigned i_td_occasion = 0; i_td_occasion != context.nof_td_occasions; ++i_td_occasion) {
+      for (unsigned i_fd_occasion = 0; i_fd_occasion != context.nof_fd_occasions; ++i_fd_occasion) {
+        for (unsigned i_symbol = 0; i_symbol != preamble_info.nof_symbols; ++i_symbol) {
+          // Get a view over the PRACH symbols.
+          span<cbf16_t> preamble = buffer.get_symbol(i_port, i_td_occasion, i_fd_occasion, i_symbol);
+
+          // Convert the PRACH samples from BF16 into float.
+          temp_buffer_prach.resize(preamble.size());
+          srsvec::convert(temp_buffer_prach, preamble);
+
+          // [EXTERNAL CODE INSERTION START] Insert your DSP processing here.
+
+          // Dummy processing: scale the PRACH symbols by 0.1. This offsets the log RSSI measurements by 20 dB.
+          srsvec::sc_prod(temp_buffer_prach, temp_buffer_prach, 0.1f);
+
+          // [EXTERNAL CODE INSERTION END]
+
+          // Convert to BF16 and write the processed PRACH symbols into the source buffer.
+          srsvec::convert(preamble, temp_buffer_prach);
+        }
+      }
     }
   }
 }

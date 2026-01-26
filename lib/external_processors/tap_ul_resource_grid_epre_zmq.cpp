@@ -80,3 +80,11 @@ void tap_ul_resource_grid_epre_zmq::process_quiet(const resource_grid_reader& gr
   // Process EPRE.
   compute_epre(grid_reader);
 }
+
+void tap_ul_resource_grid_epre_zmq::process_prach(prach_buffer& buffer, const prach_buffer_context& context)
+{
+  // Invoke base instance processing if present.
+  if (base_instance) {
+    base_instance->process_prach(buffer, context);
+  }
+}
