@@ -41,6 +41,13 @@ public:
     processor->process(grid_writer, grid_reader, slot, symbol, pusch_pdus, pucch_pdus, pucch_f1_pdus, srs_pdus);
   }
 
+  // See interface for the documentation.
+  void handle_prach_window(prach_buffer& buffer, const prach_buffer_context& context) override
+  {
+    // Apply the external processing.
+    processor->process_prach(buffer, context);
+  }
+
   // See interface for documentation.
   void handle_quiet_grid(const resource_grid_reader& grid_reader, slot_point slot) override
   {

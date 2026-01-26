@@ -11,7 +11,9 @@
 #pragma once
 
 #include "external_ul_processor.h"
+#include "srsran/adt/static_vector.h"
 #include "srsran/ran/cyclic_prefix.h"
+#include "srsran/ran/prach/prach_constants.h"
 #include "srsran/srslog/srslog.h"
 #include <regex>
 
@@ -72,8 +74,13 @@ public:
   // See the interface for documentation.
   void process_quiet(const resource_grid_reader& grid_reader, slot_point slot) override;
 
+  // See the interface for documentation.
+  void process_prach(prach_buffer& buffer, const prach_buffer_context& context) override;
+
   /// Buffer for the temporary storage of the resource grid data.
   std::vector<cf_t> temp_buffer;
+  /// Buffer for the temporary storage of the PRACH data.
+  static_vector<cf_t, prach_constants::LONG_SEQUENCE_LENGTH> temp_buffer_prach;
   /// Number of ports to process.
   unsigned nof_ports;
   /// Index of the last processed symbol.
