@@ -1,19 +1,13 @@
-/*
- *
- * Copyright 2021-2025 Software Radio Systems Limited
- *
- * By using this file, you agree to the terms and conditions set
- * forth in the LICENSE file which can be found at the top level of
- * the distribution.
- *
- */
+// SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
+// SPDX-License-Identifier: BSD-3-Clause-Open-MPI
+// Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "tap_ul_resource_grid_epre_zmq.h"
-#include "srsran/phy/support/resource_grid_reader.h"
-#include "srsran/phy/support/resource_grid_writer.h"
-#include "srsran/srsvec/modulus_square.h"
+#include "ocudu/ocuduvec/modulus_square.h"
+#include "ocudu/phy/support/resource_grid_reader.h"
+#include "ocudu/phy/support/resource_grid_writer.h"
 
-using namespace srsran;
+using namespace ocudu;
 
 void tap_ul_resource_grid_epre_zmq::compute_epre(const resource_grid_reader& grid_reader)
 {
@@ -30,9 +24,9 @@ void tap_ul_resource_grid_epre_zmq::compute_epre(const resource_grid_reader& gri
   for (unsigned i_port = 0; i_port != nof_ports; ++i_port) {
     for (unsigned i_symbol = 0; i_symbol != nof_symbols; ++i_symbol) {
       if ((i_symbol == 0) && (i_port == 0)) {
-        srsvec::modulus_square(*prb_epre_buffer, grid_reader.get_view(i_port, i_symbol));
+        ocuduvec::modulus_square(*prb_epre_buffer, grid_reader.get_view(i_port, i_symbol));
       } else {
-        srsvec::modulus_square_and_add(*prb_epre_buffer, grid_reader.get_view(i_port, i_symbol), *prb_epre_buffer);
+        ocuduvec::modulus_square_and_add(*prb_epre_buffer, grid_reader.get_view(i_port, i_symbol), *prb_epre_buffer);
       }
     }
   }
