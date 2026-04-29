@@ -1,18 +1,12 @@
-/*
- *
- * Copyright 2021-2025 Software Radio Systems Limited
- *
- * By using this file, you agree to the terms and conditions set
- * forth in the LICENSE file which can be found at the top level of
- * the distribution.
- *
- */
+// SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
+// SPDX-License-Identifier: BSD-3-Clause-Open-MPI
+// Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "external_processor_factories.h"
 #include "phy_tap_impl.h"
-#include "srsran/phy/upper/upper_phy_factories.h"
+#include "ocudu/phy/upper/upper_phy_factories.h"
 
-using namespace srsran;
+using namespace ocudu;
 
 namespace {
 
@@ -49,7 +43,7 @@ private:
 } // namespace
 
 std::shared_ptr<phy_tap_factory>
-srsran::create_phy_tap_factory(unsigned nof_rb, unsigned nof_ports, const std::string& processor_arguments)
+ocudu::create_phy_tap_factory(unsigned nof_rb, unsigned nof_ports, const std::string& processor_arguments)
 {
   return std::make_shared<phy_tap_factory_impl>(nof_rb, nof_ports, processor_arguments);
 }

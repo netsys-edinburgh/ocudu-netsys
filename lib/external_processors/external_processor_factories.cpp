@@ -1,20 +1,14 @@
-/*
- *
- * Copyright 2021-2025 Software Radio Systems Limited
- *
- * By using this file, you agree to the terms and conditions set
- * forth in the LICENSE file which can be found at the top level of
- * the distribution.
- *
- */
+// SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
+// SPDX-License-Identifier: BSD-3-Clause-Open-MPI
+// Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "external_processor_factories.h"
 #include "external_ul_processor_example_impl.h"
 #include "tap_ul_resource_grid_epre_zmq.h"
 #include "zmq_server_backend.h"
-#include "srsran/support/executors/task_worker.h"
+#include "ocudu/support/executors/task_worker.h"
 
-using namespace srsran;
+using namespace ocudu;
 
 namespace {
 
@@ -62,7 +56,7 @@ public:
                                         const std::string&                             backend_zmq_address_) :
     base_factory(std::move(base_factory_)), backend_zmq_address(backend_zmq_address_)
   {
-    srsran_assert(!backend_zmq_address.empty(), "The ZMQ address must cannot be empty.");
+    ocudu_assert(!backend_zmq_address.empty(), "The ZMQ address must cannot be empty.");
   }
 
   // See the external_ul_processor_factory interface for documentation.
@@ -100,9 +94,9 @@ private:
 
 // See interface for documentation.
 std::shared_ptr<external_ul_processor_factory>
-srsran::create_external_ul_procesor_example_factory(unsigned           nof_rb,
-                                                    unsigned           nof_ports,
-                                                    const std::string& processor_arguments)
+ocudu::create_external_ul_procesor_example_factory(unsigned           nof_rb,
+                                                   unsigned           nof_ports,
+                                                   const std::string& processor_arguments)
 {
   // Create base plugin factory.
   std::shared_ptr<external_ul_processor_factory> factory =

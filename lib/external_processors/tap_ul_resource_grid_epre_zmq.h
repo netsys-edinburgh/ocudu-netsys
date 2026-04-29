@@ -1,25 +1,19 @@
-/*
- *
- * Copyright 2021-2025 Software Radio Systems Limited
- *
- * By using this file, you agree to the terms and conditions set
- * forth in the LICENSE file which can be found at the top level of
- * the distribution.
- *
- */
+// SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
+// SPDX-License-Identifier: BSD-3-Clause-Open-MPI
+// Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #pragma once
 
 #include "external_ul_processor.h"
 #include "zmq_server_backend.h"
-#include "srsran/adt/detail/concurrent_queue_params.h"
-#include "srsran/ran/cyclic_prefix.h"
-#include "srsran/srslog/srslog.h"
-#include "srsran/support/executors/task_executor.h"
-#include "srsran/support/executors/task_worker.h"
-#include "srsran/support/memory_pool/bounded_object_pool.h"
+#include "ocudu/adt/detail/concurrent_queue_params.h"
+#include "ocudu/ocudulog/ocudulog.h"
+#include "ocudu/ran/cyclic_prefix.h"
+#include "ocudu/support/executors/task_executor.h"
+#include "ocudu/support/executors/task_worker.h"
+#include "ocudu/support/memory_pool/bounded_object_pool.h"
 
-namespace srsran {
+namespace ocudu {
 
 /// \brief ZeroMQ backend for uplink resource grid energy per subcarrier measurements.
 ///
@@ -79,7 +73,7 @@ public:
   /// \param deps_          Shared dependencies required for processor operation.
   tap_ul_resource_grid_epre_zmq(std::unique_ptr<external_ul_processor> base_instance_,
                                 std::shared_ptr<dependencies>          deps_) :
-    logger(srslog::fetch_basic_logger("PHY_TAP", true)),
+    logger(ocudulog::fetch_basic_logger("PHY_TAP", true)),
     base_instance(std::move(base_instance_)),
     deps(std::move(deps_)),
     temp_buffers(nof_temp_buffers)
@@ -103,13 +97,13 @@ public:
   void process_prach(prach_buffer& buffer, const prach_buffer_context& context) override;
 
   /// Logger object.
-  srslog::basic_logger& logger;
+  ocudulog::basic_logger& logger;
   /// Optional instance for chaining.
   std::unique_ptr<external_ul_processor> base_instance;
   /// Shared dependencies.
   std::shared_ptr<dependencies> deps;
   /// Temporary pool of buffers.
-  bounded_object_pool<static_vector<float, MAX_RB * NOF_SUBCARRIERS_PER_RB>> temp_buffers;
+  bounded_object_pool<static_vector<float, MAX_NOF_PRBS * NOF_SUBCARRIERS_PER_RB>> temp_buffers;
   /// Index of the last processed symbol.
   unsigned last_processed_symbol = 0;
   /// Number of the symbols in the current grid.
@@ -124,4 +118,4 @@ private:
   void compute_epre(const resource_grid_reader& grid_reader);
 };
 
-} // namespace srsran
+} // namespace ocudu

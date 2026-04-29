@@ -1,21 +1,15 @@
-/*
- *
- * Copyright 2021-2025 Software Radio Systems Limited
- *
- * By using this file, you agree to the terms and conditions set
- * forth in the LICENSE file which can be found at the top level of
- * the distribution.
- *
- */
+// SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
+// SPDX-License-Identifier: BSD-3-Clause-Open-MPI
+// Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "external_ul_processor_example_impl.h"
-#include "srsran/phy/support/resource_grid_reader.h"
-#include "srsran/phy/support/resource_grid_writer.h"
-#include "srsran/ran/prach/prach_preamble_information.h"
-#include "srsran/srsvec/conversion.h"
-#include "srsran/srsvec/sc_prod.h"
+#include "ocudu/ocuduvec/conversion.h"
+#include "ocudu/ocuduvec/sc_prod.h"
+#include "ocudu/phy/support/resource_grid_reader.h"
+#include "ocudu/phy/support/resource_grid_writer.h"
+#include "ocudu/ran/prach/prach_preamble_information.h"
 
-using namespace srsran;
+using namespace ocudu;
 
 void external_ul_processor_example_impl::process(
     resource_grid_writer&                                     grid_writer,
@@ -65,7 +59,7 @@ void external_ul_processor_example_impl::process(
     // [EXTERNAL CODE INSERTION START] Insert your DSP processing here.
 
     // Dummy processing: scale the resource elements by 0.1. This offsets the console RSRP measurements by 20 dB.
-    srsvec::sc_prod(temp_buffer, temp_buffer, 0.1f);
+    ocuduvec::sc_prod(temp_buffer, temp_buffer, 0.1f);
 
     // [EXTERNAL CODE INSERTION END]
 
@@ -100,7 +94,7 @@ void external_ul_processor_example_impl::process_quiet(const resource_grid_reade
       // [EXTERNAL CODE INSERTION START] Insert your DSP processing here.
 
       // Dummy processing: scale the resource elements by 0.1. This offsets the console RSRP measurements by 20 dB.
-      srsvec::sc_prod(temp_buffer, temp_buffer, 0.1f);
+      ocuduvec::sc_prod(temp_buffer, temp_buffer, 0.1f);
 
       // [EXTERNAL CODE INSERTION END]
     }
@@ -129,17 +123,17 @@ void external_ul_processor_example_impl::process_prach(prach_buffer& buffer, con
 
           // Convert the PRACH samples from BF16 into float.
           temp_buffer_prach.resize(preamble.size());
-          srsvec::convert(temp_buffer_prach, preamble);
+          ocuduvec::convert(temp_buffer_prach, preamble);
 
           // [EXTERNAL CODE INSERTION START] Insert your DSP processing here.
 
           // Dummy processing: scale the PRACH symbols by 0.1. This offsets the log RSSI measurements by 20 dB.
-          srsvec::sc_prod(temp_buffer_prach, temp_buffer_prach, 0.1f);
+          ocuduvec::sc_prod(temp_buffer_prach, temp_buffer_prach, 0.1f);
 
           // [EXTERNAL CODE INSERTION END]
 
           // Convert to BF16 and write the processed PRACH symbols into the source buffer.
-          srsvec::convert(preamble, temp_buffer_prach);
+          ocuduvec::convert(preamble, temp_buffer_prach);
         }
       }
     }

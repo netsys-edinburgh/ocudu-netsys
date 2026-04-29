@@ -1,23 +1,17 @@
-/*
- *
- * Copyright 2021-2025 Software Radio Systems Limited
- *
- * By using this file, you agree to the terms and conditions set
- * forth in the LICENSE file which can be found at the top level of
- * the distribution.
- *
- */
+// SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
+// SPDX-License-Identifier: BSD-3-Clause-Open-MPI
+// Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #pragma once
 
 #include "external_ul_processor.h"
-#include "srsran/adt/static_vector.h"
-#include "srsran/ran/cyclic_prefix.h"
-#include "srsran/ran/prach/prach_constants.h"
-#include "srsran/srslog/srslog.h"
+#include "ocudu/adt/static_vector.h"
+#include "ocudu/ocudulog/ocudulog.h"
+#include "ocudu/ran/cyclic_prefix.h"
+#include "ocudu/ran/prach/prach_constants.h"
 #include <regex>
 
-namespace srsran {
+namespace ocudu {
 
 /// Example implementation of an external uplink processor with trivial processing.
 class external_ul_processor_example_impl : public external_ul_processor
@@ -32,15 +26,17 @@ public:
   /// \param[in] nof_ports_ Number of ports to process.
   /// \param[in] processor_arguments custom arguments for the processor.
   external_ul_processor_example_impl(unsigned nof_rb, unsigned nof_ports_, const std::string& processor_arguments) :
-    temp_buffer(nof_rb * NRE), nof_ports(nof_ports_), logger(srslog::fetch_basic_logger("PHY_TAP", true))
+    temp_buffer(nof_rb * NOF_SUBCARRIERS_PER_RB),
+    nof_ports(nof_ports_),
+    logger(ocudulog::fetch_basic_logger("PHY_TAP", true))
   {
-    srslog::basic_levels log_level = srslog::basic_levels::info;
+    ocudulog::basic_levels log_level = ocudulog::basic_levels::info;
 
     std::smatch match;
     std::regex  log_level_regex(R"(log_level=([a-zA-Z]{1,}))");
     bool        has_log_level = std::regex_search(processor_arguments, match, log_level_regex);
     if (has_log_level) {
-      std::optional<srslog::basic_levels> found_log_level = srslog::str_to_basic_level(match[1].str());
+      std::optional<ocudulog::basic_levels> found_log_level = ocudulog::str_to_basic_level(match[1].str());
       if (found_log_level) {
         log_level = *found_log_level;
       } else {
@@ -88,7 +84,7 @@ public:
   /// Enables or disables the processing of quiet UL symbols.
   bool enable_quiet_processing = false;
   /// Logger object.
-  srslog::basic_logger& logger;
+  ocudulog::basic_logger& logger;
 };
 
-} // namespace srsran
+} // namespace ocudu

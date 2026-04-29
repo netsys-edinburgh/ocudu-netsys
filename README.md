@@ -1,21 +1,19 @@
-srsRAN - Upper physical layer tap plugin
-================
+OCUDU - PHY TAP Plugin Example
+==============================
 
-This project is a C++ plugin designed to integrate with srsRAN, and exposes the upper physical layer symbols to an external
-processor.
+This project provides a C++ plugin example designed to be used with the PHY TAP Plugin Interface exposed by OUCDU.
+The PHY TAP Plugin interface exposes the upper physical layer symbols to an external processor.
 
 ## Overview
 
-The plugin includes a decorator for the physical layer receive symbol handler. This is the point in the uplink
-processing
-chain in which the symbols are passed to the upper physical layer for processing. This decorator calls an external
-uplink processor object
-that can be used to insert custom processing algorithms.
+The PHY TAP defines a decorator for the physical layer receive symbol handler. This is the point in the uplink
+processing chain in which the symbols are passed to the upper physical layer for processing. This decorator calls 
+an external uplink processor object that can be used to insert custom processing algorithms.
 
 ## How to add your own processing algorithms
 
-By default, a dummy external processor is included in the plugin. This processor scales the received symbols by a
-constant, and serves as an implementation example.
+A toy example external uplink processor implementation is provided in this plugin example project. This dummy
+processor scales the received symbols by a constant, and serves as an implementation example. 
 To quickly test the plugin, the `process` method of this dummy processor can be extended to implement custom processing
 logic.
 
@@ -47,8 +45,8 @@ All the sections of the code that may be modifed to extend the plugin as describ
 // [EXTERNAL CODE INSERTION END]
 ```
 
-If you need modifications in other parts of the code, it is best to open issues and engage with the srsRAN team, as
-modifications in unmarked sections may lead to incompatibilities with the srsRAN codebase.
+Modifications in other parts of the code need to be adequately assessed, as they might disrupt the operation 
+of the OCUDU stack.
 
 ## Configuration of the external UL processor
 

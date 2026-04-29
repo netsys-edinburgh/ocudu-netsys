@@ -1,19 +1,13 @@
-/*
- *
- * Copyright 2021-2025 Software Radio Systems Limited
- *
- * By using this file, you agree to the terms and conditions set
- * forth in the LICENSE file which can be found at the top level of
- * the distribution.
- *
- */
+// SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
+// SPDX-License-Identifier: BSD-3-Clause-Open-MPI
+// Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #pragma once
 
 #include "external_ul_processor.h"
-#include "srsran/phy/upper/phy_tap/phy_tap.h"
+#include "ocudu/phy/upper/phy_tap/phy_tap.h"
 
-namespace srsran {
+namespace ocudu {
 
 class phy_tap_impl : public phy_tap
 {
@@ -21,10 +15,11 @@ public:
   // Forbid default constructor.
   phy_tap_impl() = delete;
 
-  /// Constructor that creates a physical layer tap with the given external UL processor.
+  /// Constructor that creates a physical layer tap with the given external UL
+  /// processor.
   explicit phy_tap_impl(std::unique_ptr<external_ul_processor> processor_) : processor(std::move(processor_))
   {
-    srsran_assert(processor, "Invalid external UL processor");
+    ocudu_assert(processor, "Invalid external UL processor");
   }
 
   // See interface for documentation.
@@ -60,4 +55,4 @@ private:
   std::unique_ptr<external_ul_processor> processor;
 };
 
-} // namespace srsran
+} // namespace ocudu
