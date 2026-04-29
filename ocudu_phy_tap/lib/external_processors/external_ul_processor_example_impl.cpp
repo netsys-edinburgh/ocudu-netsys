@@ -99,6 +99,9 @@ void external_ul_processor_example_impl::process_quiet(const resource_grid_reade
       // [EXTERNAL CODE INSERTION END]
     }
   }
+
+  // Update the symbol index at the end of the current slot.
+  last_processed_symbol = nof_slot_symbols - 1;
 }
 
 void external_ul_processor_example_impl::process_prach(prach_buffer& buffer, const prach_buffer_context& context)
