@@ -1,6 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
-// Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #pragma once
 
@@ -23,12 +22,6 @@ namespace ocudu {
 class tap_ul_resource_grid_epre_zmq : public external_ul_processor
 {
 public:
-  /// Number of symbols in a slot. Used for quiet slot processing.
-  static constexpr unsigned nof_slot_symbols = MAX_NSYMB_PER_SLOT;
-
-  /// Number of temporary buffers for processing.
-  static constexpr unsigned nof_temp_buffers = 16;
-
   /// \brief Collects the necessary dependencies for the uplink tap processor.
   ///
   /// This nested class manages all the required components for the uplink tap processor, including the ZeroMQ backend,
@@ -96,6 +89,13 @@ public:
   // See the interface for documentation.
   void process_prach(prach_buffer& buffer, const prach_buffer_context& context) override;
 
+private:
+  /// Number of symbols in a slot. Used for quiet slot processing.
+  static constexpr unsigned nof_slot_symbols = MAX_NSYMB_PER_SLOT;
+  /// Number of temporary buffers for processing.
+  static constexpr unsigned nof_temp_buffers = 16;
+  /// Computes the EPRE of a set of symbols.
+  void compute_epre(const resource_grid_reader& grid_reader);
   /// Logger object.
   ocudulog::basic_logger& logger;
   /// Optional instance for chaining.
@@ -112,10 +112,6 @@ public:
   unsigned nof_ports = 0;
   /// Number of subcarrierrs in the current grid.
   unsigned nof_subc = 0;
-
-private:
-  /// Computes the EPRE of a set of symbols.
-  void compute_epre(const resource_grid_reader& grid_reader);
 };
 
 } // namespace ocudu

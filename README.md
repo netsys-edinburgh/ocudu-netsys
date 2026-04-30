@@ -2,7 +2,7 @@ OCUDU - PHY TAP Plugin Example
 ==============================
 
 This project provides a C++ plugin example designed to be used with the PHY TAP Plugin Interface exposed by OUCDU.
-The PHY TAP Plugin interface exposes the upper physical layer symbols to an external processor.
+The PHY TAP Plugin interface exposes the upper physical layer uplink symbols to an external processor.
 
 ## Overview
 
@@ -12,7 +12,7 @@ an external uplink processor object that can be used to insert custom processing
 
 ## How to add your own processing algorithms
 
-A toy example external uplink processor implementation is provided in this plugin example project. This dummy
+A toy example external uplink processor implementation is provided in this plugin example project. This dummy 
 processor scales the received symbols by a constant, and serves as an implementation example. 
 To quickly test the plugin, the `process` method of this dummy processor can be extended to implement custom processing
 logic.
@@ -23,7 +23,7 @@ All external UL processors must implement the interface defined in `/include/ext
 own implementation of the external UL processor
 in `/lib/external_processors/`. In order to instantiate it, a factory must be defined in
 `/lib/external_processors/external_processor_factories.cpp`. This factory must implement the interface defined in
-`/include/external_processor_factories.h`. A factory creation function must also be declared in this file, and defined
+`/include/external_ul_processor_factory.h`. A factory creation function must also be declared in this file, and defined
 in `/lib/external_processor_factories.cpp`.
 
 To instantiate your own implementation instead of the dummy processor, replace the call to the factory creation function

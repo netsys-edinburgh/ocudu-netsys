@@ -1,6 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
-// Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #pragma once
 
@@ -12,11 +11,7 @@ namespace ocudu {
 class phy_tap_impl : public phy_tap
 {
 public:
-  // Forbid default constructor.
-  phy_tap_impl() = delete;
-
-  /// Constructor that creates a physical layer tap with the given external UL
-  /// processor.
+  /// Constructor that creates a physical layer tap with the given external UL processor.
   explicit phy_tap_impl(std::unique_ptr<external_ul_processor> processor_) : processor(std::move(processor_))
   {
     ocudu_assert(processor, "Invalid external UL processor");
