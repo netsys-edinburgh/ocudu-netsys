@@ -4,6 +4,7 @@
 #pragma once
 
 #include "external_ul_processor.h"
+#include "ocudu/ran/tdd/tdd_ul_dl_config.h"
 #include <memory>
 
 namespace ocudu {
@@ -28,9 +29,10 @@ public:
 /// \param[in] nof_ports           The number of ports to process.
 /// \param[in] processor_arguments Custom arguments for the external processor, if any.
 std::shared_ptr<external_ul_processor_factory>
-create_external_ul_procesor_example_factory(unsigned           nof_rb,
-                                            unsigned           nof_ports,
-                                            const std::string& processor_arguments = "");
+create_external_ul_procesor_example_factory(unsigned                               nof_rb,
+                                            unsigned                               nof_ports,
+                                            std::optional<tdd_ul_dl_config_common> tdd_pattern,
+                                            const std::string&                     processor_arguments = "");
 
 // [EXTERNAL CODE INSERTION START] Declare your own external UL processor factory creation functions here.
 

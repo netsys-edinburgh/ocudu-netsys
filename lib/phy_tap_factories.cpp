@@ -4,6 +4,7 @@
 #include "external_ul_processor_factory.h"
 #include "phy_tap_impl.h"
 #include "ocudu/phy/upper/upper_phy_factories.h"
+#include "ocudu/ran/tdd/tdd_ul_dl_config.h"
 
 using namespace ocudu;
 
@@ -13,12 +14,16 @@ namespace {
 class phy_tap_factory_impl : public phy_tap_factory
 {
 public:
-  explicit phy_tap_factory_impl(unsigned nof_rb_, unsigned nof_ports_, const std::string& processor_arguments_)
+  explicit phy_tap_factory_impl(unsigned                               nof_rb_,
+                                unsigned                               nof_ports_,
+                                std::optional<tdd_ul_dl_config_common> tdd_pattern_,
+                                const std::string&                     processor_arguments_)
   {
     // [EXTERNAL CODE INSERTION START] Use your own external UL processor factory creation function here.
 
     // Create the external UL processor factory.
-    processor_factory = create_external_ul_procesor_example_factory(nof_rb_, nof_ports_, processor_arguments_);
+    processor_factory =
+        create_external_ul_procesor_example_factory(nof_rb_, nof_ports_, tdd_pattern_, processor_arguments_);
 
     // [EXTERNAL CODE INSERTION END]
 
@@ -41,8 +46,10 @@ private:
 
 } // namespace
 
-std::shared_ptr<phy_tap_factory>
-ocudu::create_phy_tap_factory(unsigned nof_rb, unsigned nof_ports, const std::string& processor_arguments)
+std::shared_ptr<phy_tap_factory> ocudu::create_phy_tap_factory(unsigned                               nof_rb,
+                                                               unsigned                               nof_ports,
+                                                               std::optional<tdd_ul_dl_config_common> tdd_pattern,
+                                                               const std::string& processor_arguments)
 {
-  return std::make_shared<phy_tap_factory_impl>(nof_rb, nof_ports, processor_arguments);
+  return std::make_shared<phy_tap_factory_impl>(nof_rb, nof_ports, tdd_pattern, processor_arguments);
 }

@@ -9,6 +9,6 @@ target_link_libraries(ocudu_upper_phy_tap external_processors)
 target_link_libraries(ocudu_upper_phy ocudu_upper_phy_tap)
 
 # Add the pre-processor definition for the upper PHY tap library into the upper PHY.
-target_compile_definitions(ocudu_upper_phy PRIVATE -DSRSRAN_HAS_PHY_TAP)
+target_compile_definitions(ocudu_upper_phy PRIVATE -DOCUDU_HAS_PHY_TAP)
 
 add_subdirectory(external_processors)
