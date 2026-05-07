@@ -3,6 +3,7 @@
 
 #include "external_ul_processor_example_impl.h"
 #include "ocudu/ocuduvec/conversion.h"
+#include "ocudu/ocuduvec/fill.h"
 #include "ocudu/ocuduvec/sc_prod.h"
 #include "ocudu/phy/support/resource_grid_reader.h"
 #include "ocudu/phy/support/resource_grid_writer.h"
@@ -87,8 +88,18 @@ void external_ul_processor_example_impl::process_quiet(const resource_grid_reade
     logger.debug("Processing unallocated symbol: slot={}, symbol={}", slot, symbol_ix);
 
     for (unsigned i_port = 0; i_port != nof_ports; ++i_port) {
-      // Copy the symbols into the temporary buffer.
-      grid_reader.get(temp_buffer, i_port, symbol_ix, 0);
+      // Forced zeroing of all non-UL symbols in the flexible slot.
+      if (tdd_pattern1.has_value() &&
+          ((((slot.slot_index() % tdd_pattern1->periodicity_slots) == tdd_pattern1->flexible_slot_idx) &&
+            (symbol_ix < tdd_pattern1->first_ul_symbol_idx)) ||
+           (tdd_pattern2.has_value() &&
+            ((slot.slot_index() % tdd_pattern2->periodicity_slots) == tdd_pattern2->flexible_slot_idx) &&
+            (symbol_ix < tdd_pattern2->first_ul_symbol_idx)))) {
+        ocuduvec::fill(temp_buffer, {0.0f, 0.0f});
+      } else {
+        // Copy the symbols into the temporary buffer.
+        grid_reader.get(temp_buffer, i_port, symbol_ix, 0);
+      }
 
       // [EXTERNAL CODE INSERTION START] Insert your DSP processing here.
 

@@ -8,6 +8,7 @@
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/ran/cyclic_prefix.h"
 #include "ocudu/ran/prach/prach_constants.h"
+#include "ocudu/ran/tdd/tdd_ul_dl_config.h"
 #include <regex>
 
 namespace ocudu {
@@ -24,7 +25,10 @@ public:
   /// \param[in] nof_rb Number of resource blocks in the resource grid.
   /// \param[in] nof_ports_ Number of ports to process.
   /// \param[in] processor_arguments custom arguments for the processor.
-  external_ul_processor_example_impl(unsigned nof_rb, unsigned nof_ports_, const std::string& processor_arguments) :
+  external_ul_processor_example_impl(unsigned                               nof_rb,
+                                     unsigned                               nof_ports_,
+                                     std::optional<tdd_ul_dl_config_common> tdd_pattern,
+                                     const std::string&                     processor_arguments) :
     temp_buffer(nof_rb * NOF_SUBCARRIERS_PER_RB),
     nof_ports(nof_ports_),
     logger(ocudulog::fetch_basic_logger("PHY_TAP", true))
@@ -52,6 +56,21 @@ public:
       std::transform(parsed_text.begin(), parsed_text.end(), parsed_text.begin(), ::tolower);
       if (parsed_text == "true") {
         enable_quiet_processing = true;
+
+        // Initialize the TDD configuration required by the quiet processing.
+        if (tdd_pattern) {
+          tdd_pattern1 =
+              tdd_pattern_description{.periodicity_slots   = tdd_pattern->pattern1.dl_ul_tx_period_nof_slots,
+                                      .flexible_slot_idx   = tdd_pattern->pattern1.nof_dl_slots,
+                                      .first_ul_symbol_idx = nof_slot_symbols - tdd_pattern->pattern1.nof_ul_symbols};
+          if (tdd_pattern->pattern2) {
+            tdd_pattern2 = tdd_pattern_description{
+                .periodicity_slots = tdd_pattern->pattern2->dl_ul_tx_period_nof_slots,
+                .flexible_slot_idx =
+                    tdd_pattern->pattern1.dl_ul_tx_period_nof_slots + tdd_pattern->pattern2->nof_dl_slots,
+                .first_ul_symbol_idx = nof_slot_symbols - tdd_pattern->pattern2->nof_ul_symbols};
+          }
+        }
       }
     }
   }
@@ -73,12 +92,26 @@ public:
   void process_prach(prach_buffer& buffer, const prach_buffer_context& context) override;
 
 private:
+  /// Stores the relevant TDD pattern information.
+  struct tdd_pattern_description {
+    /// Periodicity of the TDD pattern in number of slots.
+    unsigned periodicity_slots;
+    /// Index of the flexible slot within the TDD pattern.
+    unsigned flexible_slot_idx;
+    /// Index of the first UL symbol within the flexible slot.
+    unsigned first_ul_symbol_idx;
+  };
+
   /// Buffer for the temporary storage of the resource grid data.
   std::vector<cf_t> temp_buffer;
   /// Buffer for the temporary storage of the PRACH data.
   static_vector<cf_t, prach_constants::LONG_SEQUENCE_LENGTH> temp_buffer_prach;
   /// Number of ports to process.
   unsigned nof_ports;
+  /// TDD pattern 1 information, if configured.
+  std::optional<tdd_pattern_description> tdd_pattern1;
+  /// TDD pattern 2 information, if configured.
+  std::optional<tdd_pattern_description> tdd_pattern2;
   /// Index of the last processed symbol.
   unsigned last_processed_symbol = 0;
   /// Enables or disables the processing of quiet UL symbols.
