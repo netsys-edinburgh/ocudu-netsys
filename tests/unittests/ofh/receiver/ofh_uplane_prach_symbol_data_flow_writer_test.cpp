@@ -43,7 +43,7 @@ public:
     buffer_context.pusch_scs        = ocudu::subcarrier_spacing::kHz30;
     buffer_context.start_symbol     = 0;
 
-    repo->add(buffer_context, prach_pool->get(), ocudulog::fetch_basic_logger("TEST"), std::nullopt);
+    repo->add(buffer_context, prach_pool->get(), ocudulog::fetch_basic_logger("TEST"), std::nullopt, std::nullopt);
     repo->process_pending_contexts();
 
     results.params.slot      = slot;
@@ -104,7 +104,7 @@ TEST_P(ofh_uplane_prach_symbol_data_flow_writer_fixture, decoded_prbs_before_pra
   buffer_context.pusch_scs = subcarrier_spacing::kHz60;
   buffer_context.format    = prach_format_type::zero;
   unsigned nof_symbols_    = 1U;
-  repo->add(buffer_context, prach_pool->get(), ocudulog::fetch_basic_logger("TEST"), std::nullopt);
+  repo->add(buffer_context, prach_pool->get(), ocudulog::fetch_basic_logger("TEST"), std::nullopt, std::nullopt);
   repo->process_pending_contexts();
 
   auto& section     = results.sections.back();
@@ -128,7 +128,7 @@ TEST_P(ofh_uplane_prach_symbol_data_flow_writer_fixture, prbs_at_the_beginning_w
   buffer_context.pusch_scs = subcarrier_spacing::kHz60;
   buffer_context.format    = prach_format_type::zero;
   unsigned nof_symbols_    = 1U;
-  repo->add(buffer_context, prach_pool->get(), ocudulog::fetch_basic_logger("TEST"), std::nullopt);
+  repo->add(buffer_context, prach_pool->get(), ocudulog::fetch_basic_logger("TEST"), std::nullopt, std::nullopt);
   repo->process_pending_contexts();
 
   auto& section     = results.sections.back();
@@ -157,7 +157,7 @@ TEST_P(ofh_uplane_prach_symbol_data_flow_writer_fixture, 60kHz_long_format_one_m
   custom_prach_pool = create_prach_buffer_pool(nof_symbols, buffer_context.format);
   auto buffer       = custom_prach_pool->get();
 
-  repo->add(buffer_context, buffer.clone(), ocudulog::fetch_basic_logger("TEST"), std::nullopt);
+  repo->add(buffer_context, buffer.clone(), ocudulog::fetch_basic_logger("TEST"), std::nullopt, std::nullopt);
   repo->process_pending_contexts();
 
   auto& section     = results.sections.back();
@@ -184,7 +184,7 @@ TEST_P(ofh_uplane_prach_symbol_data_flow_writer_fixture, 60kHz_long_format_one_m
 
   custom_prach_pool = create_prach_buffer_pool(nof_symbols, buffer_context.format);
 
-  repo->add(buffer_context, custom_prach_pool->get(), ocudulog::fetch_basic_logger("TEST"), std::nullopt);
+  repo->add(buffer_context, custom_prach_pool->get(), ocudulog::fetch_basic_logger("TEST"), std::nullopt, std::nullopt);
   repo->process_pending_contexts();
 
   auto& section     = results.sections.back();
@@ -231,7 +231,7 @@ TEST_P(ofh_uplane_prach_symbol_data_flow_writer_fixture, decoded_prbs_with_start
 
   // Offset the start symbol.
   buffer_context.start_symbol = 2;
-  repo->add(buffer_context, buffer.clone(), ocudulog::fetch_basic_logger("TEST"), std::nullopt);
+  repo->add(buffer_context, buffer.clone(), ocudulog::fetch_basic_logger("TEST"), std::nullopt, std::nullopt);
   repo->process_pending_contexts();
 
   auto& section     = results.sections.back();
