@@ -117,7 +117,9 @@ RUN if [ -z "$NUM_JOBS" ]; then NUM_JOBS=$(nproc); fi \
     && ARCH_FLAG=$([ "${TARGETARCH}" = "arm64" ] && echo "-DMCPU=${MARCH}" || echo "-DMARCH=${MARCH}") \
     && \
     /src/docker/scripts/builder.sh -c ${COMPILER} -m "-j${NUM_JOBS} ocu odu odu_split_8 odu_split_7_2 gnb gnb_split_8 gnb_split_7_2 ru_emulator" \
-    -DBUILD_TESTING=False -DENABLE_UHD=${ENABLE_UHD} -DENABLE_DPDK=On ${ARCH_FLAG} -DCMAKE_INSTALL_PREFIX=/opt/ocudu \
+    -DBUILD_TESTING=False -DENABLE_UHD=${ENABLE_UHD} -DENABLE_DPDK=On \
+    -DENABLE_PDSCH_HWACC=On -DENABLE_PUSCH_HWACC=On \
+    ${ARCH_FLAG} -DCMAKE_INSTALL_PREFIX=/opt/ocudu \
     ${EXTRA_CMAKE_ARGS} /src
 RUN cp /src/build/apps/cu/ocu                     /tmp/ocu                     && \
     cp /src/build/apps/du/odu                     /tmp/odu                     && \
