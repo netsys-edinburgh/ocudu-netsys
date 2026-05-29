@@ -44,15 +44,19 @@ FROM ${OS}:${OS_VERSION} AS builder-uhd
 
 COPY docker/scripts/ /src/docker/scripts/
 
-RUN /src/docker/scripts/install_uhd_dependencies.sh build
-
+ARG ENABLE_UHD=On
 ARG UHD_VERSION
 ARG MARCH
 ARG NUM_JOBS
 ARG TARGETARCH
 
-RUN UHD_ARCH=$([ "${TARGETARCH}" = "arm64" ] && echo "-mcpu=${MARCH}" || echo "-march=${MARCH}") && \
-    /src/docker/scripts/build_uhd.sh "${UHD_VERSION}" ${UHD_ARCH} ${NUM_JOBS}
+RUN if [ "$ENABLE_UHD" = "On" ] && [ -n "$UHD_VERSION" ]; then \
+      /src/docker/scripts/install_uhd_dependencies.sh build && \
+      UHD_ARCH=$([ "${TARGETARCH}" = "arm64" ] && echo "-mcpu=${MARCH}" || echo "-march=${MARCH}") && \
+      /src/docker/scripts/build_uhd.sh "${UHD_VERSION}" ${UHD_ARCH} ${NUM_JOBS}; \
+    else \
+      mkdir -p /opt/uhd/${UHD_VERSION:-disabled}; \
+    fi
 
 
 #########################
@@ -100,6 +104,7 @@ ARG NUM_JOBS
 ARG TARGETARCH
 ARG COMPILER=gcc
 ARG EXTRA_CMAKE_ARGS=""
+ARG ENABLE_UHD=On
 
 ENV ROHC_DIR=/opt/rohc
 ENV UHD_DIR=/opt/uhd/${UHD_VERSION}
@@ -112,7 +117,7 @@ RUN if [ -z "$NUM_JOBS" ]; then NUM_JOBS=$(nproc); fi \
     && ARCH_FLAG=$([ "${TARGETARCH}" = "arm64" ] && echo "-DMCPU=${MARCH}" || echo "-DMARCH=${MARCH}") \
     && \
     /src/docker/scripts/builder.sh -c ${COMPILER} -m "-j${NUM_JOBS} ocu odu odu_split_8 odu_split_7_2 gnb gnb_split_8 gnb_split_7_2 ru_emulator" \
-    -DBUILD_TESTING=False -DENABLE_UHD=On -DENABLE_DPDK=On ${ARCH_FLAG} -DCMAKE_INSTALL_PREFIX=/opt/ocudu \
+    -DBUILD_TESTING=False -DENABLE_UHD=${ENABLE_UHD} -DENABLE_DPDK=On ${ARCH_FLAG} -DCMAKE_INSTALL_PREFIX=/opt/ocudu \
     ${EXTRA_CMAKE_ARGS} /src
 RUN cp /src/build/apps/cu/ocu                     /tmp/ocu                     && \
     cp /src/build/apps/du/odu                     /tmp/odu                     && \
