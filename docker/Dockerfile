@@ -106,13 +106,18 @@ RUN /src/docker/scripts/build_rohc.sh "${ROHC_VERSION}" ${MARCH} ${NUM_JOBS}
 ########################
 FROM builder-base-uhd AS builder-uhd
 
+ARG ENABLE_UHD=On
 ARG UHD_VERSION
 ARG MARCH
 ARG NUM_JOBS
 ARG TARGETARCH
 
-RUN UHD_ARCH=$([ "${TARGETARCH}" = "arm64" ] && echo "-mcpu=${MARCH}" || echo "-march=${MARCH}") && \
-    /src/docker/scripts/build_uhd.sh "${UHD_VERSION}" ${UHD_ARCH} ${NUM_JOBS}
+RUN if [ "$ENABLE_UHD" = "On" ] && [ -n "$UHD_VERSION" ]; then \
+      UHD_ARCH=$([ "${TARGETARCH}" = "arm64" ] && echo "-mcpu=${MARCH}" || echo "-march=${MARCH}") && \
+      /src/docker/scripts/build_uhd.sh "${UHD_VERSION}" ${UHD_ARCH} ${NUM_JOBS}; \
+    else \
+      mkdir -p /opt/uhd/${UHD_VERSION:-disabled}; \
+    fi
 
 
 #########################
