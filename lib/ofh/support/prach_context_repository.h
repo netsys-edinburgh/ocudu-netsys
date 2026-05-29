@@ -230,11 +230,13 @@ public:
   void add(const prach_buffer_context& context,
            shared_prach_buffer         buffer_,
            ocudulog::basic_logger&     logger,
-           std::optional<unsigned>     start_symbol)
+           std::optional<unsigned>     start_symbol,
+           std::optional<slot_point>   slot = std::nullopt)
   {
-    if (!pending_context_to_add.try_push([context, prach_buff = std::move(buffer_), start_symbol, this]() mutable {
+    if (!pending_context_to_add.try_push([context, prach_buff = std::move(buffer_), start_symbol, slot, this]() mutable {
           std::lock_guard<std::mutex> lock(mutex);
-          entry(context.slot) = prach_context(context, std::move(prach_buff), start_symbol);
+          slot_point                  current_slot = slot.value_or(context.slot);
+          entry(current_slot)                      = prach_context(context, std::move(prach_buff), start_symbol);
         })) {
       logger.warning("Failed to enqueue task to add the uplink context to the repository");
     }

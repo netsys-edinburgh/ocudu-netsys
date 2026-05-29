@@ -1,0 +1,324 @@
+--- a/apps/units/flexible_o_du/split_7_2/helpers/ru_ofh_config.h
++++ b/apps/units/flexible_o_du/split_7_2/helpers/ru_ofh_config.h
+@@ -86,6 +86,9 @@
+   std::chrono::microseconds Ta4_min{85};
+   /// Enables the Control-Plane PRACH message signalling.
+   bool is_prach_control_plane_enabled = true;
++  /// Enables auto derivation of the slot index where the PRACH U-Plane packets are expected (applicable only to long
++  /// format PRACH).
++  bool enable_lf_prach_slot_autoderivation = false;
+   /// Ignore the start symbol value received in the PRACH U-Plane packets.
+   bool ignore_prach_start_symbol = false;
+   /// If set to true, the payload size encoded in a eCPRI header is ignored.
+--- a/apps/units/flexible_o_du/split_7_2/helpers/ru_ofh_config_cli11_schema.cpp
++++ b/apps/units/flexible_o_du/split_7_2/helpers/ru_ofh_config_cli11_schema.cpp
+@@ -96,6 +96,11 @@
+   }
+ 
+   add_option(app, "--is_prach_cp_enabled", config.is_prach_control_plane_enabled, "PRACH Control-Plane enabled flag")
++      ->capture_default_str();
++  add_option(app,
++             "--enable_lf_prach_slot_autoderivation",
++             config.enable_lf_prach_slot_autoderivation,
++             "Long format PRACH slot index auto-derivation")
+       ->capture_default_str();
+   add_option(app, "--ignore_ecpri_seq_id", config.ignore_ecpri_seq_id_field, "Ignore eCPRI sequence id field value")
+       ->capture_default_str();
+@@ -519,4 +524,11 @@
+ #ifdef DPDK_FOUND
+   manage_hal_optional(app, parsed_cfg.config.hal_config);
+ #endif
+-}
++
++  // If the PRACH C-Plane is enabled, we don't auto-derive the slot index for long format PRACH U-Plane.
++  for (auto& ofh_cell : parsed_cfg.config.cells) {
++    if (ofh_cell.cell.is_prach_control_plane_enabled) {
++      ofh_cell.cell.enable_lf_prach_slot_autoderivation = false;
++    }
++  }
++}
+--- a/apps/units/flexible_o_du/split_7_2/helpers/ru_ofh_config_translator.cpp
++++ b/apps/units/flexible_o_du/split_7_2/helpers/ru_ofh_config_translator.cpp
+@@ -112,6 +112,7 @@
+     sector_cfg.rx_window_timing_params =
+         rx_timing_window_params_us_to_symbols(ofh_cell_cfg.cell.Ta4_max, ofh_cell_cfg.cell.Ta4_min, symbol_duration);
+     sector_cfg.is_prach_control_plane_enabled  = ofh_cell_cfg.cell.is_prach_control_plane_enabled;
++    sector_cfg.enable_lf_prach_slot_autoderivation = ofh_cell_cfg.cell.enable_lf_prach_slot_autoderivation;
+     sector_cfg.ignore_prach_start_symbol       = ofh_cell_cfg.cell.ignore_prach_start_symbol;
+     sector_cfg.ignore_ecpri_payload_size_field = ofh_cell_cfg.cell.ignore_ecpri_payload_size_field;
+     sector_cfg.ignore_ecpri_seq_id_field       = ofh_cell_cfg.cell.ignore_ecpri_seq_id_field;
+--- a/apps/units/flexible_o_du/split_7_2/helpers/ru_ofh_config_yaml_writer.cpp
++++ b/apps/units/flexible_o_du/split_7_2/helpers/ru_ofh_config_yaml_writer.cpp
+@@ -90,6 +90,7 @@
+   node["ta4_max"]                    = config.Ta4_max.count();
+   node["ta4_min"]                    = config.Ta4_min.count();
+   node["is_prach_cp_enabled"]        = config.is_prach_control_plane_enabled;
++  node["enable_lf_prach_slot_autoderivation"] = config.enable_lf_prach_slot_autoderivation;
+   node["ignore_prach_start_symbol"]  = config.ignore_prach_start_symbol;
+   node["ignore_ecpri_seq_id"]        = config.ignore_ecpri_seq_id_field;
+   node["ignore_ecpri_payload_size"]  = config.ignore_ecpri_payload_size_field;
+--- a/include/ocudu/ofh/ofh_sector_config.h
++++ b/include/ocudu/ofh/ofh_sector_config.h
+@@ -72,6 +72,9 @@
+ 
+   /// Enables the Control-Plane PRACH message signalling.
+   bool is_prach_control_plane_enabled = false;
++  /// Enables auto derivation of the slot index where the PRACH U-Plane packets are expected (applicable only to long
++  /// format PRACH).
++  bool enable_lf_prach_slot_autoderivation = false;
+   /// Ignore the start symbol value received in the PRACH U-Plane packets.
+   bool ignore_prach_start_symbol = false;
+   /// If set to true, the payload size encoded in a eCPRI header is ignored.
+--- a/include/ocudu/ofh/transmitter/ofh_transmitter_configuration.h
++++ b/include/ocudu/ofh/transmitter/ofh_transmitter_configuration.h
+@@ -38,6 +38,9 @@
+   static_vector<unsigned, MAX_NOF_SUPPORTED_EAXC> prach_eaxc;
+   /// PRACH Contol-Plane enabled flag.
+   bool is_prach_cp_enabled;
++  /// Enables auto derivation of the slot index where the PRACH U-Plane packets are expected (applicable only to long
++  /// format PRACH).
++  bool enable_lf_prach_slot_autoderivation;
+   /// Destination MAC address.
+   ether::mac_address mac_dst_address;
+   /// Source MAC address.
+--- a/lib/ofh/ofh_factories.cpp
++++ b/lib/ofh/ofh_factories.cpp
+@@ -77,6 +77,7 @@
+   tx_config.ul_eaxc                              = sector_cfg.ul_eaxc;
+   tx_config.prach_eaxc                           = sector_cfg.prach_eaxc;
+   tx_config.is_prach_cp_enabled                  = sector_cfg.is_prach_control_plane_enabled;
++  tx_config.enable_lf_prach_slot_autoderivation  = sector_cfg.enable_lf_prach_slot_autoderivation;
+   tx_config.mac_dst_address                      = sector_cfg.mac_dst_address;
+   tx_config.mac_src_address                      = sector_cfg.mac_src_address;
+   tx_config.vlan_cfg_cp                          = sector_cfg.vlan_cfg_cp;
+--- a/lib/ofh/support/prach_context_repository.h
++++ b/lib/ofh/support/prach_context_repository.h
+@@ -230,11 +230,13 @@
+   void add(const prach_buffer_context& context,
+            shared_prach_buffer         buffer_,
+            ocudulog::basic_logger&     logger,
+-           std::optional<unsigned>     start_symbol)
+-  {
+-    if (!pending_context_to_add.try_push([context, prach_buff = std::move(buffer_), start_symbol, this]() mutable {
++           std::optional<unsigned>     start_symbol,
++           std::optional<slot_point>   slot = std::nullopt)
++  {
++    if (!pending_context_to_add.try_push([context, prach_buff = std::move(buffer_), start_symbol, slot, this]() mutable {
+           std::lock_guard<std::mutex> lock(mutex);
+-          entry(context.slot) = prach_context(context, std::move(prach_buff), start_symbol);
++          slot_point                  current_slot = slot.value_or(context.slot);
++          entry(current_slot)                      = prach_context(context, std::move(prach_buff), start_symbol);
+         })) {
+       logger.warning("Failed to enqueue task to add the uplink context to the repository");
+     }
+--- a/lib/ofh/transmitter/ofh_transmitter_impl.cpp
++++ b/lib/ofh/transmitter/ofh_transmitter_impl.cpp
+@@ -12,6 +12,7 @@
+   uplink_request_handler_impl_config config;
+   config.sector                        = tx_config.sector;
+   config.is_prach_cp_enabled           = tx_config.is_prach_cp_enabled;
++  config.enable_lf_prach_slot_autoderivation = tx_config.enable_lf_prach_slot_autoderivation;
+   config.prach_eaxc                    = tx_config.prach_eaxc;
+   config.ul_data_eaxc                  = tx_config.ul_eaxc;
+   config.tdd_config                    = tx_config.tdd_config;
+--- a/lib/ofh/transmitter/ofh_uplink_request_handler_impl.h
++++ b/lib/ofh/transmitter/ofh_uplink_request_handler_impl.h
+@@ -24,6 +24,9 @@
+   unsigned sector;
+   /// PRACH Contol-Plane enabled flag.
+   bool is_prach_cp_enabled;
++  /// Enables auto derivation of the slot index where the PRACH U-Plane packets are expected (applicable only to long
++  /// format PRACH).
++  bool enable_lf_prach_slot_autoderivation;
+   /// PRACH eAxC.
+   static_vector<unsigned, MAX_NOF_SUPPORTED_EAXC> prach_eaxc;
+   /// Uplink data eAxC.
+@@ -82,6 +85,7 @@
+ private:
+   ocudulog::basic_logger&                                 logger;
+   const bool                                              is_prach_cp_enabled;
++  const bool                                              enable_lf_prach_slot_autoderivation;
+   const cyclic_prefix                                     cp;
+   const std::optional<tdd_ul_dl_config_common>            tdd_config;
+   const static_vector<unsigned, MAX_NOF_SUPPORTED_EAXC>   prach_eaxc;
+--- a/lib/ofh/transmitter/ofh_uplink_request_handler_impl.cpp
++++ b/lib/ofh/transmitter/ofh_uplink_request_handler_impl.cpp
+@@ -48,6 +48,7 @@
+                                                          uplink_request_handler_impl_dependencies&& dependencies) :
+   logger(dependencies.logger),
+   is_prach_cp_enabled(config.is_prach_cp_enabled),
++  enable_lf_prach_slot_autoderivation(config.enable_lf_prach_slot_autoderivation),
+   cp(config.cp),
+   tdd_config(config.tdd_config),
+   prach_eaxc(config.prach_eaxc),
+@@ -75,6 +76,29 @@
+   ocudu_assert(frame_pool, "Invalid frame pool");
+ }
+ 
++/// Determines slot index where U-Plane packet is expected for long format PRACH.
++static slot_point get_long_prach_expected_slot(const prach_buffer_context& context)
++{
++  static constexpr unsigned nof_symbols_per_slot = get_nsymb_per_slot(cyclic_prefix::NORMAL);
++  ocudu_assert(is_long_preamble(context.format), "Long PRACH format expected");
++
++  // Get preamble information.
++  prach_preamble_information preamble_info = get_prach_preamble_long_info(context.format);
++
++  double pusch_symbol_duration_msec =
++      static_cast<double>(SUBFRAME_DURATION_MSEC) /
++      static_cast<double>(get_nof_slots_per_subframe(context.pusch_scs) * nof_symbols_per_slot);
++
++  double   len_msecs   = (preamble_info.cp_length.to_seconds() + preamble_info.symbol_length().to_seconds()) * 1000;
++  unsigned nof_symbols = std::ceil(len_msecs / pusch_symbol_duration_msec);
++
++  unsigned prach_length_slots =
++      std::ceil(static_cast<double>(context.start_symbol + nof_symbols) / static_cast<double>(nof_symbols_per_slot));
++
++  // Subtract one to account for the current slot.
++  return (context.slot + (prach_length_slots - 1));
++}
++
+ /// \brief Determine PRACH start symbol index.
+ ///
+ /// Determine startSymbolId as the last symbol that starts right at or before the PRACH preamble (after the cyclic
+@@ -127,7 +151,8 @@
+   // Open Fronthaul parameters timeOffset and cpLength are expressed in multiple of \f$T_s\f$ units.
+   static constexpr double ref_srate_Hz = 30.72e6;
+ 
+-  // Store the context in the repository.
++  // Store the context in the repository, use correct slot index for long format accounting for PRACH duration.
++  auto slot_idx = context.slot;
+   if (is_short_preamble(context.format)) {
+     ul_prach_repo->add(context, std::move(buffer), logger, std::nullopt);
+     if (OCUDU_UNLIKELY(context.nof_td_occasions > 1)) {
+@@ -137,10 +162,15 @@
+                   context.slot);
+     }
+   } else {
++    // If enabled in the config determine slot index where the PRACH U-Plane is expected.
++    if (enable_lf_prach_slot_autoderivation) {
++      slot_idx = get_long_prach_expected_slot(context);
++    }
++
+     // Determine PRACH start symbol.
+     unsigned start_symbol = get_prach_start_symbol(context);
+ 
+-    ul_prach_repo->add(context, std::move(buffer), logger, start_symbol);
++    ul_prach_repo->add(context, std::move(buffer), logger, start_symbol, slot_idx);
+   }
+ 
+   if (!is_prach_cp_enabled) {
+@@ -164,7 +194,7 @@
+   unsigned K         = (1000 * scs_to_khz(context.pusch_scs)) / ra_scs_to_Hz(preamble_info.scs);
+ 
+   data_flow_cplane_scheduling_prach_context cp_prach_context;
+-  cp_prach_context.slot            = context.slot;
++  cp_prach_context.slot            = slot_idx;
+   cp_prach_context.nof_repetitions = preamble_info.nof_symbols;
+   cp_prach_context.start_symbol    = get_prach_start_symbol(context);
+   cp_prach_context.prach_scs       = preamble_info.scs;
+--- a/tests/unittests/ofh/receiver/ofh_data_flow_uplane_uplink_prach_impl_test.cpp
++++ b/tests/unittests/ofh/receiver/ofh_data_flow_uplane_uplink_prach_impl_test.cpp
+@@ -77,7 +77,7 @@
+ 
+     buffer = prach_pool->get();
+ 
+-    repo->add(buffer_context, buffer.clone(), ocudulog::fetch_basic_logger("TEST"), std::nullopt);
++    repo->add(buffer_context, buffer.clone(), ocudulog::fetch_basic_logger("TEST"), std::nullopt, std::nullopt);
+     repo->process_pending_contexts();
+ 
+     results.uplane_results.params.slot      = slot;
+@@ -95,7 +95,7 @@
+ 
+     // Fill the contexts
+     ul_cplane_context_repo_ptr->add(slot, eaxc, context);
+-    prach_context_repo->add(buffer_context, buffer.clone(), ocudulog::fetch_basic_logger("TEST"), std::nullopt);
++    prach_context_repo->add(buffer_context, buffer.clone(), ocudulog::fetch_basic_logger("TEST"), std::nullopt, std::nullopt);
+     prach_context_repo->process_pending_contexts();
+   }
+ 
+--- a/tests/unittests/ofh/receiver/ofh_uplane_prach_data_flow_notifier_test.cpp
++++ b/tests/unittests/ofh/receiver/ofh_uplane_prach_data_flow_notifier_test.cpp
+@@ -50,7 +50,7 @@
+   context.start_preamble_index  = 0;
+   context.nof_preamble_indices  = 1;
+ 
+-  repo->add(context, prach_buffer_pool->get(), ocudulog::fetch_basic_logger("TEST"), std::nullopt);
++  repo->add(context, prach_buffer_pool->get(), ocudulog::fetch_basic_logger("TEST"), std::nullopt, std::nullopt);
+   repo->process_pending_contexts();
+   sender.notify_prach(slot);
+ 
+@@ -88,7 +88,7 @@
+   context.nof_preamble_indices  = 1;
+ 
+   static_vector<cbf16_t, 839> samples(839);
+-  repo->add(context, prach_buffer_pool->get(), ocudulog::fetch_basic_logger("TEST"), std::nullopt);
++  repo->add(context, prach_buffer_pool->get(), ocudulog::fetch_basic_logger("TEST"), std::nullopt, std::nullopt);
+   repo->process_pending_contexts();
+   ASSERT_FALSE(repo->get(slot).empty());
+ 
+@@ -133,7 +133,7 @@
+   context.nof_preamble_indices  = 1;
+ 
+   static_vector<cbf16_t, 139> samples(139);
+-  repo->add(context, prach_buffer_pool->get(), ocudulog::fetch_basic_logger("TEST"), std::nullopt);
++  repo->add(context, prach_buffer_pool->get(), ocudulog::fetch_basic_logger("TEST"), std::nullopt, std::nullopt);
+   repo->process_pending_contexts();
+   ASSERT_FALSE(repo->get(slot).empty());
+ 
+--- a/tests/unittests/ofh/receiver/ofh_uplane_prach_symbol_data_flow_writer_test.cpp
++++ b/tests/unittests/ofh/receiver/ofh_uplane_prach_symbol_data_flow_writer_test.cpp
+@@ -42,7 +42,7 @@
+     buffer_context.pusch_scs        = ocudu::subcarrier_spacing::kHz30;
+     buffer_context.start_symbol     = 0;
+ 
+-    repo->add(buffer_context, prach_pool->get(), ocudulog::fetch_basic_logger("TEST"), std::nullopt);
++    repo->add(buffer_context, prach_pool->get(), ocudulog::fetch_basic_logger("TEST"), std::nullopt, std::nullopt);
+     repo->process_pending_contexts();
+ 
+     results.params.slot      = slot;
+@@ -103,7 +103,7 @@
+   buffer_context.pusch_scs = subcarrier_spacing::kHz60;
+   buffer_context.format    = prach_format_type::zero;
+   unsigned nof_symbols_    = 1U;
+-  repo->add(buffer_context, prach_pool->get(), ocudulog::fetch_basic_logger("TEST"), std::nullopt);
++  repo->add(buffer_context, prach_pool->get(), ocudulog::fetch_basic_logger("TEST"), std::nullopt, std::nullopt);
+   repo->process_pending_contexts();
+ 
+   auto& section     = results.sections.back();
+@@ -127,7 +127,7 @@
+   buffer_context.pusch_scs = subcarrier_spacing::kHz60;
+   buffer_context.format    = prach_format_type::zero;
+   unsigned nof_symbols_    = 1U;
+-  repo->add(buffer_context, prach_pool->get(), ocudulog::fetch_basic_logger("TEST"), std::nullopt);
++  repo->add(buffer_context, prach_pool->get(), ocudulog::fetch_basic_logger("TEST"), std::nullopt, std::nullopt);
+   repo->process_pending_contexts();
+ 
+   auto& section     = results.sections.back();
+@@ -156,7 +156,7 @@
+   custom_prach_pool = create_prach_buffer_pool(nof_symbols, buffer_context.format);
+   auto buffer       = custom_prach_pool->get();
+ 
+-  repo->add(buffer_context, buffer.clone(), ocudulog::fetch_basic_logger("TEST"), std::nullopt);
++  repo->add(buffer_context, buffer.clone(), ocudulog::fetch_basic_logger("TEST"), std::nullopt, std::nullopt);
+   repo->process_pending_contexts();
+ 
+   auto& section     = results.sections.back();
+@@ -183,7 +183,7 @@
+ 
+   custom_prach_pool = create_prach_buffer_pool(nof_symbols, buffer_context.format);
+ 
+-  repo->add(buffer_context, custom_prach_pool->get(), ocudulog::fetch_basic_logger("TEST"), std::nullopt);
++  repo->add(buffer_context, custom_prach_pool->get(), ocudulog::fetch_basic_logger("TEST"), std::nullopt, std::nullopt);
+   repo->process_pending_contexts();
+ 
+   auto& section     = results.sections.back();
+@@ -230,7 +230,7 @@
+ 
+   // Offset the start symbol.
+   buffer_context.start_symbol = 2;
+-  repo->add(buffer_context, buffer.clone(), ocudulog::fetch_basic_logger("TEST"), std::nullopt);
++  repo->add(buffer_context, buffer.clone(), ocudulog::fetch_basic_logger("TEST"), std::nullopt, std::nullopt);
+   repo->process_pending_contexts();
+ 
+   auto& section     = results.sections.back();
