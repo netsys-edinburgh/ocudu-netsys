@@ -90,6 +90,7 @@ static void fill_ru_ofh_base_cell_section(YAML::Node node, const ru_ofh_unit_bas
   node["ta4_max"]                    = config.Ta4_max.count();
   node["ta4_min"]                    = config.Ta4_min.count();
   node["is_prach_cp_enabled"]        = config.is_prach_control_plane_enabled;
+  node["enable_lf_prach_slot_autoderivation"] = config.enable_lf_prach_slot_autoderivation;
   node["ignore_prach_start_symbol"]  = config.ignore_prach_start_symbol;
   node["ignore_ecpri_seq_id"]        = config.ignore_ecpri_seq_id_field;
   node["ignore_ecpri_payload_size"]  = config.ignore_ecpri_payload_size_field;
