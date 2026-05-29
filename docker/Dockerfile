@@ -325,10 +325,8 @@ ADD docker/scripts/install_*.sh docker/scripts/common.sh /usr/local/etc/
 ADD LICENSE /licenses/LICENSE
 RUN chmod +x /usr/local/etc/install_*.sh && \
     ln -sf /usr/local/etc/install_dependencies.sh /usr/local/etc/install_ocudu_dependencies.sh
-ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/opt/rohc/lib/:/opt/rohc/lib64/
-ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/opt/uhd/${UHD_VERSION}/lib/:/opt/uhd/${UHD_VERSION}/lib64/:/opt/uhd/${UHD_VERSION}/lib/x86_64-linux-gnu/:/opt/uhd/${UHD_VERSION}/lib/aarch64-linux-gnu/
-ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/opt/dpdk/${DPDK_VERSION}/lib/:/opt/dpdk/${DPDK_VERSION}/lib64/:/opt/dpdk/${DPDK_VERSION}/lib/x86_64-linux-gnu/:/opt/dpdk/${DPDK_VERSION}/lib/aarch64-linux-gnu/
-ENV PATH=$PATH:/opt/uhd/${UHD_VERSION}/bin/
+ENV LD_LIBRARY_PATH=/opt/rohc/lib/:/opt/rohc/lib64/:/opt/uhd/${UHD_VERSION}/lib/:/opt/uhd/${UHD_VERSION}/lib64/:/opt/uhd/${UHD_VERSION}/lib/x86_64-linux-gnu/:/opt/uhd/${UHD_VERSION}/lib/aarch64-linux-gnu/:/opt/dpdk/${DPDK_VERSION}/lib/:/opt/dpdk/${DPDK_VERSION}/lib64/:/opt/dpdk/${DPDK_VERSION}/lib/x86_64-linux-gnu/:/opt/dpdk/${DPDK_VERSION}/lib/aarch64-linux-gnu/
+ENV PATH=$PATH:/opt/uhd/${UHD_VERSION}/bin/:/opt/dpdk/${DPDK_VERSION}/bin/
 
 # Install base runtime dependencies shared by all targets
 RUN --mount=type=secret,id=rh_entitlement_cert,target=/etc/pki/entitlement/entitlement.pem \
