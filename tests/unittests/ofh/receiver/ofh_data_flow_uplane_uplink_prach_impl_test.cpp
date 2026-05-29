@@ -78,7 +78,7 @@ public:
 
     buffer = prach_pool->get();
 
-    repo->add(buffer_context, buffer.clone(), ocudulog::fetch_basic_logger("TEST"), std::nullopt);
+    repo->add(buffer_context, buffer.clone(), ocudulog::fetch_basic_logger("TEST"), std::nullopt, std::nullopt);
     repo->process_pending_contexts();
 
     results.uplane_results.params.slot      = slot;
@@ -96,7 +96,7 @@ public:
 
     // Fill the contexts
     ul_cplane_context_repo_ptr->add(slot, eaxc, context);
-    prach_context_repo->add(buffer_context, buffer.clone(), ocudulog::fetch_basic_logger("TEST"), std::nullopt);
+    prach_context_repo->add(buffer_context, buffer.clone(), ocudulog::fetch_basic_logger("TEST"), std::nullopt, std::nullopt);
     prach_context_repo->process_pending_contexts();
   }
 
