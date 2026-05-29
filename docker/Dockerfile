@@ -147,6 +147,7 @@ FROM ${OS}:${OS_VERSION} AS runtime
 
 ARG UHD_VERSION
 ARG DPDK_VERSION
+ARG ENABLE_UHD=On
 
 # Copy OCUDU binaries and libraries installed in previous stage(s)
 COPY --from=builder /opt/rohc                 /opt/rohc
@@ -158,15 +159,13 @@ COPY --from=builder /opt/ocudu                /usr/local
 ADD docker/scripts/install_*.sh /usr/local/etc/
 RUN chmod +x /usr/local/etc/install_*.sh && \
     ln -sf /usr/local/etc/install_dependencies.sh /usr/local/etc/install_ocudu_dependencies.sh
-ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/opt/rohc/lib/
-ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/opt/uhd/${UHD_VERSION}/lib/:/opt/uhd/${UHD_VERSION}/lib/x86_64-linux-gnu/:/opt/uhd/${UHD_VERSION}/lib/aarch64-linux-gnu/
-ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/opt/dpdk/${DPDK_VERSION}/lib/:/opt/dpdk/${DPDK_VERSION}/lib/x86_64-linux-gnu/:/opt/dpdk/${DPDK_VERSION}/lib/aarch64-linux-gnu/
+ENV LD_LIBRARY_PATH=/opt/rohc/lib/:/opt/uhd/${UHD_VERSION}/lib/:/opt/uhd/${UHD_VERSION}/lib/x86_64-linux-gnu/:/opt/uhd/${UHD_VERSION}/lib/aarch64-linux-gnu/:/opt/dpdk/${DPDK_VERSION}/lib/:/opt/dpdk/${DPDK_VERSION}/lib/x86_64-linux-gnu/:/opt/dpdk/${DPDK_VERSION}/lib/aarch64-linux-gnu/
 ENV PATH=$PATH:/opt/uhd/${UHD_VERSION}/bin/:/opt/dpdk/${DPDK_VERSION}/bin/
 
 # Install ocudu and lib runtime dependencies (curl / NTP helpers: install_docker_dependencies.sh)
 RUN /usr/local/etc/install_ocudu_dependencies.sh run && \
     /usr/local/etc/install_rohc_dependencies.sh run && \
-    /usr/local/etc/install_uhd_dependencies.sh run && \
+    if [ "${ENABLE_UHD}" = "On" ]; then /usr/local/etc/install_uhd_dependencies.sh run; fi && \
     /usr/local/etc/install_dpdk_dependencies.sh run && \
     /usr/local/etc/install_docker_dependencies.sh run
 
