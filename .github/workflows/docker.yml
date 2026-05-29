@@ -16,7 +16,8 @@ jobs:
     if: ${{ vars.SKIP_DOCKER_JOB != 'true' }}
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
+      contents: read
+      packages: write
     strategy:
       matrix:
         include:
@@ -85,9 +86,6 @@ jobs:
             ATTESTATION_FILE: /usr/local/share/ocudu.spdx
     env:
       PREFIX: ghcr.io/netsys-edinburgh/${{ matrix.REPOSITORY }}:${{ matrix.TAGNAME }}
-    permissions:
-      contents: read
-      packages: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
