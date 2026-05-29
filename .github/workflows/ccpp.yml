@@ -3,7 +3,8 @@
 
 
 name: C/C++ CI
-on: push
+on:
+  workflow_dispatch:
 jobs:
   x86_ubuntu_build:
     name: Build on x86

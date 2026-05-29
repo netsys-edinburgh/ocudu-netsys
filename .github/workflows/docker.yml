@@ -134,7 +134,7 @@ jobs:
           platforms: ${{ matrix.PLATFORM }}
           context: ${{ matrix.CONTEXT }}
           build-args: |
-            NAME="${{ env.NAME }}"
             UHD_VERSION=${{ matrix.UHD_VERSION }}
             DPDK_VERSION=${{ matrix.DPDK_VERSION }}
             MARCH=${{ matrix.MARCH }}
+            ENABLE_UHD=Off
