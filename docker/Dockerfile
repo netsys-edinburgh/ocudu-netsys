@@ -182,6 +182,7 @@ RUN if [ -z "$NUM_JOBS" ]; then NUM_JOBS=$(nproc); fi \
        esac \
     && /src/docker/scripts/builder.sh -c ${COMPILER} -m "-j${NUM_JOBS} ${TARGETS}" \
        -DBUILD_TESTING=False -DENABLE_UHD=${ENABLE_UHD} -DENABLE_DPDK=${ENABLE_DPDK} \
+       -DENABLE_PDSCH_HWACC=On -DENABLE_PUSCH_HWACC=On \
        ${ARCH_FLAG} -DCMAKE_INSTALL_PREFIX=/opt/ocudu ${EXTRA_CMAKE_ARGS} /src \
     && if [ -n "${BIN}" ]; then \
          cp /src/build/${SRC} /opt/ocudu/bin/${BIN}; \
