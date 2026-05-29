@@ -43,40 +43,9 @@ jobs:
             DOCKERFILE: ./docker/grafana/Dockerfile
             CONTEXT: ./docker/grafana
             ATTESTATION_FILE: ""
-          # --> gnb
-          # AMD AVX2
-          - TAGNAME: release_avx2
-            REPOSITORY: ocudu
-            MARCH: x86-64-v3
-            PLATFORM: amd64
-            UHD_VERSION: "4.7.0.0"
-            DPDK_VERSION: "24.11.2"
-            DOCKERFILE: ./docker/Dockerfile
-            CONTEXT: ./
-            ATTESTATION_FILE: /usr/local/share/ocudu.spdx
-          - TAGNAME: release_with_debug_avx2
-            REPOSITORY: ocudu
-            EXTRA_CMAKE_ARGS: -DFORCE_DEBUG_INFO=On
-            MARCH: x86-64-v3
-            PLATFORM: amd64
-            UHD_VERSION: "4.7.0.0"
-            DPDK_VERSION: "24.11.2"
-            DOCKERFILE: ./docker/Dockerfile
-            CONTEXT: ./
-            ATTESTATION_FILE: /usr/local/share/ocudu.spdx
-          # AMD AVX512
+          # --> gnb (AVX512 only)
           - TAGNAME: release_avx512
             REPOSITORY: ocudu
-            MARCH: x86-64-v4
-            PLATFORM: amd64
-            UHD_VERSION: "4.7.0.0"
-            DPDK_VERSION: "24.11.2"
-            DOCKERFILE: ./docker/Dockerfile
-            CONTEXT: ./
-            ATTESTATION_FILE: /usr/local/share/ocudu.spdx
-          - TAGNAME: release_with_debug_avx512
-            REPOSITORY: ocudu
-            EXTRA_CMAKE_ARGS: -DFORCE_DEBUG_INFO=On
             MARCH: x86-64-v4
             PLATFORM: amd64
             UHD_VERSION: "4.7.0.0"
