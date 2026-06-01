@@ -153,7 +153,7 @@ static std::vector<byte_buffer> generate_pdus(bench_params params, rx_order orde
   null_rlc_pcap pcap;
 
   metrics_coll = std::make_unique<rlc_bearer_metrics_collector>(
-      gnb_du_id_t{}, du_ue_index_t{}, rb_id_t{}, timer_duration{0}, tester.get(), ue_worker);
+      gnb_du_id_t{}, du_ue_index_t{}, rb_id_t{}, INVALID_PCI, timer_duration{0}, tester.get(), ue_worker);
 
   // Make PDUs
   std::vector<byte_buffer> pdus;
@@ -239,7 +239,7 @@ static void benchmark_rx_pdu(const bench_params& params, rx_order order, timer_m
   config.t_reassembly      = 200;
 
   auto metrics_agg = std::make_unique<rlc_bearer_metrics_collector>(
-      gnb_du_id_t{}, du_ue_index_t{}, rb_id_t{}, timer_duration{0}, tester.get(), ue_worker);
+      gnb_du_id_t{}, du_ue_index_t{}, rb_id_t{}, INVALID_PCI, timer_duration{0}, tester.get(), ue_worker);
 
   // Create RLC AM RX entity
   std::unique_ptr<rlc_rx_am_entity> rlc_rx = std::make_unique<rlc_rx_am_entity>(gnb_du_id_t::min,

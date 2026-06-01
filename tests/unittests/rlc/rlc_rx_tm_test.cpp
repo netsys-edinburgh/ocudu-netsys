@@ -48,7 +48,7 @@ protected:
     tester = std::make_unique<rlc_rx_tm_test_frame>();
 
     metrics_coll = std::make_unique<rlc_bearer_metrics_collector>(
-        gnb_du_id_t{}, du_ue_index_t{}, rb_id_t{}, timer_duration{1000}, tester.get(), ue_executor);
+        gnb_du_id_t{}, du_ue_index_t{}, rb_id_t{}, INVALID_PCI, timer_duration{1000}, tester.get(), ue_executor);
 
     // Create RLC AM TX entity
     rlc = std::make_unique<rlc_rx_tm_entity>(gnb_du_id_t::min,

@@ -8,6 +8,7 @@
 #include "ocudu/pdcp/pdcp_rx_metrics.h"
 #include "ocudu/pdcp/pdcp_tx.h"
 #include "ocudu/pdcp/pdcp_tx_metrics.h"
+#include "ocudu/ran/pci.h"
 #include "ocudu/ran/rb_id.h"
 #include "ocudu/support/async/manual_event.h"
 #include "ocudu/support/timers.h"
@@ -17,6 +18,7 @@ namespace ocudu {
 struct pdcp_metrics_container {
   uint32_t                  ue_index;
   rb_id_t                   rb_id;
+  pci_t                     pci = INVALID_PCI;
   pdcp_tx_metrics_container tx;
   pdcp_rx_metrics_container rx;
   timer_duration            metrics_period;

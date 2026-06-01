@@ -60,6 +60,6 @@ void pdcp_metrics_aggregator::push_report()
     return;
   }
 
-  pdcp_metrics_container metrics = {ue_index, rb_id, m_tx, m_rx, metrics_period};
+  pdcp_metrics_container metrics = {ue_index, rb_id, INVALID_PCI, m_tx, m_rx, metrics_period};
   pdcp_metrics_notif->report_metrics(metrics);
 }
