@@ -492,9 +492,9 @@ TEST_F(cu_cp_inter_cu_ng_handover_test, when_handover_succeeds_then_amf_releases
   ASSERT_TRUE(send_bearer_context_modification_response_and_await_ul_status_transfer(ue_ctx->cu_cp_e1ap_id.value(),
                                                                                      ue_ctx->cu_up_e1ap_id.value()));
 
-  // Check that metrics contain the requested and successful handover preparation.
+  // The request was counted in the previous report; this interval contains only its successful completion.
   report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
-  ASSERT_EQ(report.mobility.nof_handover_preparations_requested, 1);
+  ASSERT_EQ(report.mobility.nof_handover_preparations_requested, 0);
   ASSERT_EQ(report.mobility.nof_successful_handover_preparations, 1);
 
   // Inject NGAP UE Context Release Command and await Bearer Context Release Command.
@@ -666,9 +666,9 @@ TEST_F(cu_cp_inter_cu_ng_handover_test, when_ncell_is_strong_enough_then_ho_from
   ASSERT_TRUE(send_bearer_context_modification_response_and_await_ul_status_transfer(ue_ctx->cu_cp_e1ap_id.value(),
                                                                                      ue_ctx->cu_up_e1ap_id.value()));
 
-  // Check that metrics contain the requested and successful handover preparation.
+  // The request was counted in the previous report; this interval contains only its successful completion.
   report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
-  ASSERT_EQ(report.mobility.nof_handover_preparations_requested, 1);
+  ASSERT_EQ(report.mobility.nof_handover_preparations_requested, 0);
   ASSERT_EQ(report.mobility.nof_successful_handover_preparations, 1);
 
   // Inject NGAP UE Context Release Command and await Bearer Context Release Command.
@@ -1059,9 +1059,9 @@ TEST_F(cu_cp_inter_cu_ng_handover_test, when_zigzag_handover_is_performed_then_h
 
   ASSERT_TRUE(send_bearer_context_modification_response_and_await_ul_status_transfer(cu_cp_e1ap_id, cu_up_e1ap_id));
 
-  // Check that metrics contain the requested and successful handover preparation.
+  // The request was counted in the previous report; this interval contains only its successful completion.
   report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
-  ASSERT_EQ(report.mobility.nof_handover_preparations_requested, 1);
+  ASSERT_EQ(report.mobility.nof_handover_preparations_requested, 0);
   ASSERT_EQ(report.mobility.nof_successful_handover_preparations, 1);
 
   // Inject NGAP UE Context Release Command and await Bearer Context Release Command.

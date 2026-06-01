@@ -16,6 +16,7 @@ public:
   rlc_bearer_metrics_collector(gnb_du_id_t           du,
                                du_ue_index_t         ue,
                                rb_id_t               rb,
+                               pci_t                 pci_,
                                timer_duration        metrics_period_,
                                rlc_metrics_notifier* rlc_metrics_notif_,
                                task_executor&        ue_executor_);
@@ -51,6 +52,7 @@ private:
   gnb_du_id_t           du;
   du_ue_index_t         ue;
   rb_id_t               rb;
+  pci_t                 pci;
   rlc_tx_metrics_lower  m_lower;
   rlc_tx_metrics_higher m_higher;
   rlc_rx_metrics        m_rx_high;

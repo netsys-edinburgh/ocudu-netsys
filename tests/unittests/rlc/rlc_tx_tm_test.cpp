@@ -64,7 +64,7 @@ protected:
     tester = std::make_unique<rlc_tx_tm_test_frame>();
 
     metrics_coll = std::make_unique<rlc_bearer_metrics_collector>(
-        gnb_du_id_t{}, du_ue_index_t{}, rb_id_t{}, timer_duration{1000}, tester.get(), ue_worker);
+        gnb_du_id_t{}, du_ue_index_t{}, rb_id_t{}, INVALID_PCI, timer_duration{1000}, tester.get(), ue_worker);
 
     // Create RLC TM TX entity
     cfg = make_default_srb0_rlc_config().tm.tx;

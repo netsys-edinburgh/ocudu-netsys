@@ -54,8 +54,11 @@ void to_json(nlohmann::json& json, const rlc_metrics& metrics)
   json["du_id"]  = metrics.du_index;
   json["ue_id"]  = metrics.ue_index;
   json["drb_id"] = metrics.rb_id.get_drb_id();
-  json["tx"]     = metrics.tx;
-  json["rx"]     = metrics.rx;
+  if (is_valid(metrics.pci)) {
+    json["pci"] = metrics.pci;
+  }
+  json["tx"] = metrics.tx;
+  json["rx"] = metrics.rx;
 }
 
 } // namespace ocudu

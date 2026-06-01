@@ -24,6 +24,7 @@ public:
   rlc_base_entity(gnb_du_id_t           gnb_du_id_,
                   du_ue_index_t         ue_index_,
                   rb_id_t               rb_id_,
+                  pci_t                 pci_,
                   timer_duration        metrics_period_,
                   rlc_metrics_notifier* rlc_metrics_notifier_,
                   task_executor&        ue_executor_) :
@@ -31,7 +32,7 @@ public:
     ue_index(ue_index_),
     rb_id(rb_id_),
     metrics_period(metrics_period_),
-    metrics_coll(gnb_du_id_, ue_index, rb_id_, metrics_period_, rlc_metrics_notifier_, ue_executor_)
+    metrics_coll(gnb_du_id_, ue_index, rb_id_, pci_, metrics_period_, rlc_metrics_notifier_, ue_executor_)
   {
   }
   ~rlc_base_entity() override                        = default;
