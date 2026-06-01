@@ -42,6 +42,7 @@ rlc_entity_creation_message
 make_rlc_entity_creation_message(gnb_du_id_t                                    du_id,
                                  du_ue_index_t                                  ue_index,
                                  du_cell_index_t                                pcell_index,
+                                 pci_t                                          pci,
                                  du_ue_drb&                                     bearer,
                                  const rlc_config&                              rlc_cfg,
                                  const du_manager_params::service_params&       du_services,

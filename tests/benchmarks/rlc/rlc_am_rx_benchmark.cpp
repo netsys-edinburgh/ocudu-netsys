@@ -158,7 +158,7 @@ static std::vector<byte_buffer> generate_pdus(bench_params params, rx_order orde
   logger.set_level(ocudulog::basic_levels::warning);
 
   metrics_coll = std::make_unique<rlc_bearer_metrics_collector>(
-      gnb_du_id_t{}, du_ue_index_t{}, rb_id_t{}, timer_duration{0}, tester.get(), ue_worker);
+      gnb_du_id_t{}, du_ue_index_t{}, rb_id_t{}, INVALID_PCI, timer_duration{0}, tester.get(), ue_worker);
 
   // Make PDUs
   std::vector<byte_buffer> pdus;
@@ -245,7 +245,7 @@ static void benchmark_rx_pdu(const bench_params& params, rx_order order, timer_m
   config.t_reassembly      = 200;
 
   auto metrics_agg = std::make_unique<rlc_bearer_metrics_collector>(
-      gnb_du_id_t{}, du_ue_index_t{}, rb_id_t{}, timer_duration{0}, tester.get(), ue_worker);
+      gnb_du_id_t{}, du_ue_index_t{}, rb_id_t{}, INVALID_PCI, timer_duration{0}, tester.get(), ue_worker);
 
   std::unique_ptr<rlc_drb_rx_window_seg_pool, rlc_pool_deleter> drb_rx_pool =
       make_rlc_drb_rx_window_seg_pool(rlc_drb_rx_window_seg_pool_size);

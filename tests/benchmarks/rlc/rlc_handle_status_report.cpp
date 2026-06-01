@@ -121,7 +121,7 @@ void benchmark_status_pdu_handling(rlc_am_status_pdu status, const bench_params&
   logger.set_level(ocudulog::basic_levels::warning);
 
   auto metrics_coll = std::make_unique<rlc_bearer_metrics_collector>(
-      gnb_du_id_t{}, du_ue_index_t{}, rb_id_t{}, timer_duration{0}, tester.get(), ue_worker);
+      gnb_du_id_t{}, du_ue_index_t{}, rb_id_t{}, INVALID_PCI, timer_duration{0}, tester.get(), ue_worker);
 
   // Run benchmark
   auto context = [&rlc, &tester, &metrics_coll, config, &timers, &pcell_worker, &ue_worker, &pcap, &drb_tx_pool]() {

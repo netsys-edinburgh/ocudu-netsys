@@ -62,6 +62,7 @@ rlc_entity_creation_message
 ocudu::odu::make_rlc_entity_creation_message(gnb_du_id_t                                    gnb_du_id,
                                              du_ue_index_t                                  ue_index,
                                              du_cell_index_t                                pcell_index,
+                                             pci_t                                          pci,
                                              du_ue_drb&                                     bearer,
                                              const rlc_config&                              rlc_cfg,
                                              const du_manager_params::service_params&       du_services,
@@ -73,6 +74,7 @@ ocudu::odu::make_rlc_entity_creation_message(gnb_du_id_t                        
   fill_rlc_entity_creation_message_common(
       msg, gnb_du_id, ue_index, pcell_index, bearer, rlc_cfg, du_services, rlc_rlf_notifier, rlc_params, rlc_resources);
   msg.rb_id             = bearer.drb_id;
+  msg.pci               = pci;
   msg.rlc_metrics_notif = rlc_params.rlc_metrics_notif;
   if (msg.rlc_metrics_notif == nullptr) {
     msg.config.metrics_period = timer_duration{0};

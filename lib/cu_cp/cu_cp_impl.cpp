@@ -628,6 +628,12 @@ async_task<bool> cu_cp_impl::handle_ue_context_transfer(cu_cp_ue_index_t ue_inde
     // Transfer UE AMBR from source UE to new UE.
     ue->set_ue_ambr(source_ue->get_ue_ambr());
 
+    // Carry IMEISV to the new UE so the RNTI-to-IMEISV mapping is preserved after the RNTI change.
+    // The AMF is not contacted during intra-CU handovers, so no new NGAP message carries the IMEISV.
+    if (source_ue->get_masked_imeisv().has_value()) {
+      ue->set_masked_imeisv(source_ue->get_masked_imeisv());
+    }
+
     return true;
   };
 

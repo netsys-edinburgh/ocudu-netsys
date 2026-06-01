@@ -184,9 +184,11 @@ std::unique_ptr<du_ue_drb> ocudu::odu::create_drb(const drb_creation_info& drb_i
   }
 
   // > Create RLC DRB entity.
+  const pci_t drb_pci = drb_info.du_params.ran.cells[drb_info.pcell_index].ran.pci;
   drb->rlc_bearer = create_rlc_entity(make_rlc_entity_creation_message(drb_info.du_params.ran.gnb_du_id,
                                                                        ue_index,
                                                                        drb_info.pcell_index,
+                                                                       drb_pci,
                                                                        *drb,
                                                                        drb_info.rlc_cfg,
                                                                        drb_info.du_params.services,

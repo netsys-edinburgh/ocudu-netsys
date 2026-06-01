@@ -62,6 +62,12 @@ void inter_cu_handover_target_routine::operator()(
 
   ue = ue_mng.find_du_ue(request.ue_index);
 
+  // Store IMEISV supplied by the NGAP Handover Request so the RNTI→IMEISV mapping is available
+  // for metrics even though the AMF won't send another Initial Context Setup for this UE.
+  if (request.masked_imeisv.has_value()) {
+    ue->set_masked_imeisv(request.masked_imeisv);
+  }
+
   // Perform initial sanity checks on incoming message.
   if (!ue->get_up_resource_manager().validate_request(request.pdu_session_res_setup_list)) {
     logger.warning("ue={}: \"{}\" failed. Cause: Invalid PduSessionResourceSetupRequest during Handover",

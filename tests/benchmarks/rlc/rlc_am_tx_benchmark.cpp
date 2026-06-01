@@ -134,7 +134,7 @@ void benchmark_tx_pdu(const bench_params& params)
   rlc_drb_tx_window_seg_pool drb_tx_pool{rlc_drb_tx_window_seg_pool_size};
 
   auto metrics_coll = std::make_unique<rlc_bearer_metrics_collector>(
-      gnb_du_id_t{}, du_ue_index_t{}, rb_id_t{}, timer_duration{1}, tester.get(), ue_worker);
+      gnb_du_id_t{}, du_ue_index_t{}, rb_id_t{}, INVALID_PCI, timer_duration{1}, tester.get(), ue_worker);
 
   // Create RLC AM TX entity
   auto rlc_tx = std::make_unique<rlc_tx_am_entity>(gnb_du_id_t::min,
