@@ -27,8 +27,9 @@ public:
                 task_executor&                       pcell_executor,
                 task_executor&                       ue_executor,
                 timer_manager&                       timers,
-                rlc_drb_um_rx_window_seg_pool&       rx_window_seg_pool) :
-    rlc_base_entity(gnb_du_id_, ue_index_, rb_id_, metrics_period_, rlc_metrics_notifier_, ue_executor)
+                rlc_drb_um_rx_window_seg_pool&       rx_window_seg_pool,
+                pci_t                                pci_ = INVALID_PCI) :
+    rlc_base_entity(gnb_du_id_, ue_index_, rb_id_, pci_, metrics_period_, rlc_metrics_notifier_, ue_executor)
   {
     tx = std::make_unique<rlc_tx_um_entity>(gnb_du_id_,
                                             ue_index_,

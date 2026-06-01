@@ -12,6 +12,7 @@
 #include "ocudu/rrc/rrc_metrics.h"
 #include "ocudu/rrc/rrc_ue.h"
 #include "ocudu/support/format/fmt_to_c_str.h"
+#include <optional>
 
 namespace ocudu {
 
@@ -26,6 +27,9 @@ struct cu_cp_metrics_report {
     pci_t pci;
     /// RRC connection state of the UE.
     ocucp::rrc_state rrc_connection_state;
+    /// Masked IMEISV of the UE. Present when known from NGAP (initial attach or inter-CU handover);
+    /// preserved across intra-CU handovers so the RNTI→IMEISV mapping is maintained.
+    std::optional<uint64_t> masked_imeisv;
   };
   struct cell_info {
     nr_cell_global_id_t cgi;

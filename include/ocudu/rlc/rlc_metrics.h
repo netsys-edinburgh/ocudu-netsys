@@ -6,6 +6,7 @@
 
 #include "ocudu/ran/du_types.h"
 #include "ocudu/ran/gnb_du_id.h"
+#include "ocudu/ran/pci.h"
 #include "ocudu/ran/rb_id.h"
 #include "ocudu/rlc/rlc_rx_metrics.h"
 #include "ocudu/rlc/rlc_tx_metrics.h"
@@ -17,6 +18,7 @@ struct rlc_metrics {
   gnb_du_id_t    du_index;
   du_ue_index_t  ue_index;
   rb_id_t        rb_id;
+  pci_t          pci = INVALID_PCI;
   rlc_tx_metrics tx;
   rlc_rx_metrics rx;
   unsigned       counter;

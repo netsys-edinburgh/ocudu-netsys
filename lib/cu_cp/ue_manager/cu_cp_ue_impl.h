@@ -34,6 +34,9 @@ struct cu_cp_ue_context {
   cu_cp_ue_index_t             ue_index     = cu_cp_ue_index_t::invalid;
   rnti_t                       crnti        = rnti_t::INVALID_RNTI;
   aggregate_maximum_bit_rate_t ue_ambr;
+  /// Masked IMEISV of the UE, populated from NGAP (initial attach or inter-CU handover) and preserved across
+  /// intra-CU handovers via handle_ue_context_transfer so that the RNTI-to-IMEISV mapping is never lost.
+  std::optional<uint64_t> masked_imeisv;
   /// \brief Flag to disable new UE reconfigurations. This can be used, for instance, to reconfigure UE contexts
   /// that are in the process of handover.
   bool reconfiguration_disabled = false;

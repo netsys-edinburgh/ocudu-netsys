@@ -61,6 +61,6 @@ void f1u_metrics_aggregator::push_report()
     return;
   }
 
-  f1u_metrics_container metrics = {ue_index, drb_id, m_tx, m_rx, metrics_period};
+  f1u_metrics_container metrics = {ue_index, drb_id, INVALID_PCI, m_tx, m_rx, metrics_period};
   f1u_metrics_notif->report_metrics(metrics);
 }

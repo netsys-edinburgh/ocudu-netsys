@@ -31,5 +31,7 @@ void mobility_manager_metrics_aggregator::aggregate_successful_handover_executio
 
 mobility_management_metrics mobility_manager_metrics_aggregator::request_metrics_report() const
 {
-  return aggregated_mobility_manager_metrics;
+  mobility_management_metrics snapshot = aggregated_mobility_manager_metrics;
+  aggregated_mobility_manager_metrics  = {};
+  return snapshot;
 }
