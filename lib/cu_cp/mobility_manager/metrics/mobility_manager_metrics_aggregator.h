@@ -26,7 +26,7 @@ public:
   mobility_management_metrics request_metrics_report() const;
 
 private:
-  mobility_management_metrics aggregated_mobility_manager_metrics;
+  mutable mobility_management_metrics aggregated_mobility_manager_metrics;
 };
 
 } // namespace ocudu::ocucp

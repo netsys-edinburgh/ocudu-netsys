@@ -33,6 +33,9 @@ struct cu_cp_ue_context {
   cu_cp_ue_index_t                 ue_index     = cu_cp_ue_index_t::invalid;
   rnti_t                           crnti        = rnti_t::INVALID_RNTI;
   cu_cp_aggregate_maximum_bit_rate ue_ambr;
+  /// \brief Masked IMEISV of the UE, populated from NGAP (initial attach or inter-CU handover) and preserved
+  /// across intra-CU handovers via handle_ue_context_transfer so that the RNTI→IMEISV mapping is never lost.
+  std::optional<uint64_t> masked_imeisv;
   /// \brief Flag to disable new UE reconfigurations. This can be used, for instance, to reconfigure UE contexts
   /// that are in the process of handover.
   bool reconfiguration_disabled = false;
@@ -216,6 +219,12 @@ public:
 
   /// \brief Set the XN-C peer index of the UE.
   void set_xnc_peer_index(xnc_peer_index_t xnc_peer_idx) { ue_ctxt.xnc_peer_idx = xnc_peer_idx; }
+
+  /// \brief Get the masked IMEISV of the UE.
+  [[nodiscard]] std::optional<uint64_t> get_masked_imeisv() const { return ue_ctxt.masked_imeisv; }
+
+  /// \brief Set the masked IMEISV of the UE.
+  void set_masked_imeisv(std::optional<uint64_t> imeisv) { ue_ctxt.masked_imeisv = imeisv; }
 
   /// \brief Get the NGAP RRC UE notifier of the UE.
   ngap_rrc_ue_notifier& get_ngap_rrc_ue_notifier() override { return ngap_rrc_ue_ev_notifier; }

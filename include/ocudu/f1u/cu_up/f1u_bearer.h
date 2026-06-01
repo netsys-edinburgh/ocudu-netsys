@@ -8,6 +8,7 @@
 #include "ocudu/f1u/cu_up/f1u_rx_pdu_handler.h"
 #include "ocudu/f1u/cu_up/f1u_tx_metrics.h"
 #include "ocudu/f1u/cu_up/f1u_tx_sdu_handler.h"
+#include "ocudu/ran/pci.h"
 #include "ocudu/ran/rb_id.h"
 #include "ocudu/ran/up_transport_layer_info.h"
 #include "ocudu/support/timers.h"
@@ -17,6 +18,7 @@ namespace ocudu::ocuup {
 struct f1u_metrics_container {
   uint32_t                 ue_index;
   drb_id_t                 drb_id;
+  pci_t                    pci = INVALID_PCI;
   f1u_tx_metrics_container tx;
   f1u_rx_metrics_container rx;
   timer_duration           metrics_period;

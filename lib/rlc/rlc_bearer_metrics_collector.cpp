@@ -9,12 +9,14 @@ using namespace ocudu;
 rlc_bearer_metrics_collector::rlc_bearer_metrics_collector(gnb_du_id_t           du_,
                                                            du_ue_index_t         ue_,
                                                            rb_id_t               rb_,
+                                                           pci_t                 pci_,
                                                            timer_duration        metrics_period_,
                                                            rlc_metrics_notifier* rlc_metrics_notif_,
                                                            task_executor&        ue_executor_) :
   du(du_),
   ue(ue_),
   rb(rb_),
+  pci(pci_),
   metrics_period(metrics_period_),
   rlc_metrics_notif(rlc_metrics_notif_),
   ue_executor(ue_executor_),
@@ -72,6 +74,6 @@ void rlc_bearer_metrics_collector::push_report()
   if (m_lower.counter != m_higher.counter || m_lower.counter != m_rx_high.counter) {
     return;
   }
-  rlc_metrics report = {du, ue, rb, {m_higher, m_lower}, m_rx_high, 0, metrics_period};
+  rlc_metrics report = {du, ue, rb, pci, {m_higher, m_lower}, m_rx_high, 0, metrics_period};
   rlc_metrics_notif->report_metrics(report);
 }

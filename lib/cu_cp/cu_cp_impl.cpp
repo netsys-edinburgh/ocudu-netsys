@@ -560,6 +560,12 @@ async_task<bool> cu_cp_impl::handle_ue_context_transfer(cu_cp_ue_index_t ue_inde
     // Transfer location reporting configuration from source UE to new UE.
     ue->get_location_manager().set_config(source_ue->get_location_manager().get_config());
 
+    // Carry IMEISV to the new UE so the RNTI→IMEISV mapping is preserved after the RNTI change.
+    // The AMF is not contacted during intra-CU handovers, so no new NGAP message carries the IMEISV.
+    if (source_ue->get_masked_imeisv().has_value()) {
+      ue->set_masked_imeisv(source_ue->get_masked_imeisv());
+    }
+
     return true;
   };
 
@@ -784,6 +790,11 @@ cu_cp_impl::handle_new_initial_context_setup_request(const ngap_init_context_set
   ocudu_assert(ue != nullptr, "ue={}: Could not find UE", request.ue_index);
   rrc_ue_interface* rrc_ue = ue->get_rrc_ue();
   ocudu_assert(rrc_ue != nullptr, "ue={}: Could not find RRC UE", request.ue_index);
+
+  // Persist IMEISV from initial attach so it survives RNTI changes during later handovers.
+  if (request.masked_imeisv.has_value()) {
+    ue->set_masked_imeisv(request.masked_imeisv);
+  }
 
   auto* ngap = ngap_db.find_ngap(ue->get_ue_context().plmn);
   if (ngap == nullptr) {

@@ -86,10 +86,19 @@ void to_json(nlohmann::json& json, const rrc_connection_counter_with_cause& metr
   }
 }
 
+void to_json(nlohmann::json& json, const cu_cp_metrics_report::cell_info& cell)
+{
+  json["pci"] = cell.pci;
+  json["plmn"] = cell.cgi.plmn_id.to_string();
+  json["nci"]  = cell.cgi.nci.value();
+}
+
 void to_json(nlohmann::json& json, const ocudu::cu_cp_metrics_report::du_info& metrics)
 {
   // RRC-DU metrics.
-  json["gnb_du_id"]                                   = metrics.id;
+  json["gnb_du_id"] = metrics.id;
+  json["cells"]     = metrics.cells;
+
   nlohmann::json& rrc_connection                      = json["rrc_connection_number"];
   rrc_connection["mean_nof_rrc_connections"]          = metrics.rrc_metrics.mean_nof_rrc_connections;
   rrc_connection["max_nof_rrc_connections"]           = metrics.rrc_metrics.max_nof_rrc_connections;
@@ -129,6 +138,16 @@ void to_json(nlohmann::json& json, const cu_cp_rrc_metrics_json& metrics)
   json["nof_successful_handover_executions"] = metrics.mobility.nof_successful_handover_executions;
 }
 
+void to_json(nlohmann::json& json, const cu_cp_metrics_report::ue_info& ue)
+{
+  json["rnti"] = fmt::format("0x{:04x}", static_cast<uint16_t>(ue.rnti));
+  if (ue.masked_imeisv.has_value()) {
+    json["masked_imeisv"] = ue.masked_imeisv.value();
+  }
+  json["du_id"] = gnb_du_id_to_int(ue.du_id);
+  json["pci"]   = ue.pci;
+}
+
 } // namespace ocudu
 
 nlohmann::json ocudu::app_helpers::json_generators::generate(const cu_cp_metrics_report& report)
@@ -144,6 +163,13 @@ nlohmann::json ocudu::app_helpers::json_generators::generate(const cu_cp_metrics
   cu_cp_json["id"]    = "srs-cu-cp";
   cu_cp_json["ngaps"] = ngap_metrics;
   cu_cp_json["rrcs"]  = rrc_metrics;
+  cu_cp_json["ues"]   = report.ues;
+
+  nlohmann::json& ho_json                           = cu_cp_json["handover_kpis"];
+  ho_json["nof_handover_preparations_requested"]    = report.mobility.nof_handover_preparations_requested;
+  ho_json["nof_successful_handover_preparations"]   = report.mobility.nof_successful_handover_preparations;
+  ho_json["nof_handover_executions_requested"]      = report.mobility.nof_handover_executions_requested;
+  ho_json["nof_successful_handover_executions"]     = report.mobility.nof_successful_handover_executions;
 
   return json;
 }

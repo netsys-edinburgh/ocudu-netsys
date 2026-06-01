@@ -6,6 +6,7 @@
 
 #include "ocudu/pcap/rlc_pcap.h"
 #include "ocudu/ran/gnb_du_id.h"
+#include "ocudu/ran/pci.h"
 #include "ocudu/rlc/rlc_config.h"
 #include "ocudu/rlc/rlc_entity.h"
 #include "ocudu/rlc/rlc_rx.h"
@@ -30,6 +31,7 @@ struct rlc_entity_creation_message {
   task_executor*                       ue_executor;
   rlc_metrics_notifier*                rlc_metrics_notif;
   rlc_pcap*                            pcap_writer;
+  pci_t                                pci = INVALID_PCI;
 };
 
 /// Creates an instance of a RLC bearer

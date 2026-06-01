@@ -375,9 +375,10 @@ std::vector<cu_cp_metrics_report::ue_info> ue_manager::handle_ue_metrics_report_
     report.emplace_back();
     cu_cp_metrics_report::ue_info& ue_report = report.back();
 
-    ue_report.rnti  = ue.second.get_c_rnti();
-    ue_report.du_id = ue.second.get_du_id();
-    ue_report.pci   = ue.second.get_pci();
+    ue_report.rnti         = ue.second.get_c_rnti();
+    ue_report.du_id        = ue.second.get_du_id();
+    ue_report.pci          = ue.second.get_pci();
+    ue_report.masked_imeisv = ue.second.get_masked_imeisv();
 
     if (ue.second.get_rrc_ue() == nullptr) {
       ue_report.rrc_connection_state = rrc_state::idle;
