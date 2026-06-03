@@ -95,7 +95,9 @@ private:
     void remove_rrc_connection()
     {
       std::chrono::milliseconds now = get_current_time();
-      current_rrc_connections--;
+      if (current_rrc_connections > 0) {
+        current_rrc_connections--;
+      }
       rrc_connections_with_time[now] = current_rrc_connections;
     }
 

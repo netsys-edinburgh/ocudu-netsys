@@ -38,6 +38,9 @@ class cu_up_pdcp_metrics_consumer_json : public app_services::metrics_consumer
       rx             = {};
       metrics_period = {};
       is_empty       = true;
+      tx_cpu_usage   = 0.0;
+      rx_cpu_usage   = 0.0;
+      nof_drbs       = 0;
     }
 
     bool is_empty = true;
@@ -46,6 +49,7 @@ class cu_up_pdcp_metrics_consumer_json : public app_services::metrics_consumer
     pdcp_rx_metrics_container rx;
     double                    tx_cpu_usage = 0.0;
     double                    rx_cpu_usage = 0.0;
+    unsigned                  nof_drbs     = 0;  // number of DRBs contributing — used to average CPU usage
     timer_duration            metrics_period;
   };
 

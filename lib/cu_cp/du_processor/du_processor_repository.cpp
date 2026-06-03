@@ -152,7 +152,10 @@ std::vector<cu_cp_metrics_report::du_info> du_processor_repository::handle_du_me
   std::vector<cu_cp_metrics_report::du_info> du_reports;
   du_reports.reserve(du_db.size());
   for (const auto& du : du_db) {
-    du_reports.emplace_back(du.second.processor->get_metrics_handler().handle_du_metrics_report_request());
+    auto report = du.second.processor->get_metrics_handler().handle_du_metrics_report_request();
+    if (report.id != gnb_du_id_t::invalid) {
+      du_reports.emplace_back(std::move(report));
+    }
   }
   return du_reports;
 }
