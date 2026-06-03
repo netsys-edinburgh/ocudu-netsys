@@ -184,7 +184,11 @@ std::unique_ptr<du_ue_drb> ocudu::odu::create_drb(const drb_creation_info& drb_i
   }
 
   // > Create RLC DRB entity.
-  const pci_t drb_pci = drb_info.du_params.ran.cells[drb_info.pcell_index].ran.pci;
+  // Guard against invalid or out-of-range pcell_index (can occur during handover/reestablishment).
+  pci_t drb_pci = INVALID_PCI;
+  if (drb_info.pcell_index < drb_info.du_params.ran.cells.size()) {
+    drb_pci = drb_info.du_params.ran.cells[drb_info.pcell_index].ran.pci;
+  }
   drb->rlc_bearer = create_rlc_entity(make_rlc_entity_creation_message(drb_info.du_params.ran.gnb_du_id,
                                                                        ue_index,
                                                                        drb_info.pcell_index,
