@@ -8,3 +8,12 @@
 
 /utils/gdb/python/ocudu/__pycache__
 /build/
+.claude/settings.local.json.tmp.95329.7d6f4a84d839
+
+# Metrics is a separate git repository — exclude it from this repo's tracking
+/Metrics/
+
+# Python cache directories
+**/__pycache__/
+**/*.pyc
+**/*.pyo
