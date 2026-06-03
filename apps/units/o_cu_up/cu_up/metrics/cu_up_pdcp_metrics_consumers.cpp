@@ -59,6 +59,7 @@ void cu_up_pdcp_metrics_consumer_json::handle_metric(const app_services::metrics
 
   aggr_metrics.tx_cpu_usage += tx_metric.sum_crypto_processing_latency_ns /
                                (static_cast<double>(pdcp_metric.metrics_period.count()) * 1e6) * 100.0;
+  ++aggr_metrics.nof_drbs;
 
   // Rx aggregation.
   const pdcp_rx_metrics_container& rx_metric = pdcp_metric.rx;
@@ -103,10 +104,16 @@ void cu_up_pdcp_metrics_consumer_json::print_metrics()
     return;
   }
 
+  // Average CPU usage across all DRBs so the reported value reflects per-DRB
+  // utilisation rather than the sum of all bearers (which easily exceeds 100%).
+  const double n          = (aggr_metrics.nof_drbs > 0) ? static_cast<double>(aggr_metrics.nof_drbs) : 1.0;
+  const double tx_cpu_avg = aggr_metrics.tx_cpu_usage / n;
+  const double rx_cpu_avg = aggr_metrics.rx_cpu_usage / n;
+
   gateway.send(app_helpers::json_generators::generate_string(aggr_metrics.tx,
                                                              aggr_metrics.rx,
-                                                             aggr_metrics.tx_cpu_usage,
-                                                             aggr_metrics.rx_cpu_usage,
+                                                             tx_cpu_avg,
+                                                             rx_cpu_avg,
                                                              aggr_metrics.metrics_period,
                                                              DEFAULT_JSON_INDENT));
 
