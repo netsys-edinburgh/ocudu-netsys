@@ -23,7 +23,7 @@ class cu_cp_meas_metrics_handler
 {
 public:
   virtual ~cu_cp_meas_metrics_handler() = default;
-  virtual std::vector<cu_cp_ue_meas_report> drain_ue_measurements() const = 0;
+  virtual std::vector<cu_cp_ue_meas_report> drain_ue_measurements() = 0;
 };
 
 struct metrics_handler_impl_dependencies {

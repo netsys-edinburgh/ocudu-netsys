@@ -331,8 +331,8 @@ private:
   std::unique_ptr<metrics_report_session> metrics_session;
 
   // Buffer of UE measurement reports since last metrics flush.
-  mutable std::mutex                        meas_buf_mutex;
-  mutable std::vector<cu_cp_ue_meas_report> meas_buf;
+  std::mutex                        meas_buf_mutex;
+  std::vector<cu_cp_ue_meas_report> meas_buf;
 
   // NTN neighbour cell measurement info handling. Created only when the configuration carries NTN cells.
   // Store of the DU reference time reports; wired as the CU-CP reference time notifier and read by the manager.
@@ -343,7 +343,7 @@ private:
 
 public:
   /// Drain and return buffered UE measurement reports (called by metrics handler).
-  std::vector<cu_cp_ue_meas_report> drain_ue_measurements() const override;
+  std::vector<cu_cp_ue_meas_report> drain_ue_measurements() override;
 };
 
 } // namespace ocucp

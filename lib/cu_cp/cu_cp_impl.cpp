@@ -1528,7 +1528,7 @@ void cu_cp_impl::handle_measurement_report(cu_cp_ue_index_t ue_index, const rrc_
   }
 
   cu_cp_ue_meas_report report;
-  report.rnti        = ue->get_rnti();
+  report.rnti        = ue->get_c_rnti();
   report.serving_pci = ue->get_pci();
 
   // Serving cell measurements (first entry in serving MO list).
@@ -1561,7 +1561,7 @@ void cu_cp_impl::handle_measurement_report(cu_cp_ue_index_t ue_index, const rrc_
   meas_buf.push_back(std::move(report));
 }
 
-std::vector<cu_cp_ue_meas_report> cu_cp_impl::drain_ue_measurements() const
+std::vector<cu_cp_ue_meas_report> cu_cp_impl::drain_ue_measurements()
 {
   std::lock_guard<std::mutex> lock(meas_buf_mutex);
   std::vector<cu_cp_ue_meas_report> measurements;
