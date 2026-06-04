@@ -10,13 +10,23 @@
 #include "../ue_manager/ue_metrics_handler.h"
 #include "ocudu/cu_cp/cu_cp_f1c_handler.h"
 #include "ocudu/cu_cp/cu_cp_metrics_handler.h"
+#include "ocudu/cu_cp/cu_cp_metrics_notifier.h"
 #include "ocudu/support/executors/task_executor.h"
 #include "ocudu/support/timers.h"
 #include <deque>
 #include <mutex>
+#include <vector>
 
 namespace ocudu {
 namespace ocucp {
+
+/// Interface for draining buffered UE measurement reports.
+class cu_cp_meas_metrics_handler
+{
+public:
+  virtual ~cu_cp_meas_metrics_handler() = default;
+  virtual std::vector<cu_cp_ue_meas_report> drain_ue_measurements() const = 0;
+};
 
 class metrics_handler_impl final : public metrics_handler
 {
@@ -26,7 +36,8 @@ public:
                        ue_metrics_handler&               ue_handler_,
                        du_repository_metrics_handler&    du_handler_,
                        ngap_repository_metrics_handler&  ngap_handler_,
-                       mobility_manager_metrics_handler& mobility_handler_);
+                       mobility_manager_metrics_handler& mobility_handler_,
+                       cu_cp_meas_metrics_handler*       meas_handler_ = nullptr);
 
   std::unique_ptr<metrics_report_session>
   create_periodic_report_session(const periodic_metric_report_request& request) override;
@@ -53,6 +64,7 @@ private:
   du_repository_metrics_handler&    du_handler;
   ngap_repository_metrics_handler&  ngap_handler;
   mobility_manager_metrics_handler& mobility_handler;
+  cu_cp_meas_metrics_handler*       meas_handler;
   ocudulog::basic_logger&           logger;
 
   // Member variables to manage pool of sessions.

@@ -26,8 +26,12 @@
 #include "ocudu/cu_cp/inter_cu_handover_messages.h"
 #include "ocudu/nrppa/nrppa.h"
 #include "ocudu/ran/plmn_identity.h"
+#include "metrics_handler/metrics_handler_impl.h"
+#include "ocudu/cu_cp/cu_cp_metrics_notifier.h"
 #include <dlfcn.h>
 #include <memory>
+#include <mutex>
+#include <vector>
 
 namespace ocudu::ocucp {
 
@@ -47,7 +51,8 @@ class cu_cp_impl final : public cu_cp,
                          public cu_cp_impl_interface,
                          public cu_cp_ng_handler,
                          public cu_cp_command_handler,
-                         public cu_cp_ue_release_command_handler
+                         public cu_cp_ue_release_command_handler,
+                         public cu_cp_meas_metrics_handler
 {
 public:
   explicit cu_cp_impl(const cu_cp_configuration& config_);
@@ -308,6 +313,14 @@ private:
   // Metrics report session for the lifetime of the CU-CP.
   // Used, e.g., for logging metrics and JSON metrics.
   std::unique_ptr<metrics_report_session> metrics_session;
+
+  // Buffer of UE measurement reports since last metrics flush.
+  mutable std::mutex                       meas_buf_mutex;
+  std::vector<cu_cp_ue_meas_report>        meas_buf;
+
+public:
+  /// Drain and return buffered UE measurement reports (called by metrics handler).
+  std::vector<cu_cp_ue_meas_report> drain_ue_measurements() const;
 };
 
 } // namespace ocudu::ocucp

@@ -16,13 +16,15 @@ metrics_handler_impl::metrics_handler_impl(task_executor&                    cu_
                                            ue_metrics_handler&               ue_handler_,
                                            du_repository_metrics_handler&    du_handler_,
                                            ngap_repository_metrics_handler&  ngap_handler_,
-                                           mobility_manager_metrics_handler& mobility_handler_) :
+                                           mobility_manager_metrics_handler& mobility_handler_,
+                                           cu_cp_meas_metrics_handler*       meas_handler_) :
   cu_cp_exec(cu_cp_exec_),
   timers(timers_),
   ue_handler(ue_handler_),
   du_handler(du_handler_),
   ngap_handler(ngap_handler_),
   mobility_handler(mobility_handler_),
+  meas_handler(meas_handler_),
   logger(ocudulog::fetch_basic_logger("CU-CP"))
 {
 }
@@ -88,6 +90,9 @@ cu_cp_metrics_report metrics_handler_impl::create_report() const
   report.dus      = du_handler.handle_du_metrics_report_request();
   report.ngaps    = ngap_handler.handle_ngap_metrics_report_request();
   report.mobility = mobility_handler.handle_mobility_metrics_report_request();
+  if (meas_handler != nullptr) {
+    report.ue_measurements = meas_handler->drain_ue_measurements();
+  }
 
   // TODO: Get metrics of connected CU-CP/AMF nodes.
 

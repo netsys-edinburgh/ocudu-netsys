@@ -103,7 +103,8 @@ cu_cp_impl::cu_cp_impl(const cu_cp_configuration& config_) :
                                                       ue_mng,
                                                       du_db,
                                                       ngap_db,
-                                                      mobility_mng)),
+                                                      mobility_mng,
+                                                      this)),
   cu_cp_cfgtr(mobility_manager_ev_notifier, du_db, ngap_db, ue_mng)
 {
   assert_cu_cp_configuration_valid(cfg);
@@ -1369,9 +1370,79 @@ cu_cp_impl::handle_measurement_config_request(cu_cp_ue_index_t                  
   return cell_meas_mng.get_measurement_config(ue_index, nci, current_meas_config, cond_meas, candidate_pcis);
 }
 
+/// Convert raw 3GPP NR measurement quantity (uint8) to float.
+/// Returns nullopt when value == 0 (indicating "out of range / not available").
+static std::optional<float> nr_rsrp_to_dbm(std::optional<uint8_t> raw)
+{
+  if (!raw.has_value() || raw.value() == 0) return std::nullopt;
+  return static_cast<float>(raw.value()) - 156.0f; // TS 38.133 Table 10.1.6.1-1
+}
+
+static std::optional<float> nr_rsrq_to_db(std::optional<uint8_t> raw)
+{
+  if (!raw.has_value() || raw.value() == 0) return std::nullopt;
+  return (static_cast<float>(raw.value()) - 87.0f) * 0.5f; // TS 38.133 Table 10.1.7.1-1
+}
+
+static std::optional<float> nr_sinr_to_db(std::optional<uint8_t> raw)
+{
+  if (!raw.has_value() || raw.value() == 0) return std::nullopt;
+  return (static_cast<float>(raw.value()) - 46.0f) * 0.5f; // TS 38.133 Table 10.1.8.1-1
+}
+
+static cu_cp_ue_meas_report::cell_meas extract_cell_meas(const rrc_meas_quant_results& q)
+{
+  cu_cp_ue_meas_report::cell_meas m;
+  m.rsrp_dbm = nr_rsrp_to_dbm(q.rsrp);
+  m.rsrq_db  = nr_rsrq_to_db(q.rsrq);
+  m.sinr_db  = nr_sinr_to_db(q.sinr);
+  return m;
+}
+
 void cu_cp_impl::handle_measurement_report(cu_cp_ue_index_t ue_index, const rrc_meas_results& meas_results)
 {
   cell_meas_mng.report_measurement(ue_index, meas_results);
+
+  // Buffer measurement report for metrics export.
+  cu_cp_ue* ue = ue_mng.find_du_ue(ue_index);
+  if (ue == nullptr) return;
+
+  cu_cp_ue_meas_report report;
+  report.rnti        = ue->get_rnti();
+  report.serving_pci = ue->get_pci();
+
+  // Serving cell measurements (first entry in serving MO list).
+  if (!meas_results.meas_result_serving_mo_list.empty()) {
+    const auto& serv_mo = *meas_results.meas_result_serving_mo_list.begin();
+    const auto& ssb     = serv_mo.meas_result_serving_cell.cell_results.results_ssb_cell;
+    if (ssb.has_value()) {
+      report.serving = extract_cell_meas(ssb.value());
+    }
+  }
+
+  // Neighbor cell measurements.
+  if (meas_results.meas_result_neigh_cells.has_value()) {
+    for (const auto& nb : meas_results.meas_result_neigh_cells->meas_result_list_nr) {
+      if (!nb.pci.has_value()) continue;
+      const auto& ssb = nb.cell_results.results_ssb_cell;
+      if (!ssb.has_value()) continue;
+      cu_cp_ue_meas_report::neighbor n;
+      n.pci  = nb.pci.value();
+      n.meas = extract_cell_meas(ssb.value());
+      report.neighbors.push_back(std::move(n));
+    }
+  }
+
+  std::lock_guard<std::mutex> lock(meas_buf_mutex);
+  meas_buf.push_back(std::move(report));
+}
+
+std::vector<cu_cp_ue_meas_report> cu_cp_impl::drain_ue_measurements() const
+{
+  std::lock_guard<std::mutex> lock(meas_buf_mutex);
+  std::vector<cu_cp_ue_meas_report> out;
+  out.swap(meas_buf);
+  return out;
 }
 
 bool cu_cp_impl::handle_cell_config_update_request(nr_cell_identity nci, const serving_cell_meas_config& serv_cell_cfg)
