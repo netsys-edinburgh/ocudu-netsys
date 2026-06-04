@@ -13,8 +13,29 @@
 #include "ocudu/rrc/rrc_ue.h"
 #include "ocudu/support/format/fmt_to_c_str.h"
 #include <optional>
+#include <vector>
 
 namespace ocudu {
+
+/// UE measurement report — per-UE serving + neighbor cell measurements.
+struct cu_cp_ue_meas_report {
+  rnti_t rnti;
+  pci_t  serving_pci;
+
+  struct cell_meas {
+    std::optional<float> rsrp_dbm; ///< SS-RSRP in dBm
+    std::optional<float> rsrq_db;  ///< SS-RSRQ in dB
+    std::optional<float> sinr_db;  ///< SS-SINR in dB
+  };
+
+  cell_meas serving;
+
+  struct neighbor {
+    pci_t     pci;
+    cell_meas meas;
+  };
+  std::vector<neighbor> neighbors;
+};
 
 /// CU-CP Metrics report.
 struct cu_cp_metrics_report {
@@ -44,10 +65,11 @@ struct cu_cp_metrics_report {
     rrc_du_metrics rrc_metrics;
   };
 
-  std::vector<ue_info>        ues;
-  std::vector<du_info>        dus;
-  std::vector<ngap_info>      ngaps;
-  mobility_management_metrics mobility;
+  std::vector<ue_info>              ues;
+  std::vector<du_info>              dus;
+  std::vector<ngap_info>            ngaps;
+  mobility_management_metrics       mobility;
+  std::vector<cu_cp_ue_meas_report> ue_measurements; ///< Latest measurement reports from UEs
 };
 
 /// Interface used by the CU-CP to report metrics.
