@@ -17,6 +17,7 @@ metrics_handler_impl::metrics_handler_impl(const metrics_handler_impl_dependenci
   du_handler(dependencies.du_handler),
   ngap_handler(dependencies.ngap_handler),
   mobility_handler(dependencies.mobility_handler),
+  meas_handler(dependencies.meas_handler),
   logger(dependencies.logger)
 {
 }
@@ -82,6 +83,9 @@ cu_cp_metrics_report metrics_handler_impl::create_report() const
   report.dus      = du_handler.handle_du_metrics_report_request();
   report.ngaps    = ngap_handler.handle_ngap_metrics_report_request();
   report.mobility = mobility_handler.handle_mobility_metrics_report_request();
+  if (meas_handler != nullptr) {
+    report.ue_measurements = meas_handler->drain_ue_measurements();
+  }
 
   // TODO: Get metrics of connected CU-CP/AMF nodes.
 

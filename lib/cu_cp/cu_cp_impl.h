@@ -22,11 +22,14 @@
 #include "ocudu/cu_cp/cu_configurator.h"
 #include "ocudu/cu_cp/cu_cp.h"
 #include "ocudu/cu_cp/cu_cp_configuration.h"
+#include "ocudu/cu_cp/cu_cp_metrics_notifier.h"
 #include "ocudu/nrppa/nrppa.h"
 #include "ocudu/ran/inter_cu_handover_messages.h"
 #include "ocudu/ran/plmn_identity.h"
 #include "ocudu/support/async/async_task_scheduler.h"
 #include <memory>
+#include <mutex>
+#include <vector>
 
 namespace ocudu {
 
@@ -55,7 +58,8 @@ class cu_cp_impl final : public cu_cp,
                          public cu_cp_ng_handler,
                          public cu_cp_command_handler,
                          public cu_cp_ue_release_command_handler,
-                         public cu_cp_ntn_meas_update_handler
+                         public cu_cp_ntn_meas_update_handler,
+                         public cu_cp_meas_metrics_handler
 {
 public:
   explicit cu_cp_impl(const cu_cp_configuration& config_);
@@ -326,12 +330,20 @@ private:
   // Used, e.g., for logging metrics and JSON metrics.
   std::unique_ptr<metrics_report_session> metrics_session;
 
+  // Buffer of UE measurement reports since last metrics flush.
+  mutable std::mutex                        meas_buf_mutex;
+  mutable std::vector<cu_cp_ue_meas_report> meas_buf;
+
   // NTN neighbour cell measurement info handling. Created only when the configuration carries NTN cells.
   // Store of the DU reference time reports; wired as the CU-CP reference time notifier and read by the manager.
   std::unique_ptr<cu_cp_ntn_ref_time_store> ntn_ref_time_store;
   // Periodically refreshes the NTN neighbour cell info of the measurement configuration. References this CU-CP's
   // command handler and the reference time store, so it is declared last and destroyed first.
   std::unique_ptr<ocudu_ntn::ntn_configuration_manager> ntn_config_manager;
+
+public:
+  /// Drain and return buffered UE measurement reports (called by metrics handler).
+  std::vector<cu_cp_ue_meas_report> drain_ue_measurements() const override;
 };
 
 } // namespace ocucp

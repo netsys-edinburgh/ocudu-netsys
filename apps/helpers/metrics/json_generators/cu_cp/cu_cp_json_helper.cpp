@@ -171,6 +171,37 @@ nlohmann::json ocudu::app_helpers::json_generators::generate(const cu_cp_metrics
   ho_json["nof_handover_executions_requested"]      = report.mobility.nof_handover_executions_requested;
   ho_json["nof_successful_handover_executions"]     = report.mobility.nof_successful_handover_executions;
 
+  // UE measurement reports.
+  if (!report.ue_measurements.empty()) {
+    nlohmann::json meas_array = nlohmann::json::array();
+    for (const auto& r : report.ue_measurements) {
+      nlohmann::json m;
+      m["rnti"]        = fmt::format("0x{:04x}", static_cast<uint16_t>(r.rnti));
+      m["serving_pci"] = static_cast<int>(r.serving_pci);
+
+      auto write_cell_meas = [](nlohmann::json& j, const cu_cp_ue_meas_report::cell_meas& cm) {
+        if (cm.rsrp_dbm.has_value()) j["rsrp"] = cm.rsrp_dbm.value();
+        if (cm.rsrq_db.has_value())  j["rsrq"] = cm.rsrq_db.value();
+        if (cm.sinr_db.has_value())  j["sinr"] = cm.sinr_db.value();
+      };
+
+      nlohmann::json serving_json;
+      write_cell_meas(serving_json, r.serving);
+      m["serving"] = serving_json;
+
+      nlohmann::json neighbors_array = nlohmann::json::array();
+      for (const auto& nb : r.neighbors) {
+        nlohmann::json n;
+        n["pci"] = static_cast<int>(nb.pci);
+        write_cell_meas(n, nb.meas);
+        neighbors_array.push_back(std::move(n));
+      }
+      m["neighbors"] = neighbors_array;
+      meas_array.push_back(std::move(m));
+    }
+    cu_cp_json["ue_measurements"] = meas_array;
+  }
+
   return json;
 }
 
