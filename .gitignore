@@ -13,6 +13,9 @@
 # Metrics is a separate git repository — exclude it from this repo's tracking
 /Metrics/
 
+# campus5g-ng is a separate repository
+/campus5g-ng/
+
 # Python cache directories
 **/__pycache__/
 **/*.pyc
