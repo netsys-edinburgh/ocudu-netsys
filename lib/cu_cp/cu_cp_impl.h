@@ -315,12 +315,12 @@ private:
   std::unique_ptr<metrics_report_session> metrics_session;
 
   // Buffer of UE measurement reports since last metrics flush.
-  mutable std::mutex                       meas_buf_mutex;
+  std::mutex                               meas_buf_mutex;
   std::vector<cu_cp_ue_meas_report>        meas_buf;
 
 public:
   /// Drain and return buffered UE measurement reports (called by metrics handler).
-  std::vector<cu_cp_ue_meas_report> drain_ue_measurements() const;
+  std::vector<cu_cp_ue_meas_report> drain_ue_measurements() override;
 };
 
 } // namespace ocudu::ocucp
