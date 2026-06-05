@@ -249,10 +249,6 @@ void intra_cu_handover_routine::operator()(coro_context<async_task<cu_cp_intra_c
   logger.debug("ue={}: \"{}\" finished successfully", request.source_ue_index, name());
   response_msg.success = true;
 
-  if (not is_cho_preparation) {
-    mobility_mng.get_metrics_handler().aggregate_successful_handover_execution();
-  }
-
   CORO_RETURN(response_msg);
 }
 
