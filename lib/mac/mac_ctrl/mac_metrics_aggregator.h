@@ -13,6 +13,8 @@
 
 namespace ocudu {
 
+class mac_ul_cell_metric_handler;
+
 struct cell_metric_report_config {
   /// \brief Period of the metric report.
   std::chrono::milliseconds report_period;
@@ -20,6 +22,8 @@ struct cell_metric_report_config {
   mac_cell_metric_notifier* mac_notifier = nullptr;
   /// \brief Pointer to the SCHED cell metric notifier.
   scheduler_cell_metrics_notifier* sched_notifier = nullptr;
+  /// \brief Pointer to the MAC UL cell metric handler (owned by mac_metrics_aggregator).
+  mac_ul_cell_metric_handler* ul_metrics = nullptr;
 };
 
 /// \brief Aggregator of the metrics of all the different MAC components (UL, DL, scheduler)
@@ -37,6 +41,7 @@ public:
   ~mac_metrics_aggregator();
 
   cell_metric_report_config add_cell(du_cell_index_t            cell_index,
+                                     pci_t                      pci,
                                      subcarrier_spacing         scs_common,
                                      unsigned                   tdd_period_slots,
                                      mac_cell_clock_controller& time_source);

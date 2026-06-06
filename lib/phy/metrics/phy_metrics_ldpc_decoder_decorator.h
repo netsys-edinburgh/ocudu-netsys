@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "phy_usdt_probes.h"
 #include "ocudu/phy/metrics/phy_metrics_notifiers.h"
 #include "ocudu/phy/metrics/phy_metrics_reports.h"
 #include "ocudu/phy/upper/channel_coding/ldpc/ldpc_decoder.h"
@@ -32,6 +33,8 @@ public:
   {
     ldpc_decoder_metrics    metrics;
     std::optional<unsigned> ret;
+
+    OCUDU_PHY_PROBE1(ldpc_decode_start, output.size());
     {
       // Use scoped resource usage class to measure CPU usage of this block.
       resource_usage_utils::scoped_resource_usage rusage_tracker(metrics.measurements);
@@ -40,6 +43,13 @@ public:
     metrics.cb_sz          = units::bits(output.size());
     metrics.nof_iterations = ret.value_or(cfg.max_iterations);
     metrics.crc_ok         = ret.has_value();
+
+    // Note: ldpc_decode_done fires at high rate (~10-30x per PUSCH). Attach only when debugging.
+    OCUDU_PHY_PROBE4(ldpc_decode_done,
+                     output.size(),
+                     metrics.nof_iterations,
+                     (int)metrics.crc_ok,
+                     metrics.measurements.duration.count());
 
     notifier.on_new_metric(metrics);
 

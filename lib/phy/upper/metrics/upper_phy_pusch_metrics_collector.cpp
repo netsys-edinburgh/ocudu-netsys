@@ -114,5 +114,10 @@ void upper_phy_pusch_metrics_collector::collect_metrics(upper_phy_pusch_metrics&
   metrics.pusch_proc_metrics.sinr_dB              = pusch_processor_aggregator.get_ch_est_sinr();
   metrics.pusch_proc_metrics.evm                  = pusch_processor_aggregator.get_ch_est_evm();
   metrics.pusch_proc_metrics.decoding_bler        = pusch_processor_aggregator.get_decoding_bler();
+  metrics.pusch_proc_metrics.count                = pusch_processor_aggregator.get_count();
+  metrics.pusch_proc_metrics.avg_data_ns          = pusch_processor_aggregator.get_avg_data_ns();
+  metrics.pusch_proc_metrics.max_data_ns          = pusch_processor_aggregator.get_max_data_ns();
+  metrics.pusch_proc_metrics.crc_ok_count         = pusch_processor_aggregator.get_crc_ok_count();
+  metrics.pusch_proc_metrics.crc_ok_ratio         = pusch_processor_aggregator.get_crc_ok_ratio();
   pusch_processor_aggregator.reset();
 }

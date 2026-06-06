@@ -57,6 +57,26 @@ public:
     return static_cast<double>(max_cb_latency_ns.load(std::memory_order_relaxed)) / 1000.0;
   }
 
+  /// Gets the total number of codeblocks with correct CRC.
+  uint64_t get_crc_ok_count() const { return sum_crc_ok.load(std::memory_order_relaxed); }
+
+  /// Gets the CRC OK ratio.
+  double get_crc_ok_ratio() const
+  {
+    auto c = count.load(std::memory_order_relaxed);
+    return c ? static_cast<double>(sum_crc_ok.load(std::memory_order_relaxed)) / static_cast<double>(c) : 0;
+  }
+
+  /// Gets the average codeblock processing latency in nanoseconds.
+  double get_avg_cb_latency_ns() const
+  {
+    auto c = count.load(std::memory_order_relaxed);
+    return c ? static_cast<double>(sum_elapsed_ns.load(std::memory_order_relaxed)) / static_cast<double>(c) : 0;
+  }
+
+  /// Gets the maximum codeblock processing latency in nanoseconds.
+  double get_max_cb_latency_ns() const { return static_cast<double>(max_cb_latency_ns.load(std::memory_order_relaxed)); }
+
   /// Gets the processing rate.
   double get_decode_rate_Mbps() const
   {

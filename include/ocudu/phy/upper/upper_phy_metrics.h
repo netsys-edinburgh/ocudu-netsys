@@ -30,6 +30,16 @@ struct upper_phy_ldpc_metrics {
     std::chrono::nanoseconds total_proc_time;
     /// CPU usage in microseconds of the decoder.
     double cpu_usage_us;
+    /// Number of processed codeblocks.
+    uint64_t nof_processed_cb;
+    /// Number of codeblocks with correct CRC.
+    uint64_t crc_ok_count;
+    /// Ratio of codeblocks with correct CRC.
+    double crc_ok_ratio;
+    /// Average codeblock latency in nanoseconds.
+    double avg_cb_latency_ns;
+    /// Maximum codeblock latency in nanoseconds.
+    double max_cb_latency_ns;
   };
 
   /// LDPC encoder metrics.
@@ -241,6 +251,16 @@ struct upper_phy_pusch_metrics {
     float evm;
     /// Decoding BLER.
     double decoding_bler;
+    /// Number of processed PUSCH TBs.
+    uint64_t count;
+    /// Average data processing latency in nanoseconds.
+    double avg_data_ns;
+    /// Maximum data processing latency in nanoseconds.
+    double max_data_ns;
+    /// Number of TBs with correct CRC.
+    uint64_t crc_ok_count;
+    /// Ratio of TBs with correct CRC.
+    double crc_ok_ratio;
   };
 
   ulsch_demultiplex_metrics       ulsch_demux_metrics;
@@ -296,6 +316,14 @@ struct upper_phy_pdsch_metrics {
     uint64_t tbs_processed;
     /// CPU usage in microseconds.
     double cpu_usage_us;
+    /// Average return latency in nanoseconds.
+    double avg_return_ns;
+    /// Maximum return latency in nanoseconds.
+    double max_return_ns;
+    /// Average completion latency in nanoseconds.
+    double avg_completion_ns;
+    /// Maximum completion latency in nanoseconds.
+    double max_completion_ns;
   };
 
   upper_phy_crc_metrics           crc_metrics;
@@ -311,6 +339,16 @@ struct upper_phy_dl_processor_metrics {
   double                        min_latency_us;
   double                        avg_latency_us;
   std::pair<double, slot_point> max_latency_us;
+  /// Number of processed downlink slots.
+  uint64_t count;
+  /// Average configure latency in nanoseconds.
+  double avg_configure_ns;
+  /// Maximum configure latency in nanoseconds.
+  double max_configure_ns;
+  /// Average finish latency in nanoseconds.
+  double avg_finish_ns;
+  /// Maximum finish latency in nanoseconds.
+  double max_finish_ns;
 };
 
 /// Upper PHY metrics.

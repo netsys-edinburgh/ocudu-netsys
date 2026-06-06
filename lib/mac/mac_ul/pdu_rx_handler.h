@@ -7,6 +7,7 @@
 #include "mac_scheduler_ce_info_handler.h"
 #include "mac_ul_sch_pdu.h"
 #include "mac_ul_ue_manager.h"
+#include "ocudu/adt/slotted_array.h"
 #include "ocudu/mac/mac.h"
 #include "ocudu/mac/mac_executor_mapper.h"
 #include "ocudu/ocudulog/logger.h"
@@ -15,6 +16,8 @@
 #include "ocudu/ran/slot_point.h"
 
 namespace ocudu {
+
+class mac_ul_cell_metric_handler;
 
 /// Stores MAC RX PDU, as well as any contextual or temporary information related to the PDU decoding.
 struct decoded_mac_rx_pdu {
@@ -67,6 +70,9 @@ public:
                  mac_ul_ue_manager&             ue_manager_,
                  du_rnti_table&                 rnti_table_,
                  mac_pcap&                      pcap_);
+
+  /// Register a UL metric handler for the given cell (called from the MAC controller after cell creation).
+  void register_cell_metrics(du_cell_index_t cell_index, mac_ul_cell_metric_handler* handler);
 
   /// Decode MAC Rx PDU, log contents and handle subPDUs.
   /// \param sl_rx Slot when MAC UL PDU was received.
@@ -141,6 +147,7 @@ private:
   mac_ul_ue_manager&             ue_manager;
   du_rnti_table&                 rnti_table;
   mac_pcap&                      pcap;
+  slotted_id_table<du_cell_index_t, mac_ul_cell_metric_handler*, MAX_CELLS_PER_DU> cell_metrics;
 };
 
 } // namespace ocudu

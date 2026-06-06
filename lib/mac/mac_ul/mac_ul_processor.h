@@ -12,6 +12,7 @@
 
 namespace ocudu {
 
+class mac_ul_cell_metric_handler;
 class timer_manager;
 
 struct mac_ul_config {
@@ -45,6 +46,8 @@ public:
                          msg3_mac_ce_list mac_ces) override;
 
   void handle_ue_config_applied(du_ue_index_t ue_index) override;
+
+  void add_cell_ul_metrics(du_cell_index_t cell_index, mac_ul_cell_metric_handler* handler) override;
 
   /// Handles FAPI Rx_Data.Indication.
   /// The PDUs contained in the Rx_Data.Indication are dispatched to different executors, depending on their RNTI.
