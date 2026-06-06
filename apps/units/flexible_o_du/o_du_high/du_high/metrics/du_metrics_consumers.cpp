@@ -47,6 +47,7 @@ void du_metrics_consumer_log::handle_metric(const app_services::metrics_set& met
   proc_consumer.handle_metric(report.du_proc);
   if (report.mac) {
     mac_consumer.handle_metric(report.mac->dl);
+    mac_consumer.handle_metric(report.mac->ul);
     sched_consumer.handle_metric(report.mac->sched);
   }
 }

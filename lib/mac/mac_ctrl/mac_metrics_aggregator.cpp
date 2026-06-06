@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "mac_metrics_aggregator.h"
+#include "../mac_ul/mac_ul_cell_metric_handler.h"
 #include "spsc_metric_report_channel.h"
 #include "ocudu/adt/scope_exit.h"
 #include "ocudu/mac/mac_metrics_notifier.h"
@@ -17,14 +18,16 @@ namespace {
 // to aggregate all cells separate reports.
 constexpr unsigned cell_report_queue_size = 8;
 
-/// Cell metrics report containing scheduler and MAC.
+/// Cell metrics report containing scheduler and MAC DL/UL.
 struct full_cell_report {
   /// Slot at which samples started to be considered in this report.
   slot_point_extended start_slot;
   /// Scheduler report.
   scheduler_cell_metrics sched;
-  /// MAC report.
+  /// MAC DL report.
   std::optional<mac_dl_cell_metric_report> mac;
+  /// MAC UL report (collected at the same time as mac).
+  std::optional<mac_ul_cell_metric_report> ul_mac;
 };
 
 full_cell_report report_preinit(unsigned max_ue_events = 64U, unsigned tdd_period_slots = 0U)
@@ -48,6 +51,7 @@ class mac_metrics_aggregator::cell_metric_handler final : public mac_cell_metric
 public:
   cell_metric_handler(mac_metrics_aggregator&    parent_,
                       du_cell_index_t            cell_index_,
+                      pci_t                      pci_,
                       subcarrier_spacing         scs_common_,
                       unsigned                   tdd_period_slots,
                       mac_cell_clock_controller& time_source_,
@@ -57,6 +61,7 @@ public:
     scs_common(scs_common_),
     period_slots(get_nof_slots_per_subframe(scs_common) * parent.cfg.period.count()),
     time_source(time_source_),
+    ul_handler(pci_),
     report_queue(cell_report_queue_size, logger_, [ue_events = parent.cfg.max_nof_ue_events, tdd_period_slots]() {
       return report_preinit(ue_events, tdd_period_slots);
     })
@@ -113,9 +118,10 @@ public:
     auto start_slot         = next_report_end_slot_tx - period_slots;
     next_report_end_slot_tx = {};
     last_sl_tx              = {};
-    // Save MAC report and commit it.
+    // Save MAC DL and UL reports and commit it.
     if (mac_builder != nullptr) {
       mac_builder->mac        = report;
+      mac_builder->ul_mac     = ul_handler.collect();
       mac_builder->start_slot = start_slot;
       mac_builder.reset();
     }
@@ -127,8 +133,9 @@ public:
     // Note: Function called from the DU cell execution context.
     ocudu_sanity_check(is_report_required(last_sl_tx), "Report not required");
 
-    // Save MAC report.
-    mac_builder->mac = report;
+    // Save MAC DL and UL reports.
+    mac_builder->mac    = report;
+    mac_builder->ul_mac = ul_handler.collect();
 
     // Update next report slot.
     auto start_slot         = next_report_end_slot_tx - period_slots;
@@ -163,6 +170,7 @@ private:
       report.sched.pusch_prbs_used_per_tdd_slot_idx.clear();
       report.sched.pdsch_prbs_used_per_tdd_slot_idx.clear();
       report.mac.reset();
+      report.ul_mac.reset();
     }
   };
 
@@ -193,6 +201,7 @@ private:
   const subcarrier_spacing   scs_common;
   const unsigned             period_slots;
   mac_cell_clock_controller& time_source;
+  mac_ul_cell_metric_handler ul_handler;
 
   // Reports from a given cell.
   report_queue_type          report_queue;
@@ -222,6 +231,7 @@ mac_metrics_aggregator::mac_metrics_aggregator(const mac_control_config::metrics
 mac_metrics_aggregator::~mac_metrics_aggregator() = default;
 
 cell_metric_report_config mac_metrics_aggregator::add_cell(du_cell_index_t            cell_index,
+                                                           pci_t                      pci,
                                                            subcarrier_spacing         scs_common,
                                                            unsigned                   tdd_period_slots,
                                                            mac_cell_clock_controller& time_source)
@@ -231,17 +241,18 @@ cell_metric_report_config mac_metrics_aggregator::add_cell(du_cell_index_t      
   // Reserve space in reports for new cell.
   for (auto& rep : report_ring) {
     rep.report.dl.cells.reserve(cells.size() + 1);
+    rep.report.ul.cells.reserve(cells.size() + 1);
     rep.report.sched.cells.reserve(cells.size() + 1);
   }
 
   // Create a handler for the new cell.
   auto cell_handler =
-      std::make_unique<cell_metric_handler>(*this, cell_index, scs_common, tdd_period_slots, time_source, logger);
+      std::make_unique<cell_metric_handler>(*this, cell_index, pci, scs_common, tdd_period_slots, time_source, logger);
   auto& cell_ref = *cell_handler;
   cells.emplace(cell_index, std::move(cell_handler));
 
-  // Return the cell report configuration.
-  return cell_metric_report_config{cfg.period, &cell_ref, &cell_ref};
+  // Return the cell report configuration, including a pointer to the UL metric handler.
+  return cell_metric_report_config{cfg.period, &cell_ref, &cell_ref, &cell_ref.ul_handler};
 }
 
 void mac_metrics_aggregator::rem_cell(du_cell_index_t cell_index)
@@ -287,6 +298,7 @@ bool mac_metrics_aggregator::pop_report(cell_metric_handler& cell)
                      report_ctx.report.sched.cells[0].slot);
       report_ctx.report.sched.cells.clear();
       report_ctx.report.dl.cells.clear();
+      report_ctx.report.ul.cells.clear();
     }
 
     // Update start slot in the respective ring report context.
@@ -296,6 +308,9 @@ bool mac_metrics_aggregator::pop_report(cell_metric_handler& cell)
   // Add front to pending report in the report_ring.
   if (next_ev->mac.has_value()) {
     report_ctx.report.dl.cells.push_back(*next_ev->mac);
+  }
+  if (next_ev->ul_mac.has_value()) {
+    report_ctx.report.ul.cells.push_back(*next_ev->ul_mac);
   }
   report_ctx.report.sched.cells.push_back(next_ev->sched);
 
@@ -318,6 +333,7 @@ void mac_metrics_aggregator::try_send_new_report()
   auto clear_report = make_scope_exit([&]() {
     // Clear processed report.
     ring_elem.report.dl.cells.clear();
+    ring_elem.report.ul.cells.clear();
     ring_elem.report.sched.cells.clear();
     ring_elem.start_slot = {};
 

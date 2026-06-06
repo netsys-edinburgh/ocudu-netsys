@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "phy_usdt_probes.h"
 #include "ocudu/phy/metrics/phy_metrics_notifiers.h"
 #include "ocudu/phy/metrics/phy_metrics_reports.h"
 #include "ocudu/phy/upper/channel_processors/pdsch/pdsch_processor.h"
@@ -40,6 +41,9 @@ public:
     elapsed_completion_and_return_ns = {};
     slot                             = pdu.slot;
     tbs                              = units::bytes(data.front().get_buffer().size());
+    rnti                             = pdu.rnti;
+
+    OCUDU_PHY_PROBE4(pdsch_start, pdu.slot.sfn(), pdu.slot.slot_index(), pdu.rnti, tbs.value());
 
     // Use scoped resource usage class to measure CPU usage of this block.
     resource_usage_utils::measurements measurements;
@@ -89,6 +93,8 @@ private:
         .elapsed_completion  = std::chrono::nanoseconds(elapsed_completion_ns),
         .self_cpu_time_usage = std::chrono::nanoseconds(self_cpu_usage_ns.load(std::memory_order_relaxed))});
 
+    OCUDU_PHY_PROBE5(pdsch_done, slot.sfn(), slot.slot_index(), rnti, elapsed_return_ns, elapsed_completion_ns);
+
     // Notify the completion of the PDSCH processing. From now on, the processor might become available.
     pdsch_processor_notifier* current_proc_notifier = std::exchange(processor_notifier, nullptr);
     ocudu_assert(current_proc_notifier != nullptr, "PDSCH processor is still busy.");
@@ -101,6 +107,7 @@ private:
   pdsch_processor_notifier*                      processor_notifier               = nullptr;
   slot_point                                     slot;
   units::bytes                                   tbs;
+  uint16_t                                       rnti                             = 0;
   std::unique_ptr<pdsch_processor>               base;
   pdsch_processor_metric_notifier&               notifier;
 

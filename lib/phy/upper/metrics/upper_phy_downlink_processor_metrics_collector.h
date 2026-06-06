@@ -17,9 +17,14 @@ public:
   /// Collects the metrics from the downlink aggregators and writes them into the given metrics argument.
   void collect_metrics(upper_phy_dl_processor_metrics& metrics)
   {
-    metrics.min_latency_us = downlink_processor_aggregator.get_min_latency_us();
-    metrics.avg_latency_us = downlink_processor_aggregator.get_avg_latency_us();
-    metrics.max_latency_us = downlink_processor_aggregator.get_max_latency_us();
+    metrics.min_latency_us   = downlink_processor_aggregator.get_min_latency_us();
+    metrics.avg_latency_us   = downlink_processor_aggregator.get_avg_latency_us();
+    metrics.max_latency_us   = downlink_processor_aggregator.get_max_latency_us();
+    metrics.count            = downlink_processor_aggregator.get_count();
+    metrics.avg_configure_ns = downlink_processor_aggregator.get_avg_configure_ns();
+    metrics.max_configure_ns = downlink_processor_aggregator.get_max_configure_ns();
+    metrics.avg_finish_ns    = downlink_processor_aggregator.get_avg_finish_ns();
+    metrics.max_finish_ns    = downlink_processor_aggregator.get_max_finish_ns();
     downlink_processor_aggregator.reset();
   }
 

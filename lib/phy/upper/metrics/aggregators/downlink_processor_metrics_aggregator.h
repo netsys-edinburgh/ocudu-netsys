@@ -16,6 +16,36 @@ namespace ocudu {
 class downlink_processor_metrics_aggregator : public downlink_processor_metric_notifier
 {
 public:
+  /// Gets the number of processed downlink slots.
+  uint64_t get_count() const { return count.load(std::memory_order_relaxed); }
+
+  /// Gets the average configure latency in nanoseconds.
+  double get_avg_configure_ns() const
+  {
+    auto c = count.load(std::memory_order_relaxed);
+    return c ? static_cast<double>(sum_elapsed_configure_ns.load(std::memory_order_relaxed)) / static_cast<double>(c)
+             : 0;
+  }
+
+  /// Gets the maximum configure latency in nanoseconds.
+  double get_max_configure_ns() const
+  {
+    return static_cast<double>(max_elapsed_configure_ns.load(std::memory_order_relaxed));
+  }
+
+  /// Gets the average finish latency in nanoseconds.
+  double get_avg_finish_ns() const
+  {
+    auto c = count.load(std::memory_order_relaxed);
+    return c ? static_cast<double>(sum_elapsed_finish_ns.load(std::memory_order_relaxed)) / static_cast<double>(c) : 0;
+  }
+
+  /// Gets the maximum finish latency in nanoseconds.
+  double get_max_finish_ns() const
+  {
+    return static_cast<double>(unpack_duration(packed_max_latency_ns.load(std::memory_order_relaxed)));
+  }
+
   /// Gets the average transmission latency in microseconds.
   double get_avg_latency_us() const
   {
@@ -52,6 +82,7 @@ public:
     sum_elapsed_finish_ns.store(0, std::memory_order_relaxed);
     packed_min_latency_ns.store(default_packed_min_latency_ns, std::memory_order_relaxed);
     packed_max_latency_ns.store(default_packed_max_latency_ns, std::memory_order_relaxed);
+    max_elapsed_configure_ns.store(0, std::memory_order_relaxed);
   }
 
 private:
@@ -69,14 +100,19 @@ private:
     update_slotmin(metrics.slot, metrics.elapsed_finish.count(), packed_min_latency_ns);
     update_slotmax(metrics.slot, metrics.elapsed_finish.count(), packed_max_latency_ns);
     count.fetch_add(1, std::memory_order_relaxed);
+    uint64_t cfg_ns  = metrics.elapsed_configure.count();
+    uint64_t prev_cfg = max_elapsed_configure_ns.load(std::memory_order_relaxed);
+    while (cfg_ns > prev_cfg &&
+           !max_elapsed_configure_ns.compare_exchange_weak(prev_cfg, cfg_ns, std::memory_order_relaxed)) {}
   }
 
-  std::atomic<uint64_t> sum_elapsed_data_ns      = {};
-  std::atomic<uint64_t> sum_elapsed_configure_ns = {};
-  std::atomic<uint64_t> sum_elapsed_finish_ns    = {};
-  std::atomic<uint64_t> count                    = {};
-  std::atomic<uint64_t> packed_min_latency_ns    = default_packed_min_latency_ns;
-  std::atomic<uint64_t> packed_max_latency_ns    = default_packed_max_latency_ns;
+  std::atomic<uint64_t> sum_elapsed_data_ns        = {};
+  std::atomic<uint64_t> sum_elapsed_configure_ns   = {};
+  std::atomic<uint64_t> sum_elapsed_finish_ns      = {};
+  std::atomic<uint64_t> count                      = {};
+  std::atomic<uint64_t> packed_min_latency_ns      = default_packed_min_latency_ns;
+  std::atomic<uint64_t> packed_max_latency_ns      = default_packed_max_latency_ns;
+  std::atomic<uint64_t> max_elapsed_configure_ns   = 0;
 };
 
 } // namespace ocudu

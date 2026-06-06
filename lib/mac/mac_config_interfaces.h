@@ -10,6 +10,8 @@
 
 namespace ocudu {
 
+class mac_ul_cell_metric_handler;
+
 class mac_ul_configurator
 {
 public:
@@ -23,6 +25,9 @@ public:
 
   /// Handle the confirmation that the UE applied the new configuration.
   virtual void handle_ue_config_applied(du_ue_index_t ue_index) = 0;
+
+  /// Register a UL cell metric handler for the given cell. Default no-op.
+  virtual void add_cell_ul_metrics(du_cell_index_t /*cell_index*/, mac_ul_cell_metric_handler* /*handler*/) {}
 };
 
 class mac_dl_configurator : public mac_dl_cell_manager

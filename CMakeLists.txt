@@ -79,6 +79,7 @@ option(BUILD_TESTING         "Compile tests"                                ON)
 option(ENABLE_GPROF          "Enable gprof"                                 OFF)
 option(FORCE_DEBUG_INFO      "Add debug information to Release build"       OFF)
 option(ENABLE_OCUDU_TRACY   "Enable using the tracy profiler if available" OFF)
+option(ENABLE_USDT           "Enable USDT/SystemTap tracing probes in upper PHY" OFF)
 if (BUILD_TESTING)
     if (${CMAKE_BUILD_TYPE} STREQUAL "Debug")
         option(TEST_GDB_PRINTERS  "Enable tests for GDB pretty printers"  OFF)
@@ -129,6 +130,18 @@ endif ()
 if (ENABLE_ASAN AND ENABLE_TSAN)
     message(FATAL_ERROR "ASAN and TSAN cannot be enabled at the same time.")
 endif ()
+
+########################################################################
+# ENABLE_USDT
+########################################################################
+if (ENABLE_USDT)
+  find_path(SDT_INCLUDE_DIR sys/sdt.h)
+  if (NOT SDT_INCLUDE_DIR)
+    message(FATAL_ERROR "ENABLE_USDT requires systemtap-sdt-devel (sys/sdt.h not found).")
+  endif ()
+  add_compile_definitions(OCUDU_USDT_ENABLED)
+  message(STATUS "USDT/SystemTap tracing probes enabled (sys/sdt.h found at ${SDT_INCLUDE_DIR}).")
+endif (ENABLE_USDT)
 
 # Hardware acceleration for both PUSCH and PDSCH is enabled by default when using DPDK.
 if (ENABLE_DPDK)

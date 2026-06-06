@@ -15,8 +15,11 @@ class mac_metrics_consumer_log
 public:
   explicit mac_metrics_consumer_log(ocudulog::log_channel& log_chan_) : log_chan(log_chan_) {}
 
-  /// Handle the given DU high MAC metrics.
+  /// Handle the given DU high MAC DL metrics.
   void handle_metric(const mac_dl_metric_report& report);
+
+  /// Handle the given DU high MAC UL metrics.
+  void handle_metric(const mac_ul_metric_report& report);
 
 private:
   ocudulog::log_channel& log_chan;

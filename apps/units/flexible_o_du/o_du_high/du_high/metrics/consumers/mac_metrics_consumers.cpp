@@ -34,8 +34,8 @@ void mac_metrics_consumer_log::handle_metric(const mac_dl_metric_report& report)
 
     fmt::format_to(
         std::back_inserter(buffer),
-        "MAC cell pci={} metrics: slots=[{}, {}{}) nof_slots={} slot_duration={}usec nof_voluntary_context_switches={} "
-        "nof_involuntary_context_switches={} ",
+        "MAC DL cell pci={} metrics: slots=[{}, {}{}) nof_slots={} slot_duration={}usec "
+        "nof_voluntary_context_switches={} nof_involuntary_context_switches={} ",
         static_cast<unsigned>(cell.pci),
         cell.start_slot,
         cell.start_slot + cell.nof_slots,
@@ -55,10 +55,30 @@ void mac_metrics_consumer_log::handle_metric(const mac_dl_metric_report& report)
     write_latency_information(buffer, cell.wall_clock_latency, "wall_clock_latency");
     write_latency_information(buffer, cell.sched_latency, "sched_latency");
     write_latency_information(buffer, cell.dl_tti_req_latency, "dl_tti_req_latency");
+    write_latency_information(buffer, cell.rlc_pull_latency, "rlc_pull_latency");
     write_latency_information(buffer, cell.tx_data_req_latency, "tx_data_req_latency");
     write_latency_information(buffer, cell.ul_tti_req_latency, "ul_tti_req_latency");
     write_latency_information(buffer, cell.slot_ind_dequeue_latency, "slot_ind_dequeue_latency");
     write_latency_information(buffer, cell.slot_ind_msg_time_diff, "slot_ind_msg_time_diff", false);
+
+    log_chan("{}", to_c_str(buffer));
+    buffer.clear();
+  }
+}
+
+void mac_metrics_consumer_log::handle_metric(const mac_ul_metric_report& report)
+{
+  fmt::memory_buffer buffer;
+
+  for (const mac_ul_cell_metric_report& cell : report.cells) {
+    fmt::format_to(std::back_inserter(buffer),
+                   "MAC UL cell pci={} metrics: nof_pdus={} "
+                   "pdu_decode=[avg={}usec min={}usec max={}usec]",
+                   static_cast<unsigned>(cell.pci),
+                   cell.nof_pdus,
+                   std::round(cell.pdu_decode_latency.average.count() * 1e-3),
+                   std::round(cell.pdu_decode_latency.min.count() * 1e-3),
+                   std::round(cell.pdu_decode_latency.max.count() * 1e-3));
 
     log_chan("{}", to_c_str(buffer));
     buffer.clear();
