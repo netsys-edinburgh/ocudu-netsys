@@ -58,12 +58,16 @@ void upper_phy_pdsch_metrics_collector::collect_metrics(upper_phy_pdsch_metrics&
   pdsch_dmrs_generator_aggregator.reset();
 
   // Collect metrics from PDSCH processor metric aggregator.
-  metrics.pdsch_proc_metrics.avg_latency_us       = pdsch_processor_aggregator.get_avg_latency_us();
-  metrics.pdsch_proc_metrics.min_latency_us       = pdsch_processor_aggregator.get_min_latency_us();
-  metrics.pdsch_proc_metrics.max_latency_us       = pdsch_processor_aggregator.get_max_latency_us();
-  metrics.pdsch_proc_metrics.avg_return_time_us   = pdsch_processor_aggregator.get_avg_return_time_us();
-  metrics.pdsch_proc_metrics.processing_rate_Mbps = pdsch_processor_aggregator.get_process_rate_Mbps();
-  metrics.pdsch_proc_metrics.tbs_processed        = pdsch_processor_aggregator.get_nof_processed_tbs();
-  metrics.pdsch_proc_metrics.cpu_usage_us         = pdsch_processor_aggregator.get_cpu_usage_us();
+  metrics.pdsch_proc_metrics.avg_latency_us        = pdsch_processor_aggregator.get_avg_latency_us();
+  metrics.pdsch_proc_metrics.min_latency_us        = pdsch_processor_aggregator.get_min_latency_us();
+  metrics.pdsch_proc_metrics.max_latency_us        = pdsch_processor_aggregator.get_max_latency_us();
+  metrics.pdsch_proc_metrics.avg_return_time_us    = pdsch_processor_aggregator.get_avg_return_time_us();
+  metrics.pdsch_proc_metrics.processing_rate_Mbps  = pdsch_processor_aggregator.get_process_rate_Mbps();
+  metrics.pdsch_proc_metrics.tbs_processed         = pdsch_processor_aggregator.get_nof_processed_tbs();
+  metrics.pdsch_proc_metrics.cpu_usage_us          = pdsch_processor_aggregator.get_cpu_usage_us();
+  metrics.pdsch_proc_metrics.avg_return_ns         = pdsch_processor_aggregator.get_avg_return_ns();
+  metrics.pdsch_proc_metrics.max_return_ns         = pdsch_processor_aggregator.get_max_return_ns();
+  metrics.pdsch_proc_metrics.avg_completion_ns     = pdsch_processor_aggregator.get_avg_completion_ns();
+  metrics.pdsch_proc_metrics.max_completion_ns     = pdsch_processor_aggregator.get_max_completion_ns();
   pdsch_processor_aggregator.reset();
 }

@@ -81,6 +81,14 @@ public:
       }
     }
 
+    /// Record the wall-clock time spent inside assemble_dl_data_request (RLC pull phase).
+    void on_rlc_pull_done(std::chrono::nanoseconds elapsed)
+    {
+      if (enabled()) {
+        rlc_pull_ns = elapsed;
+      }
+    }
+
   private:
     friend class mac_dl_cell_metric_handler;
 
@@ -92,6 +100,7 @@ public:
     metric_clock::time_point                                    dl_tti_req_tp;
     metric_clock::time_point                                    tx_data_req_tp;
     metric_clock::time_point                                    ul_tti_req_tp;
+    std::chrono::nanoseconds                                    rlc_pull_ns{0};
     expected<resource_usage::snapshot, int>                     start_rusg;
   };
 
@@ -141,6 +150,7 @@ private:
     latency_data        tx_data_req;
     latency_data        ul_tti_req;
     latency_data        slot_distance;
+    latency_data        rlc_pull;
     unsigned            count_vol_context_switches{0};
     unsigned            count_invol_context_switches{0};
     /// \brief Whether the cell was marked for deactivation and this is the last report.

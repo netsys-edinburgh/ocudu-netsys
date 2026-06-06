@@ -285,12 +285,49 @@ static nlohmann::json generate_cell_uplink(const upper_phy_metrics& metrics)
   return json;
 }
 
+static nlohmann::json generate_phy_events(const upper_phy_metrics& metrics)
+{
+  nlohmann::json json;
+
+  const auto& dl_proc = metrics.dl_processor_metrics;
+  json["dl_slot"]     = {{"count", dl_proc.count},
+                         {"avg_finish_ns", validate_fp_value(dl_proc.avg_finish_ns)},
+                         {"max_finish_ns", validate_fp_value(dl_proc.max_finish_ns)},
+                         {"avg_configure_ns", validate_fp_value(dl_proc.avg_configure_ns)},
+                         {"max_configure_ns", validate_fp_value(dl_proc.max_configure_ns)}};
+
+  const auto& pdsch = metrics.pdsch_metrics.pdsch_proc_metrics;
+  json["pdsch"]     = {{"count", pdsch.tbs_processed},
+                       {"avg_return_ns", validate_fp_value(pdsch.avg_return_ns)},
+                       {"max_return_ns", validate_fp_value(pdsch.max_return_ns)},
+                       {"avg_completion_ns", validate_fp_value(pdsch.avg_completion_ns)},
+                       {"max_completion_ns", validate_fp_value(pdsch.max_completion_ns)}};
+
+  const auto& pusch = metrics.pusch_metrics.pusch_proc_metrics;
+  json["pusch"]     = {{"count", pusch.count},
+                       {"avg_data_ns", validate_fp_value(pusch.avg_data_ns)},
+                       {"max_data_ns", validate_fp_value(pusch.max_data_ns)},
+                       {"crc_ok_count", pusch.crc_ok_count},
+                       {"crc_ok_ratio", validate_fp_value(pusch.crc_ok_ratio)}};
+
+  const auto& ldpc    = metrics.ldpc_metrics.decoder_metrics;
+  json["ldpc_decode"] = {{"count", ldpc.nof_processed_cb},
+                         {"avg_elapsed_ns", validate_fp_value(ldpc.avg_cb_latency_ns)},
+                         {"max_elapsed_ns", validate_fp_value(ldpc.max_cb_latency_ns)},
+                         {"avg_iterations", validate_fp_value(ldpc.avg_nof_iterations)},
+                         {"crc_ok_count", ldpc.crc_ok_count},
+                         {"crc_ok_ratio", validate_fp_value(ldpc.crc_ok_ratio)}};
+
+  return json;
+}
+
 static nlohmann::json generate_upper_phy(const upper_phy_metrics& upper_phy)
 {
   nlohmann::json json;
 
-  json["dl"] = generate_cell_downlink(upper_phy);
-  json["ul"] = generate_cell_uplink(upper_phy);
+  json["dl"]         = generate_cell_downlink(upper_phy);
+  json["ul"]         = generate_cell_uplink(upper_phy);
+  json["phy_events"] = generate_phy_events(upper_phy);
 
   return json;
 }

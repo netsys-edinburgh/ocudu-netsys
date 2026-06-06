@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "mac_ul_processor.h"
+#include "mac_ul_cell_metric_handler.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/support/async/execute_on_blocking.h"
 
@@ -14,6 +15,11 @@ mac_ul_processor::mac_ul_processor(const mac_ul_config& cfg_) :
   ue_manager(cfg.rnti_table),
   pdu_handler(cfg.ul_ccch_notifier, cfg.ue_exec_mapper, cfg.sched, ue_manager, cfg.rnti_table, cfg.pcap)
 {
+}
+
+void mac_ul_processor::add_cell_ul_metrics(du_cell_index_t cell_index, mac_ul_cell_metric_handler* handler)
+{
+  pdu_handler.register_cell_metrics(cell_index, handler);
 }
 
 async_task<bool> mac_ul_processor::add_ue(const mac_ue_create_request& request)

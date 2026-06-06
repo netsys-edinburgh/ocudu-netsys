@@ -379,7 +379,11 @@ void mac_cell_processor::handle_slot_indication_impl(slot_point_extended      sl
         not sl_res.dl.paging_grants.empty()) {
       trace_point tx_data_req_tp = l2_tracer.now();
 
-      assemble_dl_data_request(data_res, sl_tx_ext, cell_cfg.cell_index, sl_res.dl);
+      {
+        auto rlc_pull_t0 = metric_clock::now();
+        assemble_dl_data_request(data_res, sl_tx_ext, cell_cfg.cell_index, sl_res.dl);
+        metrics_meas.on_rlc_pull_done(metric_clock::now() - rlc_pull_t0);
+      }
 
       // Send DL Data to PHY.
       phy_cell.on_new_downlink_data(data_res);

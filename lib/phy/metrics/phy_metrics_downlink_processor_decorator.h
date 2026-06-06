@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "phy_usdt_probes.h"
 #include "ocudu/phy/upper/downlink_processor.h"
 #include "ocudu/phy/upper/upper_phy_rg_gateway.h"
 
@@ -67,6 +68,12 @@ public:
                               .elapsed_configure = end_tp - configure_tp,
                               .elapsed_finish    = end_tp - finish_processing_pdu_tp});
 
+      OCUDU_PHY_PROBE4(dl_slot_send,
+                       slot.sfn(),
+                       slot.slot_index(),
+                       (end_tp - finish_processing_pdu_tp).count(),
+                       (end_tp - configure_tp).count());
+
       // Send grid through the gateway.
       base.send(context, std::move(grid));
     }
@@ -111,6 +118,8 @@ public:
 
     // Notify the configuration of the gNb.
     adaptor->on_configure_grid(context.slot);
+
+    OCUDU_PHY_PROBE2(dl_slot_start, context.slot.sfn(), context.slot.slot_index());
 
     // Return a unique downlink processor based on this instance.
     return unique_downlink_processor(*this);

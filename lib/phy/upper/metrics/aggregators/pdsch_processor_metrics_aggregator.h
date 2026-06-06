@@ -56,6 +56,30 @@ public:
                : 0;
   }
 
+  /// Gets the average return latency in nanoseconds.
+  double get_avg_return_ns() const
+  {
+    auto c = count.load(std::memory_order_relaxed);
+    return c ? static_cast<double>(sum_elapsed_return_ns.load(std::memory_order_relaxed)) / static_cast<double>(c) : 0;
+  }
+
+  /// Gets the maximum return latency in nanoseconds.
+  double get_max_return_ns() const { return static_cast<double>(max_elapsed_return_ns.load(std::memory_order_relaxed)); }
+
+  /// Gets the average completion latency in nanoseconds.
+  double get_avg_completion_ns() const
+  {
+    auto c = count.load(std::memory_order_relaxed);
+    return c ? static_cast<double>(sum_elapsed_completion_ns.load(std::memory_order_relaxed)) / static_cast<double>(c)
+             : 0;
+  }
+
+  /// Gets the maximum completion latency in nanoseconds.
+  double get_max_completion_ns() const
+  {
+    return static_cast<double>(unpack_duration(packed_max_latency_ns.load(std::memory_order_relaxed)));
+  }
+
   /// Gets the processing rate.
   double get_process_rate_Mbps() const
   {
@@ -87,6 +111,7 @@ public:
     sum_used_cpu_time_ns.store(0, std::memory_order_relaxed);
     packed_min_latency_ns.store(default_packed_min_latency_ns, std::memory_order_relaxed);
     packed_max_latency_ns.store(default_packed_max_latency_ns, std::memory_order_relaxed);
+    max_elapsed_return_ns.store(0, std::memory_order_relaxed);
   }
 
 private:
@@ -105,6 +130,10 @@ private:
     update_slotmax(metrics.slot, metrics.elapsed_completion.count(), packed_max_latency_ns);
     count.fetch_add(1, std::memory_order_relaxed);
     sum_used_cpu_time_ns.fetch_add(metrics.self_cpu_time_usage.count(), std::memory_order_relaxed);
+    uint64_t ret_ns   = metrics.elapsed_return.count();
+    uint64_t prev_ret = max_elapsed_return_ns.load(std::memory_order_relaxed);
+    while (ret_ns > prev_ret &&
+           !max_elapsed_return_ns.compare_exchange_weak(prev_ret, ret_ns, std::memory_order_relaxed)) {}
   }
 
   std::atomic<uint64_t> sum_tb_sz                 = {};
@@ -114,6 +143,7 @@ private:
   std::atomic<uint64_t> sum_used_cpu_time_ns      = {};
   std::atomic<uint64_t> packed_min_latency_ns     = default_packed_min_latency_ns;
   std::atomic<uint64_t> packed_max_latency_ns     = default_packed_max_latency_ns;
+  std::atomic<uint64_t> max_elapsed_return_ns     = 0;
 };
 
 } // namespace ocudu

@@ -125,6 +125,9 @@ void mac_dl_cell_metric_handler::handle_slot_completion(const slot_measurement& 
   if (meas.ul_tti_req_tp != metric_clock::time_point{}) {
     data.ul_tti_req.save_sample(sl_tx_no_ext, meas.ul_tti_req_tp - last_tp);
   }
+  if (meas.rlc_pull_ns > std::chrono::nanoseconds{0}) {
+    data.rlc_pull.save_sample(sl_tx_no_ext, meas.rlc_pull_ns);
+  }
   if (rusg_diff.has_value()) {
     auto& rusg_val = rusg_diff.value();
     data.count_vol_context_switches += rusg_val.vol_ctxt_switch_count;
@@ -157,6 +160,7 @@ void mac_dl_cell_metric_handler::send_new_report()
   report.count_voluntary_context_switches   = data.count_vol_context_switches;
   report.count_involuntary_context_switches = data.count_invol_context_switches;
   report.cell_deactivated                   = data.last_report;
+  report.rlc_pull_latency                   = data.rlc_pull.get_report();
 
   // Reset counters.
   data = {};

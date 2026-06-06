@@ -39,8 +39,11 @@ mac_cell_controller& mac_controller::add_cell(const mac_cell_creation_request& c
                                   ? nof_slots_per_tdd_period(*cell_add_req.sched_req.ran.tdd_cfg)
                                   : 0U;
 
-  auto cell_metrics_cfg =
-      metrics.add_cell(cell_add_req.cell_index, cell_add_req.scs_common, tdd_period_slots, *cell_time_source);
+  auto cell_metrics_cfg = metrics.add_cell(
+      cell_add_req.cell_index, cell_add_req.pci, cell_add_req.scs_common, tdd_period_slots, *cell_time_source);
+
+  // Register UL cell metric handler in the UL processor.
+  ul_unit.add_cell_ul_metrics(cell_add_req.cell_index, cell_metrics_cfg.ul_metrics);
 
   // > Fill sched cell configuration message and pass it to the scheduler.
   sched_cfg.add_cell(mac_scheduler_cell_creation_request{cell_add_req, cell_metrics_cfg.sched_notifier});

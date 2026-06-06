@@ -3,6 +3,8 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "pdu_rx_handler.h"
+#include "mac_ul_cell_metric_handler.h"
+#include "ocudu/adt/scope_exit.h"
 #include "ocudu/instrumentation/traces/up_traces.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/support/format/fmt_basic_parser.h"
@@ -70,8 +72,20 @@ pdu_rx_handler::pdu_rx_handler(mac_ul_ccch_notifier&          ccch_notifier_,
 {
 }
 
+void pdu_rx_handler::register_cell_metrics(du_cell_index_t cell_index, mac_ul_cell_metric_handler* handler)
+{
+  cell_metrics.emplace(cell_index, handler);
+}
+
 bool pdu_rx_handler::handle_rx_pdu(slot_point sl_rx, du_cell_index_t cell_index, mac_rx_pdu pdu)
 {
+  const auto                  t0             = std::chrono::steady_clock::now();
+  mac_ul_cell_metric_handler* cell_ul_metric = cell_metrics.contains(cell_index) ? cell_metrics[cell_index] : nullptr;
+  auto                        record_lat     = make_scope_exit([&]() {
+    if (cell_ul_metric != nullptr) {
+      cell_ul_metric->add_sample(std::chrono::steady_clock::now() - t0);
+    }
+  });
   trace_point rx_tp = up_tracer.now();
   // > Store PCAP
   write_pcap_rx_pdu(sl_rx, pdu);
