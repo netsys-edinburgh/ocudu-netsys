@@ -9,12 +9,16 @@
 namespace ocudu {
 
 struct mac_dl_metric_report;
+struct mac_ul_metric_report;
 
 namespace app_helpers {
 namespace json_generators {
 
 /// Generates a nlohmann JSON object that codifies the given downlink MAC metrics.
 nlohmann::json generate(const mac_dl_metric_report& metrics);
+
+/// Generates a nlohmann JSON object that codifies the given uplink MAC metrics.
+nlohmann::json generate(const mac_ul_metric_report& metrics);
 
 } // namespace json_generators
 } // namespace app_helpers

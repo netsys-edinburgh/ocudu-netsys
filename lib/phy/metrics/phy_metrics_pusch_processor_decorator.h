@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "phy_usdt_probes.h"
 #include "ocudu/phy/metrics/phy_metrics_notifiers.h"
 #include "ocudu/phy/upper/channel_processors/pusch/pusch_processor.h"
 #include "ocudu/phy/upper/channel_processors/pusch/pusch_processor_result_notifier.h"
@@ -45,6 +46,8 @@ public:
     elapsed_data_and_return_ns = 0;
     elapsed_uci_ns.store(0, std::memory_order_relaxed);
     cpu_time_usage_ns.store(0, std::memory_order_relaxed);
+
+    OCUDU_PHY_PROBE4(pusch_start, pdu_.slot.sfn(), pdu_.slot.slot_index(), pdu_.rnti, data_.size());
 
     resource_usage_utils::measurements measurements;
     {
@@ -127,6 +130,8 @@ private:
                                    .cpu_time_usage_ns = cpu_time_usage_ns.load(std::memory_order_relaxed),
                                    .sinr_dB           = sinr_dB,
                                    .evm               = evm});
+
+    OCUDU_PHY_PROBE5(pusch_done, pdu.slot.sfn(), pdu.slot.slot_index(), pdu.rnti, elapsed_data_ns, (int)crc_ok);
 
     // Notify the completion of the PUSCH processing. From now on, the processor might become available.
     pusch_processor_result_notifier* current_proc_notifier = std::exchange(notifier, nullptr);

@@ -17,6 +17,11 @@ void upper_phy_ldpc_metrics_collector::collect_metrics(upper_phy_ldpc_metrics& m
   metrics.decoder_metrics.decoding_rate_Mbps = ldpc_decoder_aggregator.get_decode_rate_Mbps();
   metrics.decoder_metrics.total_proc_time    = ldpc_decoder_aggregator.get_total_time();
   metrics.decoder_metrics.cpu_usage_us       = ldpc_decoder_aggregator.get_cpu_usage_us();
+  metrics.decoder_metrics.nof_processed_cb   = ldpc_decoder_aggregator.get_nof_processed_cb();
+  metrics.decoder_metrics.crc_ok_count       = ldpc_decoder_aggregator.get_crc_ok_count();
+  metrics.decoder_metrics.crc_ok_ratio       = ldpc_decoder_aggregator.get_crc_ok_ratio();
+  metrics.decoder_metrics.avg_cb_latency_ns  = ldpc_decoder_aggregator.get_avg_cb_latency_ns();
+  metrics.decoder_metrics.max_cb_latency_ns  = ldpc_decoder_aggregator.get_max_cb_latency_ns();
   ldpc_decoder_aggregator.reset();
 
   // Collect metrics from the LDPC encoder metrics aggregator.

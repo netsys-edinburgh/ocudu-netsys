@@ -11,6 +11,25 @@
 
 namespace ocudu {
 
+/// Metrics relative to MAC UL PDU decode for a specific cell.
+struct mac_ul_cell_metric_report {
+  struct latency_report {
+    std::chrono::nanoseconds min{0};
+    std::chrono::nanoseconds max{0};
+    std::chrono::nanoseconds average{0};
+  };
+
+  /// Physical cell id — primary key identifying the DU cell.
+  pci_t    pci;
+  unsigned nof_pdus{0};
+  /// Wall-clock time from PDU arrival to completion of MAC UL decode and SDU dispatch.
+  latency_report pdu_decode_latency;
+};
+
+struct mac_ul_metric_report {
+  std::vector<mac_ul_cell_metric_report> cells;
+};
+
 /// Metrics relative to a specific MAC cell.
 struct mac_dl_cell_metric_report {
   struct latency_report {
@@ -51,6 +70,8 @@ struct mac_dl_cell_metric_report {
   unsigned count_involuntary_context_switches;
   /// Whether the cell was marked for deactivation.
   bool cell_deactivated;
+  /// \brief Wall-clock time spent in RLC pull (assemble_dl_data_request) per slot.
+  latency_report rlc_pull_latency;
 };
 
 struct mac_dl_metric_report {
@@ -61,6 +82,8 @@ struct mac_dl_metric_report {
 struct mac_metric_report {
   /// Metrics of the MAC DL.
   mac_dl_metric_report dl;
+  /// Metrics of the MAC UL.
+  mac_ul_metric_report ul;
   /// Metrics of the MAC scheduler.
   scheduler_metrics_report sched;
 };

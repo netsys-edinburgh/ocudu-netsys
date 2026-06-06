@@ -109,6 +109,32 @@ public:
                                                  : 0;
   }
 
+  /// Gets the number of processed PUSCH TBs.
+  uint64_t get_count() const { return count.load(std::memory_order_relaxed); }
+
+  /// Gets the average data processing latency in nanoseconds.
+  double get_avg_data_ns() const
+  {
+    auto c = count.load(std::memory_order_relaxed);
+    return c ? static_cast<double>(sum_data_elapsed_ns.load(std::memory_order_relaxed)) / static_cast<double>(c) : 0;
+  }
+
+  /// Gets the maximum data processing latency in nanoseconds.
+  double get_max_data_ns() const
+  {
+    return static_cast<double>(unpack_duration(packed_max_data_latency_ns.load(std::memory_order_relaxed)));
+  }
+
+  /// Gets the number of TBs with correct CRC.
+  uint64_t get_crc_ok_count() const { return sum_crc_ok.load(std::memory_order_relaxed); }
+
+  /// Gets the CRC OK ratio.
+  double get_crc_ok_ratio() const
+  {
+    auto c = count.load(std::memory_order_relaxed);
+    return c ? static_cast<double>(sum_crc_ok.load(std::memory_order_relaxed)) / static_cast<double>(c) : 0;
+  }
+
   /// Resets values of all internal counters.
   void reset()
   {
