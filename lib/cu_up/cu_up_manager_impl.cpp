@@ -109,7 +109,15 @@ cu_up_manager_impl::handle_bearer_context_setup_request(const e1ap_bearer_contex
     }
   }
 
-  // 3. Create response
+  // 3. Tag PDCP flows with the serving cell PCI derived from the gNB-DU-ID.
+  if (msg.gnb_du_id.has_value()) {
+    auto it = du_pci_map.find(msg.gnb_du_id.value());
+    if (it != du_pci_map.end()) {
+      ue_ctxt->update_serving_pci(it->second);
+    }
+  }
+
+  // 4. Create response
   response.ue_index = ue_ctxt->get_index();
   response.success  = true;
   return response;

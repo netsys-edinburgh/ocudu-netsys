@@ -20,6 +20,7 @@ struct e1ap_bearer_context_setup_request {
   slotted_id_vector<pdu_session_id_t, e1ap_pdu_session_res_to_setup_item> pdu_session_res_to_setup_list;
   activity_notification_level_t                                           activity_notif_level;
   std::optional<std::chrono::seconds>                                     ue_inactivity_timer;
+  std::optional<uint64_t>                                                 gnb_du_id;
 };
 
 /// \brief Response to a bearer context setup request including UE index for E1AP map.
