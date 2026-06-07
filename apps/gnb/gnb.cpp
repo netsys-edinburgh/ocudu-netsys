@@ -31,6 +31,7 @@
 #include "gnb_appconfig_validators.h"
 #include "gnb_appconfig_yaml_writer.h"
 #include "ocudu/adt/scope_exit.h"
+#include "ocudu/ran/gnb_du_id.h"
 #include "ocudu/cu_cp/cu_cp_operation_controller.h"
 #include "ocudu/du/du_high/du_high_clock_controller.h"
 #include "ocudu/du/du_operation_controller.h"
@@ -502,6 +503,13 @@ int main(int argc, char** argv)
   o_cuup_unit_deps.e2_gw                  = e2_gw_cu_up.get();
   o_cuup_unit_deps.metrics_notifier       = &metrics_notifier_forwarder;
   o_cuup_unit_deps.remote_metrics_gateway = remote_server_gateway;
+  {
+    const auto& du_cfg = o_du_app_unit->get_o_du_high_unit_config().du_high_cfg.config;
+    const uint64_t du_id = gnb_du_id_to_int(du_cfg.gnb_du_id);
+    if (!du_cfg.cells_cfg.empty()) {
+      o_cuup_unit_deps.du_pci_map[du_id] = du_cfg.cells_cfg.front().cell.pci;
+    }
+  }
 
   // Create O-CU-UP.
   auto            o_cuup_unit = o_cu_up_app_unit->create_o_cu_up_unit(o_cuup_unit_deps);

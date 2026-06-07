@@ -9,6 +9,7 @@
 #include "pdu_session_manager.h"
 #include "pdu_session_manager_impl.h"
 #include "ocudu/cu_up/cu_up_types.h"
+#include "ocudu/ran/pci.h"
 #include "ocudu/e1ap/cu_up/e1ap_cu_up.h"
 #include "ocudu/f1u/cu_up/f1u_gateway.h"
 #include "ocudu/gtpu/gtpu_teid_pool.h"
@@ -145,6 +146,7 @@ public:
 
   void notify_pdcp_pdu_processing_stopped() { pdu_session_manager.notify_pdcp_pdu_processing_stopped(); }
   void restart_pdcp_pdu_processing() { pdu_session_manager.restart_pdcp_pdu_processing(); }
+  void update_serving_pci(pci_t new_pci) { pdu_session_manager.update_serving_pci(new_pci); }
 
   void begin_pdcp_buffering() { pdu_session_manager.begin_pdcp_buffering(); }
   void end_pdcp_buffering() { pdu_session_manager.end_pdcp_buffering(); }

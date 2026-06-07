@@ -7,6 +7,7 @@
 #include "ocudu/pdcp/pdcp_entity.h"
 #include "ocudu/pdcp/pdcp_rx_metrics.h"
 #include "ocudu/pdcp/pdcp_tx_metrics.h"
+#include "ocudu/ran/pci.h"
 
 using namespace ocudu;
 using namespace app_helpers;
@@ -62,11 +63,15 @@ nlohmann::json ocudu::app_helpers::json_generators::generate(const pdcp_tx_metri
                                                              const pdcp_rx_metrics_container& rx,
                                                              double                           tx_cpu_usage,
                                                              double                           rx_cpu_usage,
-                                                             timer_duration                   metrics_period)
+                                                             timer_duration                   metrics_period,
+                                                             pci_t                            pci)
 {
   nlohmann::json json;
 
   json["timestamp"]          = get_time_stamp();
+  if (pci != INVALID_PCI) {
+    json["pci"] = static_cast<unsigned>(pci);
+  }
   nlohmann::json& cu_up_json = json["cu-up"];
   nlohmann::json& pdcp_json  = cu_up_json["pdcp"];
 
@@ -81,7 +86,8 @@ std::string ocudu::app_helpers::json_generators::generate_string(const pdcp_tx_m
                                                                  double                           tx_cpu_usage,
                                                                  double                           rx_cpu_usage,
                                                                  timer_duration                   metrics_period,
-                                                                 int                              indent)
+                                                                 int                              indent,
+                                                                 pci_t                            pci)
 {
-  return generate(tx, rx, tx_cpu_usage, rx_cpu_usage, metrics_period).dump(indent);
+  return generate(tx, rx, tx_cpu_usage, rx_cpu_usage, metrics_period, pci).dump(indent);
 }

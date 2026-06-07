@@ -10,8 +10,9 @@ using namespace ocuup;
 
 cu_up_bearer_context_modification_routine ::cu_up_bearer_context_modification_routine(
     ue_context&                                     ue_ctxt_,
-    const e1ap_bearer_context_modification_request& msg_) :
-  ue_ctxt(ue_ctxt_), msg(msg_), logger(ocudulog::fetch_basic_logger("CU-UP"))
+    const e1ap_bearer_context_modification_request& msg_,
+    const std::unordered_map<uint64_t, pci_t>&      du_pci_map_) :
+  ue_ctxt(ue_ctxt_), msg(msg_), du_pci_map(du_pci_map_), logger(ocudulog::fetch_basic_logger("CU-UP"))
 {
 }
 
@@ -83,6 +84,14 @@ void cu_up_bearer_context_modification_routine::operator()(
     }
     response.success = true;
     CORO_EARLY_RETURN(response);
+  }
+
+  // Update serving PCI for PDCP metrics if the target DU is known (handover case).
+  if (msg.gnb_du_id.has_value()) {
+    auto it = du_pci_map.find(msg.gnb_du_id.value());
+    if (it != du_pci_map.end()) {
+      ue_ctxt.update_serving_pci(it->second);
+    }
   }
 
   // Traverse list of PDU sessions to be setup/modified

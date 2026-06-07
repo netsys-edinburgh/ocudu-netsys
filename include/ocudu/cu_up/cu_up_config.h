@@ -15,8 +15,11 @@
 #include "ocudu/gtpu/gtpu_teid_pool.h"
 #include "ocudu/pcap/dlt_pcap.h"
 #include "ocudu/ran/gnb_cu_up_id.h"
+#include "ocudu/ran/gnb_du_id.h"
+#include "ocudu/ran/pci.h"
 #include "ocudu/support/timers.h"
 #include <map>
+#include <unordered_map>
 
 namespace ocudu {
 
@@ -86,6 +89,9 @@ struct cu_up_config {
   std::string plmn = "00101";
   /// CU-UP statistics report period in seconds.
   std::chrono::seconds statistics_report_period;
+  /// Mapping from gNB-DU-ID (integer) to serving-cell PCI.
+  /// Used to tag PDCP metrics per cell when the UE hands over between DUs.
+  std::unordered_map<uint64_t, pci_t> du_pci_map;
 };
 
 /// CU-UP dependencies.

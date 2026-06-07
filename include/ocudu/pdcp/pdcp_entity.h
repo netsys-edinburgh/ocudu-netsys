@@ -40,6 +40,7 @@ public:
   virtual void                             stop()                           = 0;
   virtual manual_event_flag&               tx_crypto_awaitable()            = 0;
   virtual manual_event_flag&               rx_crypto_awaitable()            = 0;
+  virtual void                             set_serving_pci(pci_t)           {}
 };
 
 } // namespace ocudu

@@ -182,11 +182,21 @@ o_cu_up_unit ocudu::build_o_cu_up(const o_cu_up_unit_config& unit_cfg, const o_c
                                                       *dependencies.workers,
                                                       *dependencies.timers);
 
+  // Thread the DU→PCI map into CU-UP config for runtime handover PCI updates.
+  config.cu_up_cfg.du_pci_map = dependencies.du_pci_map;
+
+  // Use the first PCI in the map as the initial serving PCI for PDCP metric tagging.
+  pci_t serving_pci = INVALID_PCI;
+  if (!dependencies.du_pci_map.empty()) {
+    serving_pci = dependencies.du_pci_map.begin()->second;
+  }
+
   for (auto& qos_ : config.cu_up_cfg.qos) {
     qos_.second.pdcp_custom_cfg.metrics_notifier = pdcp_metric_notifier;
     if (!pdcp_metric_notifier) {
       qos_.second.pdcp_custom_cfg.metrics_period = std::chrono::milliseconds(0);
     }
+    qos_.second.pdcp_custom_cfg.pci      = serving_pci;
     qos_.second.f1u_cfg.metrics_notifier = f1u_metric_notifier;
     if (!f1u_metric_notifier) {
       qos_.second.f1u_cfg.metrics_period = std::chrono::milliseconds(0);

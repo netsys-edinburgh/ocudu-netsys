@@ -11,7 +11,9 @@
 #include "ocudu/cu_up/cu_up_manager.h"
 #include "ocudu/e1ap/cu_up/e1ap_cu_up.h"
 #include "ocudu/gtpu/gtpu_teid_pool.h"
+#include "ocudu/ran/pci.h"
 #include <memory>
+#include <unordered_map>
 
 namespace ocudu::ocuup {
 
@@ -24,6 +26,7 @@ struct cu_up_manager_impl_config {
   std::map<five_qi_t, cu_up_qos_config> qos;
   n3_interface_config                   n3_cfg;
   cu_up_test_mode_config                test_mode_cfg;
+  std::unordered_map<uint64_t, pci_t>   du_pci_map;
 };
 
 /// CU-UP manager implementation dependencies.
@@ -82,9 +85,10 @@ private:
   async_task<void> disable_test_mode();
   async_task<void> reestablish_test_mode();
 
-  gnb_cu_up_id_t cu_up_id;
-  std::string    cu_up_name;
-  std::string    plmn;
+  gnb_cu_up_id_t                      cu_up_id;
+  std::string                         cu_up_name;
+  std::string                         plmn;
+  std::unordered_map<uint64_t, pci_t> du_pci_map;
 
   std::atomic<bool>&                                  stop_command;
   std::vector<std::reference_wrapper<e1ap_interface>> e1aps;

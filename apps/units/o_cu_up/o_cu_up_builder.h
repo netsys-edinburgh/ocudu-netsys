@@ -7,8 +7,11 @@
 #include "apps/services/metrics/metrics_config.h"
 #include "o_cu_up_unit_impl.h"
 #include "ocudu/gtpu/gtpu_teid_pool.h"
+#include "ocudu/ran/pci.h"
 #include "ocudu/support/timers.h"
 #include <memory>
+#include <unordered_map>
+#include <vector>
 
 namespace ocudu {
 
@@ -40,6 +43,7 @@ struct o_cu_up_unit_dependencies {
   dlt_pcap*                                    gtpu_pcap          = nullptr;
   timer_manager*                               timers             = nullptr;
   io_broker*                                   io_brk             = nullptr;
+  std::unordered_map<uint64_t, pci_t>          du_pci_map;
 };
 
 /// O-RAN CU-CP unit.
