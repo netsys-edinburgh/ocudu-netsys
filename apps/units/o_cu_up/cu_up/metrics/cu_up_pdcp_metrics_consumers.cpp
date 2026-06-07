@@ -34,12 +34,13 @@ cu_up_pdcp_metrics_consumer_json::cu_up_pdcp_metrics_consumer_json(
 
 void cu_up_pdcp_metrics_consumer_json::handle_metric(const app_services::metrics_set& metric)
 {
-  // Implement aggregation.
   const pdcp_metrics_container& pdcp_metric = static_cast<const cu_up_pdcp_metrics_impl&>(metric).get_metrics();
+
+  aggregated_metrics& bucket = per_pci_metrics[pdcp_metric.pci];
 
   // Tx aggregation.
   const pdcp_tx_metrics_container& tx_metric = pdcp_metric.tx;
-  pdcp_tx_metrics_container&       aggr_tx   = aggr_metrics.tx;
+  pdcp_tx_metrics_container&       aggr_tx   = bucket.tx;
   aggr_tx.num_sdus += tx_metric.num_sdus;
   aggr_tx.num_sdu_bytes += tx_metric.num_sdu_bytes;
   aggr_tx.num_pdus += tx_metric.num_pdus;
@@ -57,13 +58,13 @@ void cu_up_pdcp_metrics_consumer_json::handle_metric(const app_services::metrics
     aggr_tx.max_pdu_latency_ns = std::max(aggr_tx.max_pdu_latency_ns.value_or(0), tx_metric.max_pdu_latency_ns.value());
   }
 
-  aggr_metrics.tx_cpu_usage += tx_metric.sum_crypto_processing_latency_ns /
-                               (static_cast<double>(pdcp_metric.metrics_period.count()) * 1e6) * 100.0;
-  ++aggr_metrics.nof_drbs;
+  bucket.tx_cpu_usage += tx_metric.sum_crypto_processing_latency_ns /
+                         (static_cast<double>(pdcp_metric.metrics_period.count()) * 1e6) * 100.0;
+  ++bucket.nof_drbs;
 
   // Rx aggregation.
   const pdcp_rx_metrics_container& rx_metric = pdcp_metric.rx;
-  pdcp_rx_metrics_container&       aggr_rx   = aggr_metrics.rx;
+  pdcp_rx_metrics_container&       aggr_rx   = bucket.rx;
 
   aggr_rx.num_pdus += rx_metric.num_pdus;
   aggr_rx.num_pdu_bytes += rx_metric.num_pdu_bytes;
@@ -90,34 +91,33 @@ void cu_up_pdcp_metrics_consumer_json::handle_metric(const app_services::metrics
     aggr_rx.max_sdu_latency_ns = std::max(aggr_rx.max_sdu_latency_ns.value_or(0), rx_metric.max_sdu_latency_ns.value());
   }
 
-  aggr_metrics.rx_cpu_usage += rx_metric.sum_crypto_processing_latency_ns /
-                               (static_cast<double>(pdcp_metric.metrics_period.count()) * 1e6) * 100.0;
+  bucket.rx_cpu_usage += rx_metric.sum_crypto_processing_latency_ns /
+                         (static_cast<double>(pdcp_metric.metrics_period.count()) * 1e6) * 100.0;
 
-  aggr_metrics.metrics_period = pdcp_metric.metrics_period;
-
-  aggr_metrics.is_empty = false;
+  bucket.metrics_period = pdcp_metric.metrics_period;
+  bucket.is_empty       = false;
 }
 
 void cu_up_pdcp_metrics_consumer_json::print_metrics()
 {
-  if (aggr_metrics.is_empty) {
-    return;
+  for (auto& [pci, bucket] : per_pci_metrics) {
+    if (bucket.is_empty) {
+      continue;
+    }
+
+    const double n          = (bucket.nof_drbs > 0) ? static_cast<double>(bucket.nof_drbs) : 1.0;
+    const double tx_cpu_avg = bucket.tx_cpu_usage / n;
+    const double rx_cpu_avg = bucket.rx_cpu_usage / n;
+
+    gateway.send(app_helpers::json_generators::generate_string(bucket.tx,
+                                                               bucket.rx,
+                                                               tx_cpu_avg,
+                                                               rx_cpu_avg,
+                                                               bucket.metrics_period,
+                                                               DEFAULT_JSON_INDENT,
+                                                               pci));
   }
 
-  // Average CPU usage across all DRBs so the reported value reflects per-DRB
-  // utilisation rather than the sum of all bearers (which easily exceeds 100%).
-  const double n          = (aggr_metrics.nof_drbs > 0) ? static_cast<double>(aggr_metrics.nof_drbs) : 1.0;
-  const double tx_cpu_avg = aggr_metrics.tx_cpu_usage / n;
-  const double rx_cpu_avg = aggr_metrics.rx_cpu_usage / n;
-
-  gateway.send(app_helpers::json_generators::generate_string(aggr_metrics.tx,
-                                                             aggr_metrics.rx,
-                                                             tx_cpu_avg,
-                                                             rx_cpu_avg,
-                                                             aggr_metrics.metrics_period,
-                                                             DEFAULT_JSON_INDENT));
-
-  // Clear metrics after printing.
   clear_metrics();
 }
 
