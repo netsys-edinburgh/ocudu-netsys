@@ -34,7 +34,7 @@ public:
     logger("PDCP", {ue_index, rb_id, "DL/UL"}),
     metrics_period(config.custom.metrics_period),
     metrics_timer(ue_ctrl_timer_factory.create_timer()),
-    metrics_agg(ue_index, rb_id, metrics_period, config.custom.metrics_notifier, ue_ctrl_executor)
+    metrics_agg(ue_index, rb_id, metrics_period, config.custom.metrics_notifier, ue_ctrl_executor, true, config.custom.pci)
   {
     pdcp_rohc_factory = rohc::create_rohc_factory();
 
@@ -85,6 +85,7 @@ public:
 
   manual_event_flag& tx_crypto_awaitable() override { return tx->crypto_awaitable(); }
   manual_event_flag& rx_crypto_awaitable() override { return rx->crypto_awaitable(); }
+  void               set_serving_pci(pci_t new_pci) override { metrics_agg.set_pci(new_pci); }
 
 private:
   std::unique_ptr<rohc::rohc_factory> pdcp_rohc_factory;

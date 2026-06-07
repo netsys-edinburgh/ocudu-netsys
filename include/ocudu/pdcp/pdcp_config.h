@@ -9,6 +9,7 @@
 #include "ocudu/ran/pdcp/pdcp_rlc_mode.h"
 #include "ocudu/ran/pdcp/pdcp_sn_size.h"
 #include "ocudu/ran/pdcp/pdcp_t_reordering.h"
+#include "ocudu/ran/pci.h"
 #include "ocudu/ran/rohc/rohc_config.h"
 #include "ocudu/support/timers.h"
 #include "fmt/format.h"
@@ -104,6 +105,7 @@ struct pdcp_custom_config_rx : public pdcp_custom_config_base {
 struct pdcp_custom_config {
   timer_duration         metrics_period;
   pdcp_metrics_notifier* metrics_notifier = nullptr;
+  pci_t                  pci              = INVALID_PCI;
   pdcp_custom_config_tx  tx               = {};
   pdcp_custom_config_rx  rx               = {};
 };

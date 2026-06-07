@@ -39,7 +39,8 @@ static cu_up_manager_impl_config generate_cu_up_manager_impl_config(const cu_up_
           config.plmns,
           config.qos,
           config.n3_cfg,
-          config.test_mode_cfg};
+          config.test_mode_cfg,
+          config.du_pci_map};
 }
 
 static cu_up_manager_impl_dependencies

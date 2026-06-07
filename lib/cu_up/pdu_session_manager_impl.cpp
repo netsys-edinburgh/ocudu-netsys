@@ -843,3 +843,14 @@ pdu_session_state_t pdu_session_manager_impl::get_pdu_session_state()
   }
   return st;
 }
+
+void pdu_session_manager_impl::update_serving_pci(pci_t new_pci)
+{
+  for (auto& [psi, session] : pdu_sessions) {
+    for (auto& [drb_id, drb] : session->drbs) {
+      if (drb && drb->pdcp) {
+        drb->pdcp->set_serving_pci(new_pci);
+      }
+    }
+  }
+}

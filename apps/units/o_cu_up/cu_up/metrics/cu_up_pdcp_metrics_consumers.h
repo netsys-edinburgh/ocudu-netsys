@@ -6,6 +6,8 @@
 
 #include "cu_up_pdcp_metrics.h"
 #include "ocudu/ocudulog/log_channel.h"
+#include "ocudu/ran/pci.h"
+#include <unordered_map>
 
 namespace ocudu {
 
@@ -68,7 +70,7 @@ private:
   void print_metrics();
 
   // Clear metrics.
-  void clear_metrics() { aggr_metrics.reset(); }
+  void clear_metrics() { per_pci_metrics.clear(); }
 
   // Initialize timer.
   void initialize_timer();
@@ -78,7 +80,7 @@ private:
   app_services::remote_server_metrics_gateway& gateway;
   task_executor&                               executor;
   unique_timer                                 timer;
-  aggregated_metrics                           aggr_metrics;
+  std::unordered_map<pci_t, aggregated_metrics> per_pci_metrics;
 };
 
 /// Consumer for the log PDCP metrics.
