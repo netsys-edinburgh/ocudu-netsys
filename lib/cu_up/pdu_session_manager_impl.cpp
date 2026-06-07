@@ -891,3 +891,14 @@ static bool requests_dl_data_forwarding(const std::optional<e1ap_data_forwarding
   return request.has_value() and (request->data_forwarding_request == e1ap_data_forwarding_request::dl or
                                   request->data_forwarding_request == e1ap_data_forwarding_request::both);
 }
+
+void pdu_session_manager_impl::update_serving_pci(pci_t new_pci)
+{
+  for (auto& [psi, session] : pdu_sessions) {
+    for (auto& [drb_id, drb] : session->drbs) {
+      if (drb && drb->pdcp) {
+        drb->pdcp->set_serving_pci(new_pci);
+      }
+    }
+  }
+}

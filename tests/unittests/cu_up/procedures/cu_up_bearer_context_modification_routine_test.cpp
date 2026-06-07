@@ -47,7 +47,7 @@ protected:
 
   void start_procedure(ue_context& ue_ctx, const e1ap_bearer_context_modification_request& msg)
   {
-    proc = launch_async<cu_up_bearer_context_modification_routine>(ue_ctx, msg);
+    proc = launch_async<cu_up_bearer_context_modification_routine>(ue_ctx, msg, empty_du_pci_map);
     proc_launcher.emplace(proc);
   }
 
@@ -65,6 +65,7 @@ private:
   async_task<e1ap_bearer_context_modification_response>                        proc;
   std::optional<lazy_task_launcher<e1ap_bearer_context_modification_response>> proc_launcher;
 
+  std::unordered_map<uint64_t, pci_t>                                           empty_du_pci_map;
   inline_task_executor      exec;
   dummy_e1ap                e1ap;
   fifo_async_task_scheduler task_sched;

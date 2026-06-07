@@ -62,6 +62,7 @@ public:
   void disconnect_pdu_session(pdu_session_id_t pdu_session_id);
   void disconnect_all_pdu_sessions();
   void update_security_config(const security::sec_as_config& security_info);
+  void update_serving_pci(pci_t new_pci);
 
   void notify_pdcp_pdu_processing_stopped();
   void restart_pdcp_pdu_processing();

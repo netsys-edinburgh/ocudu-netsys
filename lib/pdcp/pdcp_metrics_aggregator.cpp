@@ -12,10 +12,12 @@ pdcp_metrics_aggregator::pdcp_metrics_aggregator(uint32_t               ue_index
                                                  timer_duration         metrics_period_,
                                                  pdcp_metrics_notifier* pdcp_metrics_notif_,
                                                  task_executor&         ue_executor_,
-                                                 bool                   report_tx_rx_in_same_report_) :
+                                                 bool                   report_tx_rx_in_same_report_,
+                                                 pci_t                  pci_) :
   report_tx_rx_in_same_report(report_tx_rx_in_same_report_),
   ue_index(ue_index_),
   rb_id(rb_id_),
+  pci(static_cast<uint16_t>(pci_)),
   metrics_period(metrics_period_),
   pdcp_metrics_notif(pdcp_metrics_notif_),
   ue_executor(ue_executor_),
@@ -60,6 +62,6 @@ void pdcp_metrics_aggregator::push_report()
     return;
   }
 
-  pdcp_metrics_container metrics = {ue_index, rb_id, INVALID_PCI, m_tx, m_rx, metrics_period};
+  pdcp_metrics_container metrics = {ue_index, rb_id, static_cast<pci_t>(pci.load(std::memory_order_relaxed)), m_tx, m_rx, metrics_period};
   pdcp_metrics_notif->report_metrics(metrics);
 }

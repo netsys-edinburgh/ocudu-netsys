@@ -203,6 +203,11 @@ inline bool fill_e1ap_bearer_context_setup_request(e1ap_bearer_context_setup_req
     request.ue_inactivity_timer = std::chrono::seconds(asn1_request->ue_inactivity_timer);
   }
 
+  // Fill gNB DU ID — identifies which DU this UE is attached to.
+  if (asn1_request->gnb_du_id_present) {
+    request.gnb_du_id = asn1_request->gnb_du_id;
+  }
+
   // Fill PDU session resource to setup list.
   for (const auto& asn1_pdu_session_res_list_item :
        asn1_request->sys_bearer_context_setup_request.ng_ran_bearer_context_setup_request()) {
