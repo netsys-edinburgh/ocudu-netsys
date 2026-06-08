@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ocudu/ngap/mobility_management_metrics.h"
+#include "ocudu/ran/gnb_du_id.h"
 
 namespace ocudu::ocucp {
 
@@ -17,11 +18,11 @@ public:
   /// \brief Aggregates the metrics for the successful handover preparation.
   void aggregate_successful_handover_preparation();
 
-  /// \brief Aggregates the metrics for the requested handover execution.
-  void aggregate_requested_handover_execution();
+  /// \brief Aggregates the metrics for the requested handover execution on the given source DU.
+  void aggregate_requested_handover_execution(gnb_du_id_t source_du_id);
 
-  /// \brief Aggregates the metrics for the successful handover execution.
-  void aggregate_successful_handover_execution();
+  /// \brief Aggregates the metrics for the successful handover execution on the given source DU.
+  void aggregate_successful_handover_execution(gnb_du_id_t source_du_id);
 
   mobility_management_metrics request_metrics_report() const;
 

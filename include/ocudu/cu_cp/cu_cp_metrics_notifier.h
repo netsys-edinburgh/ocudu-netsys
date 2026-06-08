@@ -62,7 +62,8 @@ struct cu_cp_metrics_report {
     gnb_du_id_t            id;
     std::vector<cell_info> cells;
 
-    rrc_du_metrics rrc_metrics;
+    rrc_du_metrics                rrc_metrics;
+    du_handover_execution_metrics ho_metrics;
   };
 
   std::vector<ue_info>              ues;
@@ -82,8 +83,7 @@ public:
   virtual void notify_metrics_report_request(const cu_cp_metrics_report& report) = 0;
 };
 
-inline std::string format_rrc_metrics(const std::vector<cu_cp_metrics_report::du_info>& report,
-                                      const mobility_management_metrics&                mobility_metrics)
+inline std::string format_rrc_metrics(const std::vector<cu_cp_metrics_report::du_info>& report)
 {
   fmt::memory_buffer buffer;
 
@@ -198,13 +198,13 @@ inline std::string format_rrc_metrics(const std::vector<cu_cp_metrics_report::du
     }
     fmt::format_to(std::back_inserter(buffer), " ]");
 
+    fmt::format_to(std::back_inserter(buffer),
+                   " nof_handover_executions_requested={} nof_successful_handover_executions={}",
+                   du_info.ho_metrics.nof_handover_executions_requested,
+                   du_info.ho_metrics.nof_successful_handover_executions);
+
     fmt::format_to(std::back_inserter(buffer), " ],");
   }
-
-  fmt::format_to(std::back_inserter(buffer),
-                 " nof_handover_executions_requested={} nof_successful_handover_executions={}",
-                 mobility_metrics.nof_handover_executions_requested,
-                 mobility_metrics.nof_successful_handover_executions);
 
   return to_c_str(buffer);
 }
