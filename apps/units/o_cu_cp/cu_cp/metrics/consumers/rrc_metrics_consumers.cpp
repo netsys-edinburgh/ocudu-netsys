@@ -7,15 +7,14 @@
 
 using namespace ocudu;
 
-void rrc_metrics_consumer_log::handle_metric(const std::vector<cu_cp_metrics_report::du_info>& report,
-                                             const mobility_management_metrics&                mobility_metrics)
+void rrc_metrics_consumer_log::handle_metric(const std::vector<cu_cp_metrics_report::du_info>& report)
 {
   if (report.empty()) {
     return;
   }
 
   fmt::memory_buffer buffer;
-  fmt::format_to(std::back_inserter(buffer), "CU-CP RRC metrics: {}", format_rrc_metrics(report, mobility_metrics));
+  fmt::format_to(std::back_inserter(buffer), "CU-CP RRC metrics: {}", format_rrc_metrics(report));
 
   log_chan("{}", to_c_str(buffer));
   buffer.clear();

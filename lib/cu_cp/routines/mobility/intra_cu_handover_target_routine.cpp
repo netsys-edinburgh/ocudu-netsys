@@ -56,7 +56,12 @@ void intra_cu_handover_target_routine::operator()(coro_context<async_task<void>>
     CORO_EARLY_RETURN();
   }
   // Notify mobility manager about successful handover execution.
-  mobility_mng.get_metrics_handler().aggregate_successful_handover_execution();
+  {
+    auto* src_ue = ue_mng.find_du_ue(request.source_ue_index);
+    if (src_ue != nullptr) {
+      mobility_mng.get_metrics_handler().aggregate_successful_handover_execution(src_ue->get_du_id());
+    }
+  }
 
   {
     // Transfer old UE context (NGAP, E1AP, location manager) to new UE context and remove old UE context.

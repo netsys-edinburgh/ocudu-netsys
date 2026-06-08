@@ -69,6 +69,12 @@ void conditional_handover_target_routine::operator()(coro_context<async_task<voi
                request.source_ue_index,
                name());
 
+  // Capture source DU ID before context push removes the source UE mapping.
+  {
+    auto* src_ue = ue_mng.find_du_ue(request.source_ue_index);
+    source_du_id = (src_ue != nullptr) ? src_ue->get_du_id() : gnb_du_id_t::invalid;
+  }
+
   // Transfer NGAP/E1AP UE context from source to target.
   cu_cp_handler.handle_handover_ue_context_push(request.source_ue_index, request.target_ue_index);
 
@@ -111,7 +117,9 @@ void conditional_handover_target_routine::operator()(coro_context<async_task<voi
     target_ue->get_cho_context().reset();
   }
 
-  mobility_mng.get_metrics_handler().aggregate_successful_handover_execution();
+  if (source_du_id != gnb_du_id_t::invalid) {
+    mobility_mng.get_metrics_handler().aggregate_successful_handover_execution(source_du_id);
+  }
 
   logger.info(
       "target_ue={} source_ue={}: CHO inter-DU completion finalized", request.target_ue_index, request.source_ue_index);

@@ -91,6 +91,8 @@ TEST(metrics_handler_test, get_periodic_metrics_report_while_session_is_active)
   rrc_metrics.attempted_rrc_connection_resumes_followed_by_rrc_setup.increase(resume_cause);
   metrics_hdlr.next_metrics.dus.emplace_back(
       cu_cp_metrics_report::du_info{int_to_gnb_du_id(0), {cell_info}, rrc_metrics});
+  metrics_hdlr.next_metrics.dus[0].ho_metrics.nof_handover_executions_requested  = 2;
+  metrics_hdlr.next_metrics.dus[0].ho_metrics.nof_successful_handover_executions = 1;
 
   ngap_cause_t          cause{ngap_cause_radio_network_t::multiple_pdu_session_id_instances};
   pdu_session_metrics_t pdu_session_metrics{2, 1, {}};
@@ -103,8 +105,8 @@ TEST(metrics_handler_test, get_periodic_metrics_report_while_session_is_active)
       ngap_info{"open5gs-amf0", true, {plmn_identity::test_value()}, next_ngap_metrics});
   metrics_hdlr.next_metrics.ngaps.emplace_back(ngap_info{"na", false, {plmn_identity::test_value()}, {}});
 
-  metrics_hdlr.next_metrics.mobility.nof_handover_executions_requested    = 2;
-  metrics_hdlr.next_metrics.mobility.nof_successful_handover_executions   = 1;
+  metrics_hdlr.next_metrics.mobility.per_du_executions[int_to_gnb_du_id(0)].nof_handover_executions_requested  = 2;
+  metrics_hdlr.next_metrics.mobility.per_du_executions[int_to_gnb_du_id(0)].nof_successful_handover_executions = 1;
   metrics_hdlr.next_metrics.mobility.nof_handover_preparations_requested  = 2;
   metrics_hdlr.next_metrics.mobility.nof_successful_handover_preparations = 1;
 
@@ -150,7 +152,7 @@ TEST(metrics_handler_test, get_periodic_metrics_report_while_session_is_active)
       "[ amf_name=na connected=false supported_plmns=[ 00101, ], "
       "nof_handover_preparations_requested=2 nof_successful_handover_preparations=1";
 
-  std::string rrc_out_str = format_rrc_metrics(metrics_hdlr.next_metrics.dus, metrics_hdlr.next_metrics.mobility);
+  std::string rrc_out_str = format_rrc_metrics(metrics_hdlr.next_metrics.dus);
   std::string rrc_exp_str =
       "[ gnb_du_id=0 mean_nof_rrc_connections=2 max_nof_rrc_connections=4 mean_nof_inactive_rrc_connections=3 "
       "max_nof_inactive_rrc_connections=6 "
@@ -169,8 +171,8 @@ TEST(metrics_handler_test, get_periodic_metrics_report_while_session_is_active)
       "rrc_connection_resumes_followed_by_network_release=[ emergency=0 high_prio_access=0 mt_access=1 mo_sig=0 "
       "mo_data=0 mo_voice_call=0 mo_video_call=0 mo_sms=0 mps_prio_access=0 mcs_prio_access=0 unknown=0 ] "
       "attempted_rrc_connection_resumes_followed_by_rrc_setup=[ emergency=0 high_prio_access=0 mt_access=1 mo_sig=0 "
-      "mo_data=0 mo_voice_call=0 mo_video_call=0 mo_sms=0 mps_prio_access=0 mcs_prio_access=0 unknown=0 ] ], "
-      "nof_handover_executions_requested=2 nof_successful_handover_executions=1";
+      "mo_data=0 mo_voice_call=0 mo_video_call=0 mo_sms=0 mps_prio_access=0 mcs_prio_access=0 unknown=0 ] "
+      "nof_handover_executions_requested=2 nof_successful_handover_executions=1 ],";
 
   for (unsigned i = 0; i != period.count(); ++i) {
     ASSERT_FALSE(metrics_notifier.last_metrics_report.has_value());
@@ -240,8 +242,8 @@ TEST(metrics_handler_test, get_periodic_metrics_report_while_session_is_active)
   ASSERT_FALSE(metrics_notifier.last_metrics_report->ngaps[1].connected);
   ASSERT_EQ(metrics_notifier.last_metrics_report->ngaps[1].supported_plmns.size(), 1);
   ASSERT_EQ(metrics_notifier.last_metrics_report->ngaps[1].supported_plmns[0], plmn_identity::test_value());
-  ASSERT_EQ(metrics_notifier.last_metrics_report->mobility.nof_handover_executions_requested, 2);
-  ASSERT_EQ(metrics_notifier.last_metrics_report->mobility.nof_successful_handover_executions, 1);
+  ASSERT_EQ(metrics_notifier.last_metrics_report->dus[0].ho_metrics.nof_handover_executions_requested, 2);
+  ASSERT_EQ(metrics_notifier.last_metrics_report->dus[0].ho_metrics.nof_successful_handover_executions, 1);
   ASSERT_EQ(metrics_notifier.last_metrics_report->mobility.nof_handover_preparations_requested, 2);
   ASSERT_EQ(metrics_notifier.last_metrics_report->mobility.nof_successful_handover_preparations, 1);
 

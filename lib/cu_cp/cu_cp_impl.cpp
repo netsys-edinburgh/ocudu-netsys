@@ -699,7 +699,12 @@ void cu_cp_impl::handle_cho_reconfiguration_sent(const cu_cp_cho_target_request&
 
   cu_cp_ue* ue = ue_mng.find_du_ue(request.target_ue_index);
 
-  mobility_mng.get_metrics_handler().aggregate_requested_handover_execution();
+  {
+    auto* src_ue = ue_mng.find_du_ue(request.source_ue_index);
+    if (src_ue != nullptr) {
+      mobility_mng.get_metrics_handler().aggregate_requested_handover_execution(src_ue->get_du_id());
+    }
+  }
 
   // Schedule conditional_handover_target_routine on the target UE's task scheduler.
   ue->get_task_sched().schedule_async_task(launch_async<conditional_handover_target_routine>(

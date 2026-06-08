@@ -15,7 +15,6 @@ namespace ocudu {
 
 struct cu_cp_rrc_metrics_json {
   std::vector<cu_cp_metrics_report::du_info> dus;
-  mobility_management_metrics                mobility;
 };
 
 struct cu_cp_ngap_metrics_json {
@@ -99,6 +98,10 @@ void to_json(nlohmann::json& json, const ocudu::cu_cp_metrics_report::du_info& m
   json["gnb_du_id"] = metrics.id;
   json["cells"]     = metrics.cells;
 
+  nlohmann::json& ho_exec                           = json["handover_execution"];
+  ho_exec["nof_handover_executions_requested"]      = metrics.ho_metrics.nof_handover_executions_requested;
+  ho_exec["nof_successful_handover_executions"]     = metrics.ho_metrics.nof_successful_handover_executions;
+
   nlohmann::json& rrc_connection                      = json["rrc_connection_number"];
   rrc_connection["mean_nof_rrc_connections"]          = metrics.rrc_metrics.mean_nof_rrc_connections;
   rrc_connection["max_nof_rrc_connections"]           = metrics.rrc_metrics.max_nof_rrc_connections;
@@ -133,9 +136,7 @@ void to_json(nlohmann::json& json, const ocudu::cu_cp_metrics_report::du_info& m
 void to_json(nlohmann::json& json, const cu_cp_rrc_metrics_json& metrics)
 {
   // RRC-DU metrics.
-  json["du"]                                 = metrics.dus;
-  json["nof_handover_executions_requested"]  = metrics.mobility.nof_handover_executions_requested;
-  json["nof_successful_handover_executions"] = metrics.mobility.nof_successful_handover_executions;
+  json["du"] = metrics.dus;
 }
 
 void to_json(nlohmann::json& json, const cu_cp_metrics_report::ue_info& ue)
@@ -152,7 +153,7 @@ void to_json(nlohmann::json& json, const cu_cp_metrics_report::ue_info& ue)
 
 nlohmann::json ocudu::app_helpers::json_generators::generate(const cu_cp_metrics_report& report)
 {
-  cu_cp_rrc_metrics_json  rrc_metrics  = {report.dus, report.mobility};
+  cu_cp_rrc_metrics_json  rrc_metrics  = {report.dus};
   cu_cp_ngap_metrics_json ngap_metrics = {report.ngaps, report.mobility};
 
   nlohmann::json json;
@@ -164,12 +165,6 @@ nlohmann::json ocudu::app_helpers::json_generators::generate(const cu_cp_metrics
   cu_cp_json["ngaps"] = ngap_metrics;
   cu_cp_json["rrcs"]  = rrc_metrics;
   cu_cp_json["ues"]   = report.ues;
-
-  nlohmann::json& ho_json                           = cu_cp_json["handover_kpis"];
-  ho_json["nof_handover_preparations_requested"]    = report.mobility.nof_handover_preparations_requested;
-  ho_json["nof_successful_handover_preparations"]   = report.mobility.nof_successful_handover_preparations;
-  ho_json["nof_handover_executions_requested"]      = report.mobility.nof_handover_executions_requested;
-  ho_json["nof_successful_handover_executions"]     = report.mobility.nof_successful_handover_executions;
 
   // UE measurement reports.
   if (!report.ue_measurements.empty()) {

@@ -388,8 +388,8 @@ TEST_F(cu_cp_inter_du_handover_test, when_ho_succeeds_then_source_ue_is_removed)
 {
   // Check that the metrics report doesn't contain a requested/successful handover execution.
   auto report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
-  ASSERT_EQ(report.mobility.nof_handover_executions_requested, 0U);
-  ASSERT_EQ(report.mobility.nof_successful_handover_executions, 0U);
+  ASSERT_EQ(report.dus[0].ho_metrics.nof_handover_executions_requested, 0U);
+  ASSERT_EQ(report.dus[0].ho_metrics.nof_successful_handover_executions, 0U);
 
   // Inject Measurement Report and await F1AP UE Context Setup Request.
   ASSERT_TRUE(send_rrc_measurement_report_and_await_ue_context_setup_request());
@@ -402,7 +402,7 @@ TEST_F(cu_cp_inter_du_handover_test, when_ho_succeeds_then_source_ue_is_removed)
 
   // Check that the metrics report contains a requested handover execution.
   report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
-  ASSERT_EQ(report.mobility.nof_handover_executions_requested, 1U);
+  ASSERT_EQ(report.dus[0].ho_metrics.nof_handover_executions_requested, 1U);
 
   // Inject RRC Reconfiguration Complete and await Bearer Context Modification Request.
   ASSERT_TRUE(send_rrc_reconfiguration_complete_and_await_bearer_context_modification_request());
@@ -418,7 +418,7 @@ TEST_F(cu_cp_inter_du_handover_test, when_ho_succeeds_then_source_ue_is_removed)
 
   // Check that the metrics report contains a successful handover execution.
   report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
-  ASSERT_EQ(report.mobility.nof_successful_handover_executions, 1U);
+  ASSERT_EQ(report.dus[0].ho_metrics.nof_successful_handover_executions, 1U);
 
   // STATUS: UE should be removed from source DU.
   ASSERT_EQ(report.ues.size(), 1) << "UE should be removed";
@@ -428,8 +428,8 @@ TEST_F(cu_cp_inter_du_handover_test, when_manually_triggered_ho_succeeds_then_so
 {
   // Check that the metrics report doesn't contain a requested/successful handover execution.
   auto report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
-  ASSERT_EQ(report.mobility.nof_handover_executions_requested, 0U);
-  ASSERT_EQ(report.mobility.nof_successful_handover_executions, 0U);
+  ASSERT_EQ(report.dus[0].ho_metrics.nof_handover_executions_requested, 0U);
+  ASSERT_EQ(report.dus[0].ho_metrics.nof_successful_handover_executions, 0U);
 
   // Trigger handover manually and await UE Context Setup Request.
   ASSERT_TRUE(trigger_handover_manually_and_await_ue_context_setup_request());
@@ -442,7 +442,7 @@ TEST_F(cu_cp_inter_du_handover_test, when_manually_triggered_ho_succeeds_then_so
   // Check that the metrics report contains a requested handover execution.
   report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
 
-  ASSERT_EQ(report.mobility.nof_handover_executions_requested, 1U);
+  ASSERT_EQ(report.dus[0].ho_metrics.nof_handover_executions_requested, 1U);
 
   // Inject RRC Reconfiguration Complete and await Bearer Context Modification Request.
   ASSERT_TRUE(send_rrc_reconfiguration_complete_and_await_bearer_context_modification_request());
@@ -458,7 +458,7 @@ TEST_F(cu_cp_inter_du_handover_test, when_manually_triggered_ho_succeeds_then_so
 
   // Check that the metrics report contains a successful handover execution.
   report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
-  ASSERT_EQ(report.mobility.nof_successful_handover_executions, 1U);
+  ASSERT_EQ(report.dus[0].ho_metrics.nof_successful_handover_executions, 1U);
 
   // STATUS: UE should be removed from source DU.
   ASSERT_EQ(report.ues.size(), 1) << "UE should be removed";
@@ -468,8 +468,8 @@ TEST_F(cu_cp_inter_du_handover_test, when_controller_triggered_ho_succeeds_then_
 {
   // Check that the metrics report doesn't contain a requested/successful handover execution.
   auto report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
-  ASSERT_EQ(report.mobility.nof_handover_executions_requested, 0U);
-  ASSERT_EQ(report.mobility.nof_successful_handover_executions, 0U);
+  ASSERT_EQ(report.dus[0].ho_metrics.nof_handover_executions_requested, 0U);
+  ASSERT_EQ(report.dus[0].ho_metrics.nof_successful_handover_executions, 0U);
 
   // Trigger handover manually and await UE Context Setup Request.
   ASSERT_TRUE(trigger_handover_via_controller_and_await_ue_context_setup_request());
@@ -482,7 +482,7 @@ TEST_F(cu_cp_inter_du_handover_test, when_controller_triggered_ho_succeeds_then_
   // Check that the metrics report contains a requested handover execution.
   report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
 
-  ASSERT_EQ(report.mobility.nof_handover_executions_requested, 1U);
+  ASSERT_EQ(report.dus[0].ho_metrics.nof_handover_executions_requested, 1U);
 
   // Inject RRC Reconfiguration Complete and await Bearer Context Modification Request.
   ASSERT_TRUE(send_rrc_reconfiguration_complete_and_await_bearer_context_modification_request());
@@ -498,7 +498,7 @@ TEST_F(cu_cp_inter_du_handover_test, when_controller_triggered_ho_succeeds_then_
 
   // Check that the metrics report contains a successful handover execution.
   report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
-  ASSERT_EQ(report.mobility.nof_successful_handover_executions, 1U);
+  ASSERT_EQ(report.dus[0].ho_metrics.nof_successful_handover_executions, 1U);
 
   // STATUS: UE should be removed from source DU.
   ASSERT_EQ(report.ues.size(), 1) << "UE should be removed";
@@ -590,8 +590,8 @@ TEST_F(cu_cp_inter_du_handover_test, when_ho_succeeds_then_target_ue_is_connecte
 {
   // Check that the metrics report doesn't contain a requested/successful handover execution.
   auto report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
-  ASSERT_EQ(report.mobility.nof_handover_executions_requested, 0U);
-  ASSERT_EQ(report.mobility.nof_successful_handover_executions, 0U);
+  ASSERT_EQ(report.dus[0].ho_metrics.nof_handover_executions_requested, 0U);
+  ASSERT_EQ(report.dus[0].ho_metrics.nof_successful_handover_executions, 0U);
 
   // Inject Measurement Report and await F1AP UE Context Setup Request.
   ASSERT_TRUE(send_rrc_measurement_report_and_await_ue_context_setup_request());
@@ -604,7 +604,7 @@ TEST_F(cu_cp_inter_du_handover_test, when_ho_succeeds_then_target_ue_is_connecte
 
   // Check that the metrics report contains a requested handover execution.
   report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
-  ASSERT_EQ(report.mobility.nof_handover_executions_requested, 1U);
+  ASSERT_EQ(report.dus[0].ho_metrics.nof_handover_executions_requested, 1U);
 
   // Inject RRC Reconfiguration Complete and await Bearer Context Modification Request.
   ASSERT_TRUE(send_rrc_reconfiguration_complete_and_await_bearer_context_modification_request());
@@ -620,7 +620,7 @@ TEST_F(cu_cp_inter_du_handover_test, when_ho_succeeds_then_target_ue_is_connecte
 
   // Check that the metrics report contains a successful handover execution.
   report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
-  ASSERT_EQ(report.mobility.nof_successful_handover_executions, 1U);
+  ASSERT_EQ(report.dus[0].ho_metrics.nof_successful_handover_executions, 1U);
 
   // STATUS: UE should be removed from source DU.
   ASSERT_EQ(report.ues.size(), 1) << "UE should be removed";

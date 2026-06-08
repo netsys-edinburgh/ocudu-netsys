@@ -218,7 +218,7 @@ void intra_cu_handover_routine::operator()(coro_context<async_task<cu_cp_intra_c
       }
 
       // Notify mobility manager about requested handover execution.
-      mobility_mng.get_metrics_handler().aggregate_requested_handover_execution();
+      mobility_mng.get_metrics_handler().aggregate_requested_handover_execution(source_ue->get_du_id());
     } else {
       // Get the packed RRC Reconfiguration for this CHO candidate.
       rrc_reconfig_args.is_cho_preparation = true;

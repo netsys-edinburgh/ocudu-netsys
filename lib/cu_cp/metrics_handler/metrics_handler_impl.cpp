@@ -83,6 +83,13 @@ cu_cp_metrics_report metrics_handler_impl::create_report() const
   report.dus      = du_handler.handle_du_metrics_report_request();
   report.ngaps    = ngap_handler.handle_ngap_metrics_report_request();
   report.mobility = mobility_handler.handle_mobility_metrics_report_request();
+
+  for (auto& du : report.dus) {
+    auto it = report.mobility.per_du_executions.find(du.id);
+    if (it != report.mobility.per_du_executions.end()) {
+      du.ho_metrics = it->second;
+    }
+  }
   if (meas_handler != nullptr) {
     report.ue_measurements = meas_handler->drain_ue_measurements();
   }
