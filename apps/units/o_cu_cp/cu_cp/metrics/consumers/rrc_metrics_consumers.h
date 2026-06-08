@@ -19,8 +19,7 @@ public:
   }
 
   /// Handle RRC metrics.
-  void handle_metric(const std::vector<cu_cp_metrics_report::du_info>& report,
-                     const mobility_management_metrics&                mobility_metrics);
+  void handle_metric(const std::vector<cu_cp_metrics_report::du_info>& report);
 
 private:
   ocudulog::log_channel& log_chan;

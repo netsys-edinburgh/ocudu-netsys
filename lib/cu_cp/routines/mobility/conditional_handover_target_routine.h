@@ -45,7 +45,8 @@ private:
   void schedule_source_release_on_source_task_sched(cu_cp_ue_index_t source_ue_index);
 
   const cu_cp_cho_target_request         request;
-  cu_cp_ue*                              target_ue = nullptr;
+  cu_cp_ue*                              target_ue    = nullptr;
+  gnb_du_id_t                            source_du_id = gnb_du_id_t::invalid;
   ue_manager&                            ue_mng;
   du_processor_repository&               du_db;
   cu_up_processor_repository&            cu_up_db;

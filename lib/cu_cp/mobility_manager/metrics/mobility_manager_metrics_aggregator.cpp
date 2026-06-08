@@ -17,16 +17,14 @@ void mobility_manager_metrics_aggregator::aggregate_successful_handover_preparat
   ++aggregated_mobility_manager_metrics.nof_successful_handover_preparations;
 }
 
-/// \brief Aggregates the metrics for the requested handover execution.
-void mobility_manager_metrics_aggregator::aggregate_requested_handover_execution()
+void mobility_manager_metrics_aggregator::aggregate_requested_handover_execution(gnb_du_id_t source_du_id)
 {
-  ++aggregated_mobility_manager_metrics.nof_handover_executions_requested;
+  ++aggregated_mobility_manager_metrics.per_du_executions[source_du_id].nof_handover_executions_requested;
 }
 
-/// \brief Aggregates the metrics for the successful handover execution.
-void mobility_manager_metrics_aggregator::aggregate_successful_handover_execution()
+void mobility_manager_metrics_aggregator::aggregate_successful_handover_execution(gnb_du_id_t source_du_id)
 {
-  ++aggregated_mobility_manager_metrics.nof_successful_handover_executions;
+  ++aggregated_mobility_manager_metrics.per_du_executions[source_du_id].nof_successful_handover_executions;
 }
 
 mobility_management_metrics mobility_manager_metrics_aggregator::request_metrics_report() const
