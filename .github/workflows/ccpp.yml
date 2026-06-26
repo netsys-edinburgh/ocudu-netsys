@@ -14,11 +14,20 @@ jobs:
       matrix:
         os: [ubuntu-24.04]
         compiler: [gcc]
+    env:
+      CCACHE_MAXSIZE: 1G
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
           token: ${{ secrets.CI_TOKEN != '' && secrets.CI_TOKEN || github.token }}
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ccache
+          key: ccache-${{ runner.os }}-${{ matrix.compiler }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ matrix.compiler }}-
       - name: Install Dependencies
         run: |
           sudo docker/scripts/install_dependencies.sh

@@ -16,6 +16,7 @@ jobs:
     if: ${{ vars.SKIP_DOCKER_JOB != 'true' }}
     runs-on: ubuntu-latest
     permissions:
+      actions: write
       contents: read
       packages: write
     strategy:
@@ -107,3 +108,5 @@ jobs:
             DPDK_VERSION=${{ matrix.DPDK_VERSION }}
             MARCH=${{ matrix.MARCH }}
             ENABLE_UHD=Off
+          cache-from: type=gha,scope=${{ matrix.REPOSITORY }}-${{ matrix.TAGNAME }}-${{ matrix.PLATFORM }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.REPOSITORY }}-${{ matrix.TAGNAME }}-${{ matrix.PLATFORM }}
