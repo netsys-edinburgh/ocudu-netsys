@@ -125,6 +125,8 @@ RUN if [ "$ENABLE_UHD" = "On" ] && [ -n "$UHD_VERSION" ]; then \
 #########################
 FROM builder-base-dpdk AS builder-dpdk
 
+COPY docker/patches/ /src/docker/patches/
+
 ARG DPDK_VERSION
 ARG MARCH
 ARG NUM_JOBS
