@@ -1,0 +1,16 @@
+diff --git a/drivers/bus/pci/linux/pci_vfio.c b/drivers/bus/pci/linux/pci_vfio.c
+index 242f567ed781..691f53a22382 100644
+--- a/drivers/bus/pci/linux/pci_vfio.c
++++ b/drivers/bus/pci/linux/pci_vfio.c
+@@ -221,3 +221,3 @@ pci_vfio_setup_interrupts(struct rte_pci_device *dev, int vfio_dev_fd)
+-		/* if this vector cannot be used with eventfd, fail if we explicitly
+-		 * specified interrupt type, otherwise continue */
+-		if ((irq.flags & VFIO_IRQ_INFO_EVENTFD) == 0) {
++		/* if this vector has no IRQs or cannot be used with eventfd,
++		 * fail if we explicitly specified interrupt type, otherwise continue */
++		if (irq.count == 0 || (irq.flags & VFIO_IRQ_INFO_EVENTFD) == 0) {
+@@ -225 +225,3 @@ pci_vfio_setup_interrupts(struct rte_pci_device *dev, int vfio_dev_fd)
+-				PCI_LOG(ERR, "Interrupt vector does not support eventfd!");
++				PCI_LOG(ERR, "Interrupt mode %s is not supported!",
++					intr_mode == RTE_INTR_MODE_MSIX ? "MSI-X" :
++					intr_mode == RTE_INTR_MODE_MSI ? "MSI" : "legacy");
