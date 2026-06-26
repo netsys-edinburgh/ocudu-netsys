@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
 # SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
@@ -132,7 +133,8 @@ ARG MARCH
 ARG NUM_JOBS
 ARG TARGETARCH
 
-RUN DPDK_PLATFORM=$(case "${MARCH}" in *neoverse-n1*) echo n1sdp ;; *) echo "${MARCH}" ;; esac) && \
+RUN --mount=type=cache,target=/root/.cache/ccache \
+    DPDK_PLATFORM=$(case "${MARCH}" in *neoverse-n1*) echo n1sdp ;; *) echo "${MARCH}" ;; esac) && \
     DPDK_ARCH=$([ "${TARGETARCH}" = "arm64" ] && echo "-Dplatform=${DPDK_PLATFORM} -Dmax_numa_nodes=1" || echo "-Dcpu_instruction_set=${MARCH}") && \
     /src/docker/scripts/build_dpdk.sh "${DPDK_VERSION}" "${DPDK_ARCH}" ${NUM_JOBS}
 
@@ -166,7 +168,8 @@ ENV DPDK_DIR=/opt/dpdk/${DPDK_VERSION}
 # Full source added last: source changes only invalidate the compile step below
 ADD . /src
 
-RUN if [ -z "$NUM_JOBS" ]; then NUM_JOBS=$(nproc); fi \
+RUN --mount=type=cache,target=/src/ccache \
+    if [ -z "$NUM_JOBS" ]; then NUM_JOBS=$(nproc); fi \
     && ARCH_FLAG=$([ "${TARGETARCH}" = "arm64" ] && echo "-DMCPU=${MARCH}" || echo "-DMARCH=${MARCH}") \
     && mkdir -p /opt/ocudu/bin \
     && case "${COMPONENT}" in \

@@ -16,7 +16,7 @@ install_dpdk_dependencies_debian_ubuntu() {
 
     local -a build_pkgs=(
         curl apt-transport-https ca-certificates xz-utils
-        python3-pip ninja-build g++ build-essential pkg-config libnuma-dev libfdt-dev pciutils patch
+        python3-pip ninja-build g++ build-essential pkg-config libnuma-dev libfdt-dev pciutils patch ccache
         libibverbs-dev
     )
     local -a extra_pkgs=(
@@ -60,7 +60,7 @@ install_dpdk_dependencies_fedora() {
 
     local -a build_pkgs=(
         curl ca-certificates xz
-        python3-pip ninja-build gcc gcc-c++ make pkgconf-pkg-config numactl-devel libfdt-devel pciutils patch
+        python3-pip ninja-build gcc gcc-c++ make pkgconf-pkg-config numactl-devel libfdt-devel pciutils patch ccache
         rdma-core-devel
     )
     local -a extra_pkgs=(
@@ -103,7 +103,7 @@ install_dpdk_dependencies_arch() {
 
     local -a build_pkgs=(
         curl ca-certificates xz
-        python-pip ninja base-devel pkgconf numactl dtc pciutils patch
+        python-pip ninja base-devel pkgconf numactl dtc pciutils patch ccache
         rdma-core
     )
     local -a extra_pkgs=(

@@ -25,7 +25,7 @@ install_dependencies_debian_ubuntu() {
     local ARCH=""
 
     local -a build_pkgs=(
-        cmake make gcc g++ pkg-config
+        cmake make gcc g++ pkg-config ccache
         libfftw3-dev libmbedtls-dev libsctp-dev libyaml-cpp-dev libgtest-dev
     )
     local -a run_pkgs=(
@@ -100,7 +100,7 @@ install_dependencies_fedora() {
     local -a pkgs=()
 
     local -a build_pkgs=(
-        cmake make libatomic fftw-devel lksctp-tools-devel yaml-cpp-devel mbedtls-devel gtest-devel
+        cmake ccache make libatomic fftw-devel lksctp-tools-devel yaml-cpp-devel mbedtls-devel gtest-devel
     )
     local -a run_pkgs=(
         fftw-libs-single lksctp-tools yaml-cpp mbedtls libcap
@@ -138,7 +138,7 @@ install_dependencies_arch() {
     local -a pkgs=()
 
     local -a build_pkgs=(
-        cmake fftw mbedtls yaml-cpp lksctp-tools gtest pkgconf
+        cmake ccache fftw mbedtls yaml-cpp lksctp-tools gtest pkgconf
     )
     local -a run_pkgs=(
         fftw mbedtls yaml-cpp lksctp-tools gtest libcap
@@ -178,7 +178,7 @@ install_dependencies_rhel() {
     # where GCC 11 is the default compiler. libatomic replaces gcc-toolset-12-libatomic-devel.
     # yaml-cpp-devel and mbedtls-devel come from EPEL (installed below).
     local -a build_pkgs=(
-        cmake fftw-devel lksctp-tools-devel
+        cmake ccache fftw-devel lksctp-tools-devel
         gcc gcc-c++ libatomic
         yaml-cpp-devel mbedtls-devel
     )
