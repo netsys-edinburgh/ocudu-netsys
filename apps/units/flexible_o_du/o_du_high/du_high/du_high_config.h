@@ -143,6 +143,16 @@ struct du_high_unit_ssb_config {
   int ssb_block_power = -16;
   /// PSS EPRE to SSS EPRE for SSB, as per TS 38.213, Section 4.1.
   ssb_pss_to_sss_epre pss_to_sss_epre = ssb_pss_to_sss_epre::dB_0;
+  /// \brief \c offsetToPointA, as per TS 38.211, Section 4.4.4.2. Values: {0,...,2199}.
+  ///
+  /// Together with \c k_ssb, it places the SSB within the carrier. If not set, the SSB position is derived from the
+  /// DL ARFCN. If set, \c k_ssb and \c coreset0_index must be set as well.
+  std::optional<unsigned> offset_to_point_a;
+  /// \brief \f$k_{SSB}\f$, as per TS 38.211, Section 7.4.3.1. Values: {0,...,23}.
+  ///
+  /// Together with \c offset_to_point_a, it places the SSB within the carrier. If not set, the SSB position is derived
+  /// from the DL ARFCN. If set, \c offset_to_point_a and \c coreset0_index must be set as well.
+  std::optional<unsigned> k_ssb;
 };
 
 /// Common uplink parameters of a cell.

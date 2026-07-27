@@ -133,6 +133,12 @@ static YAML::Node build_du_high_ssb_section(const du_high_unit_ssb_config& confi
   node["ssb_period"]          = config.ssb_period_msec;
   node["ssb_block_power_dbm"] = config.ssb_block_power;
   node["pss_to_sss_epre_db"]  = config.pss_to_sss_epre == ssb_pss_to_sss_epre::dB_0 ? "0" : "3";
+  if (config.offset_to_point_a.has_value()) {
+    node["offset_to_point_a"] = config.offset_to_point_a.value();
+  }
+  if (config.k_ssb.has_value()) {
+    node["k_ssb"] = config.k_ssb.value();
+  }
 
   return node;
 }
