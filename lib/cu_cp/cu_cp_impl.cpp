@@ -1427,6 +1427,8 @@ void cu_cp_impl::handle_xnap_handover_success_received(cu_cp_ue_index_t         
   // guard timer on the paths above that bail out, leaving the CHO neither completed nor cancelled.
   ue->get_cho_context()->cho_execution_timer.stop();
 
+  mobility_mng.get_metrics_handler().aggregate_successful_handover_execution(ue->get_du_id());
+
   ue->get_task_sched().schedule_async_task(launch_async<inter_cu_conditional_handover_source_completion_routine>(
       source_ue_index, winner_cgi, ue_mng, cu_up_db, winner_xnap, &xnap_db, *this, logger));
 }
