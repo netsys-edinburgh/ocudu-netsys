@@ -1609,6 +1609,50 @@ static bool validate_cell_cg_config(const du_high_configured_grants& cg_cfg, uns
   return true;
 }
 
+/// Validates the SSB frequency position when the user pins it explicitly with offsetToPointA and k_SSB, rather than
+/// letting it be derived from the DL ARFCN.
+static bool validate_ssb_freq_position_unit_config(const du_high_unit_base_cell_config& config,
+                                                   nr_band                              band,
+                                                   unsigned                             nof_crbs,
+                                                   subcarrier_spacing                   ssb_scs)
+{
+  const du_high_unit_ssb_config& ssb_cfg = config.ssb_cfg;
+  if (not ssb_cfg.offset_to_point_a.has_value() and not ssb_cfg.k_ssb.has_value()) {
+    return true;
+  }
+  if (not ssb_cfg.offset_to_point_a.has_value() or not ssb_cfg.k_ssb.has_value()) {
+    fmt::print("offset_to_point_a and k_ssb must both be set in order to place the SSB explicitly.\n");
+    return false;
+  }
+  // The cell config builder only accepts an explicit SSB position if the CORESET#0 index is given as well.
+  if (not config.pdcch_cfg.common.coreset0_index.has_value()) {
+    fmt::print("coreset0_index must be set when the SSB position is given by offset_to_point_a and k_ssb.\n");
+    return false;
+  }
+
+  // The SSB must land on the synchronization raster, otherwise no UE would be able to find it.
+  const std::optional<arfcn_t> ssb_arfcn =
+      band_helper::get_ssb_arfcn(config.dl_f_ref_arfcn,
+                                 band,
+                                 nof_crbs,
+                                 config.common_scs,
+                                 ssb_scs,
+                                 static_cast<uint16_t>(ssb_cfg.offset_to_point_a.value()),
+                                 static_cast<uint8_t>(ssb_cfg.k_ssb.value()));
+  if (not ssb_arfcn.has_value()) {
+    fmt::print("offset_to_point_a={} and k_ssb={} do not place the SSB on the synchronization raster of band {}, for "
+               "DL ARFCN={} and cell bandwidth={}MHz.\n",
+               ssb_cfg.offset_to_point_a.value(),
+               ssb_cfg.k_ssb.value(),
+               fmt::underlying(band),
+               config.dl_f_ref_arfcn,
+               fmt::underlying(config.channel_bw_mhz));
+    return false;
+  }
+
+  return true;
+}
+
 /// Validates the given cell application configuration. Returns true on success, otherwise false.
 static bool validate_base_cell_unit_config(const du_high_unit_base_cell_config& config)
 {
@@ -1664,6 +1708,10 @@ static bool validate_base_cell_unit_config(const du_high_unit_base_cell_config& 
 
   const unsigned nof_crbs =
       band_helper::get_n_rbs_from_bw(config.channel_bw_mhz, config.common_scs, band_helper::get_freq_range(band));
+
+  if (!validate_ssb_freq_position_unit_config(config, band, nof_crbs, ssb_scs)) {
+    return false;
+  }
 
   const bool is_ntn_band = band_helper::is_ntn_band(band);
   if (config.ntn_cfg) {
