@@ -175,7 +175,7 @@ void conditional_handover_reconfiguration_routine::operator()(coro_context<async
     }
   }
 
-  mobility_mng.get_metrics_handler().aggregate_requested_handover_execution();
+  mobility_mng.get_metrics_handler().aggregate_requested_handover_execution(source_ue.get_du_id());
 
   logger.debug("ue={}: \"{}\" finished successfully", source_ue.get_ue_index(), name());
 

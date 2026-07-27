@@ -198,8 +198,7 @@ RUN --mount=type=cache,target=/src/ccache \
          cp /src/build/apps/gnb_split_7_2/gnb /opt/ocudu/bin/gnb_split_7_2; \
          cp /src/build/apps/du_split_8/odu    /opt/ocudu/bin/odu_split_8; \
          cp /src/build/apps/du_split_7_2/odu  /opt/ocudu/bin/odu_split_7_2; \
-       fi \
-    && rm -rf /src
+       fi
 
 ################################
 # Stage 2b: Build OCUDU lean   #

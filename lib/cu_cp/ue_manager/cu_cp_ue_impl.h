@@ -221,6 +221,12 @@ public:
   /// \brief Set the XN-C peer index of the UE.
   void set_xnc_peer_index(xnc_peer_index_t xnc_peer_idx) { ue_ctxt.xnc_peer_idx = xnc_peer_idx; }
 
+  /// \brief Get the masked IMEISV of the UE.
+  [[nodiscard]] std::optional<uint64_t> get_masked_imeisv() const { return ue_ctxt.masked_imeisv; }
+
+  /// \brief Set the masked IMEISV of the UE.
+  void set_masked_imeisv(std::optional<uint64_t> imeisv) { ue_ctxt.masked_imeisv = imeisv; }
+
   /// \brief Get the NGAP RRC UE notifier of the UE.
   ngap_rrc_ue_notifier& get_ngap_rrc_ue_notifier() override { return ngap_rrc_ue_ev_notifier; }
 

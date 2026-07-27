@@ -41,7 +41,7 @@ public:
     elapsed_completion_and_return_ns = {};
     slot                             = pdu.slot;
     tbs                              = units::bytes(data.front().get_buffer().size());
-    rnti                             = pdu.rnti;
+    rnti                             = to_value(pdu.rnti);
 
     OCUDU_PHY_PROBE4(pdsch_start, pdu.slot.sfn(), pdu.slot.slot_index(), pdu.rnti, tbs.value());
 
