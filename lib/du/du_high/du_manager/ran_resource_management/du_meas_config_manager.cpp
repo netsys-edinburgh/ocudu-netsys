@@ -120,8 +120,9 @@ meas_gap_config odu::create_meas_gap(subcarrier_spacing                 scs,
   const unsigned        smtc_duration_ms = smtc1.dur.to_number();
   const unsigned        slots_per_ms     = get_nof_slots_per_subframe(scs);
 
-  // Measurement Gap Repetition Period must be at least as long as the SMTC period and all UL occasion periods
-  // to ensure that one MGRP contains at least one SSB, SR and periodic CSI occasion we have to align it with.
+  // Measurement Gap Repetition Period must be at least as long as the SMTC period and the UL occasion periods that
+  // explicitly constrain it. Periodic SRS is still checked over LCM(MGRP, SRS period), but keeping it out of this
+  // minimum allows a shorter MGRP to use an alternate SMTC occurrence while preserving every SRS occasion.
   unsigned min_mgrp_ms = smtc_period_ms;
   for (const auto& occ : ul_occasions) {
     ocudu_assert(occ.period_slots > 0, "Periodic UL occasion must have a non-zero period");
@@ -129,8 +130,10 @@ meas_gap_config odu::create_meas_gap(subcarrier_spacing                 scs,
                  "Periodic UL occasion offset ({}) must be less than its period ({})",
                  occ.offset_slots,
                  occ.period_slots);
-    const unsigned occ_period_ms = (occ.period_slots + slots_per_ms - 1) / slots_per_ms;
-    min_mgrp_ms                  = std::max(min_mgrp_ms, occ_period_ms);
+    if (occ.constrain_mgrp) {
+      const unsigned occ_period_ms = (occ.period_slots + slots_per_ms - 1) / slots_per_ms;
+      min_mgrp_ms                  = std::max(min_mgrp_ms, occ_period_ms);
+    }
   }
 
   static constexpr std::array<meas_gap_repetition_period, 4> mgrp_candidates = {meas_gap_repetition_period::ms20,
@@ -239,7 +242,7 @@ du_meas_config_manager::du_meas_config_manager(span<const du_cell_config> cell_c
 {
 }
 
-// Collects SR and periodic-CSI occasions from the UE's PCell serving cell config.
+// Collects SR, periodic-CSI and periodic-SRS occasions from the UE's PCell serving cell config.
 static std::vector<periodic_uci_config> collect_ul_occasions(const ue_cell_config& pcell_ue_cfg)
 {
   std::vector<periodic_uci_config> out;
@@ -259,6 +262,17 @@ static std::vector<periodic_uci_config> collect_ul_occasions(const ue_cell_confi
           pucch_rep->report_type ==
               csi_report_config::periodic_or_semi_persistent_report_on_pucch::report_type_t::periodic) {
         out.push_back({csi_report_periodicity_to_uint(pucch_rep->report_slot_period), pucch_rep->report_slot_offset});
+      }
+    }
+  }
+
+  if (pcell_ue_cfg.serv_cell_cfg.ul_config.has_value() &&
+      pcell_ue_cfg.serv_cell_cfg.ul_config->init_ul_bwp.srs_cfg.has_value()) {
+    for (const auto& srs : pcell_ue_cfg.serv_cell_cfg.ul_config->init_ul_bwp.srs_cfg->srs_res_list) {
+      if (srs.res_type == srs_resource_type::periodic and srs.periodicity_and_offset.has_value()) {
+        out.push_back({static_cast<unsigned>(srs.periodicity_and_offset->period),
+                       srs.periodicity_and_offset->offset,
+                       false});
       }
     }
   }

@@ -359,7 +359,17 @@ INSTANTIATE_TEST_SUITE_P(
                          0,
                          smtc_duration::sf5,
                          {{40, 11}},
-                         meas_gap_config{19, meas_gap_length::ms6, meas_gap_repetition_period::ms20}}),
+                         meas_gap_config{19, meas_gap_length::ms6, meas_gap_repetition_period::ms20}},
+        // A 160 ms periodic SRS at slot offset 3 collides with gap@0. The SRS period does not force MGRP to 160 ms:
+        // collision checking spans LCM(40 ms, 160 ms), so gap@20 catches the alternate SMTC every 40 ms and preserves
+        // every SRS occasion.
+        collision_params{"periodic_srs_uses_alternate_smtc_without_raising_mgrp",
+                         subcarrier_spacing::kHz30,
+                         ssb_periodicity::ms20,
+                         0,
+                         smtc_duration::sf5,
+                         {{320, 3, false}},
+                         meas_gap_config{20, meas_gap_length::ms6, meas_gap_repetition_period::ms40}}),
     [](const ::testing::TestParamInfo<collision_params>& test_info) { return std::string{test_info.param.tag}; });
 
 // ---------- UE supported gap pattern restriction ----------

@@ -20,14 +20,19 @@ namespace ocudu::odu {
 
 struct ue_capability_summary;
 
-/// Single UL periodic resource occasion (SR or periodic CSI). Period and offset in PCell slots.
+/// Single UL periodic resource occasion (SR, periodic CSI or periodic SRS). Period and offset in PCell slots.
 struct periodic_uci_config {
   unsigned period_slots;
   unsigned offset_slots;
+  /// Whether this occasion's period should constrain the minimum measurement-gap repetition period.
+  ///
+  /// Periodic SRS is collision-checked but does not need to increase MGRP: the collision check covers the full
+  /// LCM(MGRP, SRS period), allowing a shorter gap period to use an alternate SMTC occurrence without blocking SRS.
+  bool constrain_mgrp = true;
 };
 
 /// Creates a measurement gap configuration based on the PCell SCS, the target SSB MTC, the gap patterns supported by
-/// the UE, and any periodic UL occasions (SR, periodic CSI) the gap should try to avoid.
+/// the UE, and any periodic UL occasions (SR, periodic CSI and periodic SRS) the gap should try to avoid.
 ///
 /// Only (MGL, MGRP) combinations that correspond to a gap pattern supported by the UE (TS 38.306 supportedGapPattern,
 /// TS 38.133 Table 9.1.2-1) are considered. The search prefers the shortest MGL that still encloses the SMTC window and
