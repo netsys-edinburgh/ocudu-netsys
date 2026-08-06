@@ -360,7 +360,7 @@ TEST_F(
 
 /// Test valid PDU Session Resource Setup Request.
 TEST_F(ngap_pdu_session_resource_setup_procedure_test,
-       when_valid_pdu_session_resource_setup_request_with_ipv4v6_session_type_received_then_pdu_session_setup_fails)
+       when_valid_pdu_session_resource_setup_request_with_ipv4v6_session_type_received_then_pdu_session_setup_succeeds)
 {
   // Test preamble.
   cu_cp_ue_index_t ue_index = this->start_procedure();
@@ -377,16 +377,19 @@ TEST_F(ngap_pdu_session_resource_setup_procedure_test,
       {{pdu_session_id, {pdu_session_type_t::ipv4v6, {{uint_to_qos_flow_id(1), 9}}}}});
   ngap->handle_message(pdu_session_resource_setup_request);
 
-  // Check that PDU Session Resource Setup Request was invalid.
-  ASSERT_TRUE(was_pdu_session_resource_setup_request_invalid());
+  // Check conversion in adapter.
+  ASSERT_TRUE(was_conversion_successful(
+      pdu_session_resource_setup_request,
+      pdu_session_id,
+      cu_cp_notifier.last_request.pdu_session_res_setup_items[pdu_session_id].pdu_session_type));
 
-  // Check that metrics contain the failed PDU session setup.
-  pdu_session_metrics_t expected_pdu_session_metrics = {1, 0, {}};
-  expected_pdu_session_metrics.nof_pdu_sessions_failed_to_setup.increase(cause_protocol_t::unspecified);
+  // Check that PDU Session Resource Setup Request was valid.
+  ASSERT_TRUE(was_pdu_session_resource_setup_request_valid());
 
+  // Check that metrics contain the successful PDU session setup.
   ASSERT_TRUE(check_metrics_report(
       "open5gs-amf0",
-      {{{slice_service_type{1}, slice_differentiator::create(0x0027db).value()}, expected_pdu_session_metrics}}));
+      {{{slice_service_type{1}, slice_differentiator::create(0x0027db).value()}, pdu_session_metrics_t{1, 1, {}}}}));
 }
 
 /// Test invalid PDU Session Resource Setup Request.

@@ -178,10 +178,10 @@ protected:
 
   std::string upf_addr_str;
 
-  void create_drb()
+  void create_drb(asn1::e1ap::pdu_session_type_e pdu_session_type = asn1::e1ap::pdu_session_type_e::ipv4)
   {
     // Generate BearerContextSetupRequest
-    e1ap_message asn1_bearer_context_setup_msg = generate_bearer_context_setup_request(9);
+    e1ap_message asn1_bearer_context_setup_msg = generate_bearer_context_setup_request(9, pdu_session_type);
 
     // Convert to common type
     e1ap_bearer_context_setup_request bearer_context_setup;
@@ -329,7 +329,7 @@ TEST_F(cu_up_test, dl_data_flow)
   EXPECT_TRUE(f1u_bearer.tx_discard_sdu_list.empty());
 }
 
-TEST_F(cu_up_test, ul_data_flow)
+TEST_F(cu_up_test, ipv4v6_ul_data_flow)
 {
   cu_up_config cfg = get_default_cu_up_config();
 
@@ -341,9 +341,9 @@ TEST_F(cu_up_test, ul_data_flow)
   cu_up_dependencies dependencies = get_default_cu_up_dependencies();
   init(cfg, std::move(dependencies));
 
-  create_drb();
+  create_drb(asn1::e1ap::pdu_session_type_e::ipv4v6);
 
-  // send message 1
+  // Send an IPv4 packet.
   const uint8_t t_pdu_arr1[] = {
       0x80, 0x00, 0x00, 0x45, 0x00, 0x00, 0x54, 0xe8, 0x83, 0x40, 0x00, 0x40, 0x01, 0xfa, 0x00, 0xac, 0x10, 0x00,
       0x03, 0xac, 0x10, 0x00, 0x01, 0x08, 0x00, 0x2c, 0xbe, 0xb4, 0xa4, 0x00, 0x01, 0xd3, 0x45, 0x61, 0x63, 0x00,
@@ -357,13 +357,11 @@ TEST_F(cu_up_test, ul_data_flow)
 
   f1u_bearer.handle_pdu(std::move(nru_msg1));
 
-  // send message 2
-  const uint8_t t_pdu_arr2[] = {
-      0x80, 0x00, 0x01, 0x45, 0x00, 0x00, 0x54, 0xe8, 0x83, 0x40, 0x00, 0x40, 0x01, 0xfa, 0x00, 0xac, 0x10, 0x00,
-      0x03, 0xac, 0x10, 0x00, 0x01, 0x08, 0x00, 0x2c, 0xbe, 0xb4, 0xa4, 0x00, 0x01, 0xd3, 0x45, 0x61, 0x63, 0x00,
-      0x00, 0x00, 0x00, 0x1a, 0x20, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
-      0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,
-      0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37};
+  // Send an ICMPv6 echo request from 2001:db8::1 to 2001:db8::2 over the same PDU session and QoS flow.
+  const uint8_t       t_pdu_arr2[] = {0x80, 0x00, 0x01, 0x60, 0x00, 0x00, 0x00, 0x00, 0x08, 0x3a, 0x40, 0x20, 0x01,
+                                      0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                      0x01, 0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                      0x00, 0x00, 0x00, 0x02, 0x80, 0x00, 0x24, 0x46, 0x00, 0x01, 0x00, 0x01};
   span<const uint8_t> t_pdu_span2 = {t_pdu_arr2};
   byte_buffer         t_pdu_buf2  = byte_buffer::create(t_pdu_span2).value();
   nru_ul_message      nru_msg2    = {};
@@ -373,18 +371,17 @@ TEST_F(cu_up_test, ul_data_flow)
 
   std::array<uint8_t, 128> rx_buf;
 
-  uint16_t exp_len      = 100;
   uint16_t f1u_hdr_len  = 3;
   uint16_t gtpu_hdr_len = 16;
 
-  // receive message 1
+  // Receive the IPv4 packet.
   int ret = ::recv(upf_info.sock_fd, rx_buf.data(), rx_buf.size(), 0);
-  ASSERT_EQ(ret, exp_len);
+  ASSERT_EQ(ret, t_pdu_span1.size() - f1u_hdr_len + gtpu_hdr_len);
   EXPECT_TRUE(std::equal(t_pdu_span1.begin() + f1u_hdr_len, t_pdu_span1.end(), rx_buf.begin() + gtpu_hdr_len));
 
-  // receive message 2
+  // Receive the IPv6 packet.
   ret = ::recv(upf_info.sock_fd, rx_buf.data(), rx_buf.size(), 0);
-  ASSERT_EQ(ret, exp_len);
+  ASSERT_EQ(ret, t_pdu_span2.size() - f1u_hdr_len + gtpu_hdr_len);
   EXPECT_TRUE(std::equal(t_pdu_span2.begin() + f1u_hdr_len, t_pdu_span2.end(), rx_buf.begin() + gtpu_hdr_len));
 
   ::close(upf_info.sock_fd);

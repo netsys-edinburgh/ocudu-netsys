@@ -351,7 +351,9 @@ public:
   cu_up_e1_index_t e1_index;
 };
 
-inline e1ap_message generate_bearer_context_setup_request(unsigned cu_cp_ue_e1ap_id)
+inline e1ap_message generate_bearer_context_setup_request(
+    unsigned                       cu_cp_ue_e1ap_id,
+    asn1::e1ap::pdu_session_type_e pdu_session_type = asn1::e1ap::pdu_session_type_e::ipv4)
 {
   e1ap_message bearer_context_setup_request = {};
 
@@ -377,7 +379,7 @@ inline e1ap_message generate_bearer_context_setup_request(unsigned cu_cp_ue_e1ap
 
   asn1::e1ap::pdu_session_res_to_setup_item_s pdu_session_res_to_setup_item;
   pdu_session_res_to_setup_item.pdu_session_id   = 2;
-  pdu_session_res_to_setup_item.pdu_session_type = asn1::e1ap::pdu_session_type_e::ipv4;
+  pdu_session_res_to_setup_item.pdu_session_type = pdu_session_type;
   pdu_session_res_to_setup_item.snssai.sst.from_number(1);
   pdu_session_res_to_setup_item.security_ind.integrity_protection_ind =
       asn1::e1ap::integrity_protection_ind_e::not_needed;
