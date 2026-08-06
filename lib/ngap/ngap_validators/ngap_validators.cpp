@@ -69,20 +69,6 @@ ocudu::ocucp::verify_pdu_session_resource_setup_request(const ngap_pdu_session_r
     }
   }
 
-  // Check for unsupported PDU Session Types.
-  for (const auto& pdu_session_item : request.pdu_session_res_setup_items) {
-    if (pdu_session_item.pdu_session_type == pdu_session_type_t::ipv4v6) {
-      ue_logger.log_warning("Unsupported PDU Session Type: {}", pdu_session_item.pdu_session_type);
-      failed_psis.emplace(pdu_session_item.pdu_session_id);
-      // Add failed psi to response.
-      ngap_pdu_session_res_setup_failed_item failed_item;
-      failed_item.pdu_session_id              = pdu_session_item.pdu_session_id;
-      failed_item.unsuccessful_transfer.cause = cause_protocol_t::unspecified;
-      verification_outcome.response.pdu_session_res_failed_to_setup_items.emplace(pdu_session_item.pdu_session_id,
-                                                                                  failed_item);
-    }
-  }
-
   // Remove failed psis from psis.
   for (const auto& failed_psi : failed_psis) {
     psis.erase(failed_psi);
