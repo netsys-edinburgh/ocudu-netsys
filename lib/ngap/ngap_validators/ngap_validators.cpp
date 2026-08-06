@@ -3,7 +3,6 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ngap_validators.h"
-#include "ocudu/ran/cause/common.h"
 #include <unordered_set>
 
 using namespace ocudu;
@@ -31,20 +30,6 @@ ocudu::ocucp::verify_pdu_session_resource_setup_request(const ngap_pdu_session_r
         failed_item.unsuccessful_transfer.cause = ngap_cause_radio_network_t::multiple_pdu_session_id_instances;
         verification_outcome.response.pdu_session_res_failed_to_setup_items.emplace(psi, failed_item);
       }
-    }
-  }
-
-  // Check for unsupported PDU Session Types.
-  for (const auto& pdu_session_item : request.pdu_session_res_setup_items) {
-    if (pdu_session_item.pdu_session_type == pdu_session_type_t::ipv4v6) {
-      ue_logger.log_warning("Unsupported PDU Session Type: {}", pdu_session_item.pdu_session_type);
-      failed_psis.emplace(pdu_session_item.pdu_session_id);
-      // Add failed psi to response.
-      ngap_pdu_session_res_setup_failed_item failed_item;
-      failed_item.pdu_session_id              = pdu_session_item.pdu_session_id;
-      failed_item.unsuccessful_transfer.cause = cause_protocol_t::unspecified;
-      verification_outcome.response.pdu_session_res_failed_to_setup_items.emplace(pdu_session_item.pdu_session_id,
-                                                                                  failed_item);
     }
   }
 
