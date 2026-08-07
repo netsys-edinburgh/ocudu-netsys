@@ -1,6 +1,24 @@
 --- a/lib/cu_cp/cu_cp_impl.cpp
 +++ b/lib/cu_cp/cu_cp_impl.cpp
-@@ -884,6 +884,15 @@ cu_cp_impl::handle_new_initial_context_setup_request(const ngap_init_context_set
+@@ -742,6 +742,17 @@ void cu_cp_impl::handle_handover_ue_context_push(cu_cp_ue_index_t source_ue_inde
+   if (source_ue != nullptr) {
+     ue->get_location_manager().set_config(source_ue->get_location_manager().get_config());
+     ue->set_ue_ambr(source_ue->get_ue_ambr());
++
++    // Carry IMEISV across the handover. The AMF is not contacted during an intra-CU
++    // handover, so no further NGAP message supplies it; without this the target context
++    // starts blank and the RNTI-to-IMEISV mapping is lost for the rest of the session.
++    if (source_ue->get_masked_imeisv().has_value()) {
++      ue->set_masked_imeisv(source_ue->get_masked_imeisv());
++    } else {
++      logger.info("ue={}: no MaskedIMEISV on source ue={} to carry across handover",
++                  target_ue_index,
++                  source_ue_index);
++    }
+   }
+ }
+ 
+@@ -884,6 +895,22 @@ cu_cp_impl::handle_new_initial_context_setup_request(const ngap_init_context_set
          });
    }
  
@@ -11,6 +29,13 @@
 +  // single-CU deployment.
 +  if (request.masked_imeisv.has_value()) {
 +    ue->set_masked_imeisv(request.masked_imeisv);
++    logger.info("ue={}: stored MaskedIMEISV=0x{:x} from Initial Context Setup",
++                request.ue_index,
++                request.masked_imeisv.value());
++  } else {
++    logger.warning("ue={}: AMF sent no MaskedIMEISV in Initial Context Setup; this UE will "
++                   "have no RNTI-to-IMEISV mapping for the whole session",
++                   request.ue_index);
 +  }
 +
    return launch_async<initial_context_setup_routine>(request,
