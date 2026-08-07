@@ -12,6 +12,7 @@
 #include "ocudu/lpp/reference_location.h"
 #include "ocudu/rrc/rrc_ue.h"
 #include <type_traits>
+#include <cstring>
 
 using namespace ocudu;
 using namespace ocucp;
@@ -43,17 +44,24 @@ void ocudu::ocucp::log_rrc_message(rrc_ue_logger&    logger,
                                    const char*       msg_type)
 {
   if (logger.get_basic_logger().debug.enabled()) {
-    asn1::json_writer js;
-    msg.to_json(js);
+    const char* const msg_name = get_rrc_message_name(msg);
     logger.log_debug(pdu.begin(),
                      pdu.end(),
                      "{} {} {} {} ({} B)",
                      (dir == Rx) ? "Rx" : "Tx",
                      srb_id,
                      msg_type,
-                     get_rrc_message_name(msg),
+                     msg_name,
                      pdu.length());
-    logger.log_debug("Containerized {}: {}", get_rrc_message_name(msg), js.to_string());
+    // Measurement reports arrive continuously from every connected UE and their JSON body
+    // is ~100 lines each, which drowns out every other RRC message at debug level. Keep
+    // the one-line summary (and the hex payload above) but skip the expansion; the parsed
+    // results are already exported as ue_measurements metrics.
+    if (std::strcmp(msg_name, "measurementReport") != 0) {
+      asn1::json_writer js;
+      msg.to_json(js);
+      logger.log_debug("Containerized {}: {}", msg_name, js.to_string());
+    }
   } else if (logger.get_basic_logger().info.enabled()) {
     std::vector<uint8_t> bytes{pdu.begin(), pdu.end()};
     logger.log_info(pdu.begin(), pdu.end(), "{} {}", msg_type, get_rrc_message_name(msg));
