@@ -884,6 +884,15 @@ cu_cp_impl::handle_new_initial_context_setup_request(const ngap_init_context_set
         });
   }
 
+  // Store the masked IMEISV signalled by the AMF. It is decoded into the request by
+  // ngap_asn1_helpers, but no routine consumes it, so without this the UE context keeps
+  // masked_imeisv unset for every normally-attached UE and the CU-CP metrics report omits the
+  // field. Only inter-CU handover targets used to populate it, which cannot occur in a
+  // single-CU deployment.
+  if (request.masked_imeisv.has_value()) {
+    ue->set_masked_imeisv(request.masked_imeisv);
+  }
+
   return launch_async<initial_context_setup_routine>(request,
                                                      *rrc_ue,
                                                      ngap->get_ngap_ue_radio_cap_management_handler(),
