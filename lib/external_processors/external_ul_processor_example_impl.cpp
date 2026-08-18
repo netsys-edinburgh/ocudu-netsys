@@ -22,6 +22,12 @@ void external_ul_processor_example_impl::process(
     span<const pucch_processor::format1_common_configuration> pucch_f1_pdus,
     span<const uplink_pdu_slot_repository::srs_pdu>           srs_pdus)
 {
+  // Log once, at INFO level, to confirm the PHY tap is actively receiving UL symbols from the running PHY.
+  if (!ul_symbol_activity_logged) {
+    logger.info("PHY tap plugin is actively processing UL symbols (first call: slot={}, symbol={}).", slot, symbol);
+    ul_symbol_activity_logged = true;
+  }
+
   // Log the slot and symbol being processed.
   logger.debug("Processing symbol: slot={}, symbol={}", slot, symbol);
   last_processed_symbol = symbol;
@@ -76,6 +82,12 @@ void external_ul_processor_example_impl::process_quiet(const resource_grid_reade
     return;
   }
 
+  // Log once, at INFO level, to confirm the PHY tap is actively processing quiet UL symbols.
+  if (!quiet_symbol_activity_logged) {
+    logger.info("PHY tap plugin is actively processing quiet UL symbols (first call: slot={}).", slot);
+    quiet_symbol_activity_logged = true;
+  }
+
   // Update the symbol index. Note that the resulting index is an estimation based on the processing of allocated
   // symbols.
   if (last_processed_symbol == nof_slot_symbols - 1) {
@@ -117,6 +129,12 @@ void external_ul_processor_example_impl::process_quiet(const resource_grid_reade
 
 void external_ul_processor_example_impl::process_prach(prach_buffer& buffer, const prach_buffer_context& context)
 {
+  // Log once, at INFO level, to confirm the PHY tap is actively processing PRACH occasions.
+  if (!prach_activity_logged) {
+    logger.info("PHY tap plugin is actively processing PRACH occasions (first call: slot={}).", context.slot);
+    prach_activity_logged = true;
+  }
+
   // Log the PRACH occasion being processed.
   logger.debug("Processing PRACH: slot={}, format={}", context.slot, to_string(context.format));
 
