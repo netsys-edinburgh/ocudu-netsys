@@ -9,6 +9,7 @@
 #include "ocudu/phy/support/resource_grid_reader.h"
 #include "ocudu/phy/support/resource_grid_writer.h"
 #include "ocudu/ran/prach/prach_preamble_information.h"
+#include "ocudu/ran/srs/srs_resource_formatter.h"
 
 using namespace ocudu;
 
@@ -51,12 +52,36 @@ void external_ul_processor_example_impl::process(
                  pucch_f1_pdu.start_symbol_index + pucch_f1_pdu.nof_symbols);
   }
 
+  // If more than one SRS PDU completes at this exact slot/symbol, their occasions coincide in time by definition
+  // (the tap only reports a PDU once its allocation ends at the current symbol) - log that grouping explicitly.
+  if (srs_pdus.size() > 1) {
+    std::string rntis;
+    for (const auto& srs_pdu : srs_pdus) {
+      if (!rntis.empty()) {
+        rntis += ", ";
+      }
+      rntis += fmt::format("{}", srs_pdu.context.rnti);
+    }
+    logger.info(
+        "SRS co-scheduled: {} UEs complete at slot={}, symbol={}: rnti=[{}]", srs_pdus.size(), slot, symbol, rntis);
+  }
+
   for (const auto& srs_pdu : srs_pdus) {
-    logger.debug("  SRS PDU: rnti {}, symb=[{}, {})",
-                 srs_pdu.context.rnti,
-                 srs_pdu.config.resource.start_symbol,
-                 srs_pdu.config.resource.start_symbol.value() +
-                     static_cast<unsigned>(srs_pdu.config.resource.nof_symbols));
+    const auto& resource     = srs_pdu.config.resource;
+    unsigned    start_symbol = resource.start_symbol.value();
+    unsigned    end_symbol   = start_symbol + static_cast<unsigned>(resource.nof_symbols);
+
+    // The PHY tap is only invoked once per SRS occasion, on its last symbol (i.e. \c symbol here always equals
+    // end_symbol - 1). This is the only point at which the occasion, and its configuration, is known as a whole, so
+    // log every symbol it spans here rather than just the completion symbol.
+    for (unsigned occasion_symbol = start_symbol; occasion_symbol != end_symbol; ++occasion_symbol) {
+      logger.debug("  SRS occasion symbol: rnti={}, symbol={}{}",
+                   srs_pdu.context.rnti,
+                   occasion_symbol,
+                   occasion_symbol + 1 == end_symbol ? " (completion)" : "");
+    }
+
+    logger.debug("  SRS PDU: rnti={}, symbol={}, config=[{}]", srs_pdu.context.rnti, symbol, resource);
   }
 
   for (unsigned i_port = 0; i_port != nof_ports; ++i_port) {
