@@ -29,7 +29,7 @@ void external_ul_processor_example_impl::process(
   // Log each received PDU.
   for (const auto& pusch_pdu : pusch_pdus) {
     const auto& pdu = pusch_pdu.pdu;
-    logger.debug("  PUSCH PDU: rnti={:#x}, symb=[{}, {})",
+    logger.debug("  PUSCH PDU: rnti={}, symb=[{}, {})",
                  pdu.rnti,
                  pdu.start_symbol_index,
                  pdu.start_symbol_index + pdu.nof_symbols);
