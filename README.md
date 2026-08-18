@@ -74,3 +74,15 @@ expert_phy:
   phy_tap_arguments: log_level=info,srs_iq_dump=tcp://*:5556
 ```
 
+With the gNB running and a UE attached, `tools/srs_iq_dump_consumer.py` can then connect to that address and save each SRS occasion to a `.npy` file:
+
+```
+pip install pyzmq numpy
+python3 tools/srs_iq_dump_consumer.py tcp://127.0.0.1:5556 --out-dir /tmp/srs_dump
+```
+
+`tools/srs_iq_dump_reader.py` reads the saved occasions back and, optionally, computes a channel estimate from them via a pluggable estimator (currently a Least Squares estimator, `ls`; see `tools/srs_channel_estimation.py` for the algorithm and its documented assumptions/limitations - notably, it only supports SRS occasions with bandwidth >= 36 subcarriers and assumes group/sequence hopping is disabled):
+
+```
+python3 tools/srs_iq_dump_reader.py /tmp/srs_dump/srs_..._000000.npy --estimate-channel ls --plot
+```
