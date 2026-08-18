@@ -4,6 +4,7 @@
 
 add_library(external_processor_example_impl
         external_ul_processor_example_impl.cpp
+        srs_iq_dump_zmq.cpp
         tap_ul_resource_grid_epre_zmq.cpp)
 target_include_directories(external_processor_example_impl PRIVATE ${OCUDU_UPPER_PHY_TAP_SRC_DIR}/include)
 
