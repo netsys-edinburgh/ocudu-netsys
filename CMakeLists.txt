@@ -736,3 +736,12 @@ sbom_add(
     FILE    "${CMAKE_SOURCE_DIR}/LICENSE"
 )
 sbom_finalize(NO_VERIFY)
+
+########################################################################
+# OCUDU PHY TAP
+########################################################################
+option(OCUDU_ENABLE_PHY_TAP "Build the PHY TAP plugin" OFF)
+
+if(OCUDU_ENABLE_PHY_TAP)
+  add_subdirectory(ocudu_phy_tap)
+endif()
