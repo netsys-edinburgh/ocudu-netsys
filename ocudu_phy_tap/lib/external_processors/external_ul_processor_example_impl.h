@@ -73,6 +73,12 @@ public:
         }
       }
     }
+
+    logger.info("PHY tap plugin constructed: nof_rb={}, nof_ports={}, quiet_processing={}, tdd_pattern_configured={}",
+                nof_rb,
+                nof_ports,
+                enable_quiet_processing,
+                tdd_pattern.has_value());
   }
 
   // See the interface for documentation.
@@ -116,6 +122,12 @@ private:
   unsigned last_processed_symbol = 0;
   /// Enables or disables the processing of quiet UL symbols.
   bool enable_quiet_processing = false;
+  /// Set to true after the first \c process call, used to log a one-time activity confirmation.
+  bool ul_symbol_activity_logged = false;
+  /// Set to true after the first \c process_quiet call, used to log a one-time activity confirmation.
+  bool quiet_symbol_activity_logged = false;
+  /// Set to true after the first \c process_prach call, used to log a one-time activity confirmation.
+  bool prach_activity_logged = false;
   /// Logger object.
   ocudulog::basic_logger& logger;
 };
