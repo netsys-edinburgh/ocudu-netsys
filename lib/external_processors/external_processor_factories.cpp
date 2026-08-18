@@ -3,6 +3,7 @@
 
 #include "external_ul_processor_example_impl.h"
 #include "external_ul_processor_factory.h"
+#include "srs_iq_dump_zmq.h"
 #include "tap_ul_resource_grid_epre_zmq.h"
 #include "zmq_server_backend.h"
 #include "ocudu/support/executors/task_worker.h"
@@ -88,6 +89,55 @@ private:
   std::string backend_zmq_address;
 };
 
+/// \brief Factory for creating SRS occasion IQ dump tap processors.
+///
+/// This factory class implements the \ref external_ul_processor_factory interface to create tap processors that
+/// stream the raw IQ samples of every completed SRS occasion to a ZeroMQ backend, for out-of-process capture.
+class srs_iq_dump_zmq_factory : public external_ul_processor_factory
+{
+public:
+  /// \brief Constructs the tap processor factory with base factory and ZeroMQ backend address.
+  ///
+  /// \param base_factory_        Optional base processor factory for chaining operations.
+  /// \param backend_zmq_address_ The ZeroMQ address to bind.
+  /// \param nof_rb_              Number of resource blocks in the resource grid, used to size the buffer pool.
+  srs_iq_dump_zmq_factory(std::shared_ptr<external_ul_processor_factory> base_factory_,
+                          const std::string&                             backend_zmq_address_,
+                          unsigned                                       nof_rb_) :
+    base_factory(std::move(base_factory_)), backend_zmq_address(backend_zmq_address_), nof_rb(nof_rb_)
+  {
+    ocudu_assert(!backend_zmq_address.empty(), "The ZMQ address must cannot be empty.");
+  }
+
+  // See the external_ul_processor_factory interface for documentation.
+  std::unique_ptr<external_ul_processor> create() override
+  {
+    // Create shared dependencies if they have not been created yet.
+    if (!shared_deps) {
+      shared_deps = std::make_shared<srs_iq_dump_zmq::dependencies>(backend_zmq_address, nof_rb);
+    }
+
+    // Create base instance if the base factory is present.
+    std::unique_ptr<external_ul_processor> base_instance;
+    if (base_factory) {
+      base_instance = base_factory->create();
+    }
+
+    // Create actual processor wrapper.
+    return std::make_unique<srs_iq_dump_zmq>(std::move(base_instance), shared_deps);
+  }
+
+private:
+  /// Shared dependencies for all the taps.
+  std::shared_ptr<srs_iq_dump_zmq::dependencies> shared_deps;
+  /// Base external UL processor factory.
+  std::shared_ptr<external_ul_processor_factory> base_factory;
+  /// ZMQ backend address to bind.
+  std::string backend_zmq_address;
+  /// Number of resource blocks in the resource grid.
+  unsigned nof_rb;
+};
+
 // [EXTERNAL CODE INSERTION START] Define your own external UL processor factories here.
 
 // [EXTERNAL CODE INSERTION END]
@@ -110,6 +160,12 @@ ocudu::create_external_ul_procesor_example_factory(unsigned                     
   std::regex  backend_zmq_address_regex(R"(tap_ul_epre=([^,]*))");
   if (std::regex_search(processor_arguments, match, backend_zmq_address_regex)) {
     factory = std::make_shared<tap_ul_resource_grid_epre_zmq_factory>(std::move(factory), match[1].str());
+  }
+
+  // Try parsing the SRS IQ dump ZMQ binding address.
+  std::regex srs_iq_dump_zmq_address_regex(R"(srs_iq_dump=([^,]*))");
+  if (std::regex_search(processor_arguments, match, srs_iq_dump_zmq_address_regex)) {
+    factory = std::make_shared<srs_iq_dump_zmq_factory>(std::move(factory), match[1].str(), nof_rb);
   }
 
   // Create and return the external UL processor dummy factory.

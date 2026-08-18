@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "ocudu/adt/complex.h"
 #include "ocudu/support/error_handling.h"
 #include <string>
 #include <zmq.h>
@@ -55,6 +56,19 @@ public:
   ///
   /// \param buffer The span of float values to send
   void send_buffer(span<const float> buffer) { ::zmq_send(socket, buffer.data(), sizeof(float) * buffer.size(), 0); }
+
+  /// \brief Sends a fixed-size header followed by a buffer of complex IQ samples, as a two-part ZMQ message.
+  ///
+  /// The two parts are sent as a single logical message (the first part flagged with \c ZMQ_SNDMORE), so a receiver
+  /// using a matching ZMQ pattern always gets the header and its associated payload together, atomically.
+  ///
+  /// \param header     Fixed-size (POD) header describing the payload that follows.
+  /// \param iq_samples The complex IQ samples associated with the header.
+  void send_header_and_payload(span<const uint8_t> header, span<const cf_t> iq_samples)
+  {
+    ::zmq_send(socket, header.data(), header.size(), ZMQ_SNDMORE);
+    ::zmq_send(socket, iq_samples.data(), sizeof(cf_t) * iq_samples.size(), 0);
+  }
 
 private:
   /// ZeroMQ bind address.

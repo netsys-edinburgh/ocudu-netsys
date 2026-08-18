@@ -50,10 +50,11 @@ of the OCUDU stack.
 
 ## Configuration of the external UL processor
 
-Currently, two main features can be configured using the `phy_tap_arguments` parameter:
+Currently, three main features can be configured using the `phy_tap_arguments` parameter:
 
 - Enable processing of quiet (i.e., unallocated) UL symbols, by setting `enable_quiet_processing=true`. By default, this is disabled.
 - Set a specific log level using `log_level=$LEVEL$`. Supported log levels (`$LEVEL$` values) are (from lowest to highest detail): `none`, `error`, `warning`, `info`, and `debug`.
+- Stream the raw IQ samples of every completed SRS occasion to a ZeroMQ backend, by setting `srs_iq_dump=$ADDRESS$` (e.g. `srs_iq_dump=tcp://*:5556`). Each occasion is sent as a two-part ZMQ message (`ZMQ_PUSH`): a fixed-size binary header (see `srs_iq_dump_header` in `lib/external_processors/srs_iq_dump_zmq.h`) followed by the raw `complex64` IQ payload, ordered symbol-major then port then subcarrier. A reference Python consumer is provided in `tools/srs_iq_dump_consumer.py`. The ZeroMQ send never blocks the real-time RU execution context: the IQ copy happens synchronously (bounded, allocation-free), while the actual network send is deferred to a dedicated background thread; if no consumer is connected, occasions are silently dropped rather than backing up.
 
 The following example shows an excerpt from a gNB configuration file (yml) that enables quiet UL symbol processing and sets the log level to `warning`:
 
@@ -64,3 +65,12 @@ expert_phy:
 ```
 
 Alternatively, those same configuration parameters can be passed through the console when starting the gNB binary by adding `expert_phy --enable_phy_tap=true --enable_quiet_processing=true,log_level=warning`
+
+The following example additionally enables the SRS IQ dump, binding the ZeroMQ backend to port 5556 on all interfaces:
+
+```
+expert_phy:
+  enable_phy_tap: true
+  phy_tap_arguments: log_level=info,srs_iq_dump=tcp://*:5556
+```
+
