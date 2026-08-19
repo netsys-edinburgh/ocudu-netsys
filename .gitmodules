@@ -1,3 +1,11 @@
 [submodule "ocudu_phy_tap"]
 	path = ocudu_phy_tap
 	url = git@github.com:netsys-edinburgh/ocudu-phy-tap.git
+
+[submodule "Metrics"]
+	path = Metrics
+	url = git@github.com:netsys-edinburgh/Metrics.git
+
+[submodule "campus5g-ng"]
+	path = campus5g-ng
+	url = git@github.com:netsys-edinburgh/campus5g-ng.git
