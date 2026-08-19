@@ -4,8 +4,10 @@
 """Reads back SRS occasion IQ dumps saved by srs_iq_dump_consumer.py.
 
 Each occasion is a pair of files: `<base>.npy` (complex64 array, shape [nof_symbols, nof_ports, nof_subc]) and
-`<base>.json` (the occasion's header metadata). This script loads one or more of them, prints a summary, and can
-optionally plot the average per-subcarrier power (a quick way to see where in frequency the SRS actually landed).
+`<base>.json` (the occasion's header metadata). `nof_subc` only covers the occasion's own SRS-carrying subcarriers
+(M_sc_RS, after comb decimation) - the array holds just that one UE's resource elements, not the whole resource
+grid. This script loads one or more of them, prints a summary, and can optionally plot the average per-RE power (a
+quick way to see where in frequency the SRS actually landed, and how flat the channel looks across it).
 
 Usage:
     # Summarize every occasion in a directory:
@@ -44,7 +46,8 @@ def summarize(npy_path: Path, iq: np.ndarray, header: dict) -> None:
             f"symb=[{header['start_symbol']}, {header['start_symbol'] + header['nof_symbols']}) "
             f"scs={header['scs_khz']}kHz comb={header['comb_size']}/{header['comb_offset']} "
             f"cyclic_shift={header['cyclic_shift']} sequence_id={header['sequence_id']} "
-            f"config_index={header['configuration_index']} bandwidth_index={header['bandwidth_index']}"
+            f"config_index={header['configuration_index']} bandwidth_index={header['bandwidth_index']} "
+            f"k0={header['mapping_initial_subcarrier']}"
         )
     else:
         print("  (no matching .json sidecar found - showing array info only)")
@@ -108,12 +111,12 @@ def plot_occasion(npy_path: Path, iq: np.ndarray, header: dict) -> None:
         print("  matplotlib is not installed (pip install matplotlib); skipping plot.", file=sys.stderr)
         return
 
-    # Average power per subcarrier, across symbols and ports, in dB.
+    # Average power per SRS-carrying RE, across symbols and ports, in dB.
     power_db = 10 * np.log10(np.mean(np.abs(iq) ** 2, axis=(0, 1)) + 1e-20)
 
     plt.figure()
     plt.plot(power_db)
-    plt.xlabel("Subcarrier index")
+    plt.xlabel("SRS RE index (within the captured occasion, not an absolute subcarrier index)")
     plt.ylabel("Average power (dB)")
     title = npy_path.stem
     if header:
@@ -138,8 +141,8 @@ def main() -> int:
         "--k-grid-offset",
         type=int,
         default=0,
-        help="Extra subcarrier offset for the channel estimator, if the capture's grid alignment needs it "
-        "(see srs_channel_estimation.py)",
+        help="Extra offset applied only to the printed/plotted absolute subcarrier index (cosmetic; see "
+        "srs_channel_estimation.py)",
     )
     args = parser.parse_args()
 

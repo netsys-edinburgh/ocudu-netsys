@@ -6,30 +6,23 @@
 Provides a small estimator registry (`get_estimator`, `list_estimators`) so alternative algorithms can be added
 alongside the default Least Squares (LS) estimator, without changing any caller code.
 
+The dump itself already contains only the occasion's own SRS-carrying REs (M_sc_RS of them, densely packed, no
+comb gaps) - the gNB-side plugin extracts them via the same `get_srs_information()` helper ocudu's own SRS channel
+estimator uses, and reports the exact bandwidth (`nof_subc`) and first subcarrier (`mapping_initial_subcarrier`) it
+used in the dump header. So `M_sc_RS` and the REs' absolute grid position are read straight from the header rather
+than re-derived here.
+
 Known limitations of the current LS estimator - see its class docstring for details:
   - Only the TS 38.211 "long sequence" low-PAPR reference (SRS bandwidth >= 36 subcarriers) is implemented; smaller
     occasions raise NotImplementedError rather than silently producing a wrong estimate.
-  - Assumes SRS group/sequence hopping is disabled (this information isn't in the dump header at all).
-  - Assumes the captured buffer's subcarrier index 0 aligns with the SRS resource's own reference point; adjust
-    `k_grid_offset` if your deployment's resource grid has an additional carrier offset.
+  - Assumes SRS group/sequence hopping is disabled (this information isn't in the dump header at all) - matching
+    the same assumption ocudu's own `get_srs_information()` hard-asserts on.
 """
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 import numpy as np
-
-# Number of subcarriers per resource block.
-NOF_SUBCARRIERS_PER_RB = 12
-
-# TS 38.211 Table 6.4.1.4.3-1, b_srs=0 column only (m_srs,0, i.e. the SRS bandwidth in RBs for a single, non-hopping
-# occasion). Ported from lib/ran/srs/srs_bandwidth_configuration.cpp (table0) to keep this in sync with ocudu's own
-# implementation, rather than re-transcribing the spec table by hand. Indexed by configuration_index (C_SRS, 0..63).
-_SRS_BANDWIDTH_TABLE_B0_M_SRS = [
-    4, 8, 12, 16, 16, 20, 24, 24, 28, 32, 36, 40, 48, 48, 52, 56, 60, 64, 72, 72, 76, 80, 88, 96, 96, 104, 112, 120,
-    120, 120, 128, 128, 128, 132, 136, 144, 144, 144, 144, 152, 160, 160, 160, 168, 176, 184, 192, 192, 192, 192,
-    208, 216, 224, 240, 240, 240, 240, 256, 256, 256, 264, 272, 272, 272,
-]
 
 
 def _is_prime(n: int) -> bool:
@@ -50,12 +43,6 @@ def _largest_prime_below(n: int) -> int:
     raise ValueError(f"No prime found below {n}")
 
 
-def srs_occasion_bandwidth_subc(header: dict) -> int:
-    """Returns M_sc_RS: the number of SRS-carrying subcarriers in the occasion (after comb decimation)."""
-    m_srs = _SRS_BANDWIDTH_TABLE_B0_M_SRS[header["configuration_index"]]
-    return m_srs * NOF_SUBCARRIERS_PER_RB // header["comb_size"]
-
-
 def generate_srs_reference_sequence(header: dict) -> np.ndarray:
     """Generates the SRS low-PAPR reference sequence r(n), n = 0..M_sc_RS-1, for the occasion described by header.
 
@@ -65,7 +52,7 @@ def generate_srs_reference_sequence(header: dict) -> np.ndarray:
     Raises:
         NotImplementedError: if M_sc_RS < 36 (the short-sequence, lookup-table-based case, not implemented here).
     """
-    m_sc_rs = srs_occasion_bandwidth_subc(header)
+    m_sc_rs = header["nof_subc"]
     # ocudu's own generator (low_papr_sequence_generator_impl::r_uv_arg) switches from lookup-table-based short
     # sequences to this same ZC-derived formula at M_zc >= 36 - verified by reading
     # lib/phy/upper/sequence_generators/low_papr_sequence_generator_impl.cpp.
@@ -97,10 +84,16 @@ def generate_srs_reference_sequence(header: dict) -> np.ndarray:
 
 
 def srs_occasion_subcarrier_indices(header: dict, k_grid_offset: int = 0) -> np.ndarray:
-    """Returns the absolute subcarrier indices (into the captured IQ buffer) carrying SRS, for this occasion."""
-    m_sc_rs = srs_occasion_bandwidth_subc(header)
-    k0 = header["freq_shift"] * NOF_SUBCARRIERS_PER_RB + k_grid_offset
-    return k0 + header["comb_offset"] + header["comb_size"] * np.arange(m_sc_rs)
+    """Returns the absolute (resource grid) subcarrier index for each RE captured in the IQ buffer.
+
+    The buffer itself already holds only these REs, densely packed (buffer index n is absolute subcarrier
+    `mapping_initial_subcarrier + n * comb_size`) - this only labels that axis, e.g. for plotting; it does not
+    select or reorder anything. `k_grid_offset` shifts the label only, in case you want it to read out relative to
+    a different reference point than the one `mapping_initial_subcarrier` already uses.
+    """
+    m_sc_rs = header["nof_subc"]
+    k0 = header["mapping_initial_subcarrier"] + k_grid_offset
+    return k0 + header["comb_size"] * np.arange(m_sc_rs)
 
 
 @dataclass
@@ -123,9 +116,10 @@ class ChannelEstimator(ABC):
     def __init__(self, k_grid_offset: int = 0):
         """\
         Args:
-            k_grid_offset: Extra subcarrier offset added to the SRS resource's own reference point, in case the
-                captured buffer's index 0 doesn't align with subcarrier 0 of that reference point in your
-                deployment. Defaults to 0 (buffer index 0 == the resource's reference point).
+            k_grid_offset: Extra offset added when labeling REs with their absolute subcarrier index (see
+                `srs_occasion_subcarrier_indices`). Purely cosmetic - the dump already contains only this
+                occasion's own REs, so this does not affect which samples are used or how the estimate is
+                computed. Defaults to 0.
         """
         self.k_grid_offset = k_grid_offset
 
@@ -167,13 +161,13 @@ class LSChannelEstimator(ChannelEstimator):
         r = generate_srs_reference_sequence(header)
         k_indices = srs_occasion_subcarrier_indices(header, self.k_grid_offset)
 
+        # The buffer already contains exactly the occasion's M_sc_RS REs, densely packed - no slicing needed.
         nof_subc = iq.shape[2]
-        if k_indices[-1] >= nof_subc or k_indices[0] < 0:
+        if nof_subc != len(r):
             raise ValueError(
-                f"SRS occasion subcarriers [{k_indices[0]}, {k_indices[-1]}] fall outside the captured buffer "
-                f"width (0, {nof_subc}); check k_grid_offset."
+                f"IQ buffer has {nof_subc} subcarriers but the occasion's reference sequence has {len(r)} "
+                f"(header['nof_subc']={header['nof_subc']}); header/data mismatch?"
             )
 
-        y = iq[:, :, k_indices]
-        h = y / r[np.newaxis, np.newaxis, :]
+        h = iq / r[np.newaxis, np.newaxis, :]
         return ChannelEstimateResult(h=h, subcarrier_indices=k_indices, estimator_name=self.name)

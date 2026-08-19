@@ -22,14 +22,20 @@ namespace ocudu {
 /// ordered as: symbol (outer), port, subcarrier (inner). This layout matches \c numpy.complex64 directly, so a
 /// receiver can reshape the payload without any parsing beyond this header.
 ///
+/// \c nof_subc only covers the occasion's own SRS-carrying subcarriers (i.e. \f$M_{sc}^{SRS}\f$, after comb
+/// decimation), starting at \c mapping_initial_subcarrier and strided by \c comb_size - not the full resource grid
+/// bandwidth. This is exactly the set of resource elements \ref ocudu::get_srs_information() (the same helper
+/// ocudu's own SRS channel estimator uses) says belong to this UE's occasion, so the dump carries only the REs that
+/// are actually this UE's, rather than the whole grid.
+///
 /// \note The struct is packed to remove compiler-inserted padding, so its wire size exactly matches the sum of its
-/// field sizes (31 bytes) - this must be kept in sync with any receiver-side unpacking format.
+/// field sizes (33 bytes) - this must be kept in sync with any receiver-side unpacking format.
 #pragma pack(push, 1)
 struct srs_iq_dump_header {
   /// Magic number identifying this message type ("SRSI" in ASCII).
   uint32_t magic = 0x53525349;
   /// Wire format version, bumped on any incompatible layout change.
-  uint16_t version = 1;
+  uint16_t version = 2;
   /// RNTI of the UE that transmitted this SRS occasion.
   uint16_t rnti;
   /// System Frame Number of the slot the occasion completed in.
@@ -44,7 +50,8 @@ struct srs_iq_dump_header {
   uint8_t nof_symbols;
   /// Number of receive ports captured.
   uint8_t nof_ports;
-  /// Number of subcarriers captured per symbol/port.
+  /// Number of SRS-carrying subcarriers captured per symbol/port (parameter \f$M_{sc}^{SRS}\f$, after comb
+  /// decimation) - not the full resource grid width.
   uint16_t nof_subc;
   /// SRS comb size (2 or 4).
   uint8_t comb_size;
@@ -62,10 +69,14 @@ struct srs_iq_dump_header {
   uint8_t freq_position;
   /// SRS frequency domain shift, parameter n_shift.
   uint16_t freq_shift;
+  /// First resource grid subcarrier of the captured REs, parameter \f$k_0^{(p_i)}\f$ (as returned by
+  /// \c get_srs_information for transmit antenna port 0). Buffer subcarrier index \c n corresponds to absolute
+  /// subcarrier <tt>mapping_initial_subcarrier + n * comb_size</tt>.
+  uint16_t mapping_initial_subcarrier;
 };
 #pragma pack(pop)
 
-static_assert(sizeof(srs_iq_dump_header) == 31, "Unexpected srs_iq_dump_header size - update the receiver format.");
+static_assert(sizeof(srs_iq_dump_header) == 33, "Unexpected srs_iq_dump_header size - update the receiver format.");
 
 /// \brief ZeroMQ backend for dumping raw SRS occasion IQ samples.
 ///

@@ -5,7 +5,9 @@
 
 Connects to the ZeroMQ PUSH socket bound by the gNB (via the `srs_iq_dump=tcp://*:PORT` phy_tap_arguments option),
 and for every SRS occasion received, saves the IQ samples as a `.npy` file (shape: [nof_symbols, nof_ports,
-nof_subc], dtype complex64) alongside a `.json` sidecar with the occasion's metadata.
+nof_subc], dtype complex64) alongside a `.json` sidecar with the occasion's metadata. `nof_subc` only covers the
+occasion's own SRS-carrying subcarriers (M_sc_RS, after comb decimation, starting at the header's
+`mapping_initial_subcarrier`) - the gNB never sends the surrounding resource grid.
 
 Usage:
     pip install pyzmq numpy
@@ -24,7 +26,7 @@ import zmq
 
 # Must be kept in sync with `srs_iq_dump_header` in
 # phy_tap_plugin_example/lib/external_processors/srs_iq_dump_zmq.h
-_HEADER_FORMAT = "<IHHIHHBBBHBBBHBBBH"
+_HEADER_FORMAT = "<IHHIHHBBBHBBBHBBBHH"
 _HEADER_FIELDS = [
     "magic",
     "version",
@@ -44,10 +46,11 @@ _HEADER_FIELDS = [
     "bandwidth_index",
     "freq_position",
     "freq_shift",
+    "mapping_initial_subcarrier",
 ]
 _HEADER_MAGIC = 0x53525349  # "SRSI"
 _HEADER_SIZE = struct.calcsize(_HEADER_FORMAT)
-assert _HEADER_SIZE == 31, f"Header format/size mismatch: {_HEADER_SIZE} (expected 31)"
+assert _HEADER_SIZE == 33, f"Header format/size mismatch: {_HEADER_SIZE} (expected 33)"
 
 
 def parse_header(raw: bytes) -> dict:
