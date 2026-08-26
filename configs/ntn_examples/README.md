@@ -57,6 +57,9 @@ This will produce the required NTN configuration files (`sat.yml`, `ntn_du.yml`,
 | `--ta-report-sr-enabled` | Set `ta_report_sr_enabled`, letting a triggered report raise an SR. Requires `--ta-report-offset-threshold`. |
 | `--gnb-id` | gNB ID of this CU-CP, used to build the internal serving `nr_cell_id` in `ntn_cu.yml` (default `411`; accepts `0x` hex). |
 | `--gnb-id-bit-length` | gNB ID bit length; the NR Cell Identity is 36 bits (default `22`). |
+| `--coarse-location` | Generate `coarse_location.yml`, mapping the coarse UE location to one of the TACs the cell broadcasts. |
+| `--coarse-location-tacs` | TACs the cell broadcasts, in broadcast order (default `7,8,9`). Must match the TACs of `multi_tac.yml`. |
+| `--coarse-location-ue-tac` | TAC of the area holding the UE (default `8`), so that the derived TAC differs from the TAI. |
 
 ### Generated NTN configuration format
 
@@ -238,6 +241,42 @@ cu_cp:
 ```
 
 A later `-c` file replaces a list instead of appending to it, which is why `tac: 7` is repeated.
+
+---
+
+### Deriving a TAC from the coarse UE location
+
+TS 38.300 sec. 16.14.5 lets the gNB report the TAI the UE is geographically located in, next to the TACs the cell
+broadcasts. The CU-CP asks the UE for its coarse location once AS security is established and maps it to a TAC, which
+it reports as the `UE Location Derived TAC in NR NTN`.
+
+Pass `--coarse-location` to build `coarse_location.yml` around the UE position found for the pass, one latitude band
+per broadcast TAC:
+
+```bash
+python generate_ntn_configs.py --tle=./tle_example_leo.txt --coarse-location --coarse-location-ue-tac=9
+```
+
+```bash
+sudo $GNB_PATH -c ./gnb.yml -c sat.yml -c ntn_du.yml -c ntn_cu.yml -c zmq.yml -c multi_tac.yml -c coarse_location.yml
+```
+
+```yaml
+cu_cp:
+  ntn_location_mapping:
+    - nr_cell_id: 0x66c000
+      tac_areas:                    # The first area containing the position wins.
+        - tac: 7
+          lat_min: 47.5
+          lat_max: 49.5
+          lon_min: 11.9
+          lon_max: 14.9
+        # ... one band per broadcast TAC, stacked south to north
+```
+
+`--coarse-location-ue-tac` defaults to `8` rather than the cell TAC `7`, so the derived TAC differs from the TAI and
+the reported value is easy to tell apart. Moving the reported position one band north or south selects a neighbouring
+TAC. A UE that reports no coarse location leaves the derived TAC absent.
 
 ---
 
