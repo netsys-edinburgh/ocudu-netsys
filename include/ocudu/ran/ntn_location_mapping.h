@@ -1,0 +1,56 @@
+// SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
+// SPDX-License-Identifier: BSD-3-Clause-Open-MPI
+// Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
+
+#pragma once
+
+#include "ocudu/adt/span.h"
+#include "ocudu/ran/reference_location.h"
+#include "ocudu/ran/tac.h"
+#include <optional>
+#include <vector>
+
+namespace ocudu {
+
+/// \brief One geographic area of an NTN cell, mapped to a TAC.
+///
+/// A rectangle in latitude/longitude. The coarse UE location is only accurate to roughly 2 km, so a shape closer to
+/// the real tracking area border would not buy anything. A TAC may be listed more than once to cover an area that is
+/// not a single rectangle.
+struct ntn_tac_area {
+  tac_t  tac;
+  double lat_min;
+  double lat_max;
+  double lon_min;
+  double lon_max;
+
+  /// Whether a position falls inside this area. Bounds are inclusive, so areas sharing an edge overlap there.
+  bool contains(const reference_location& loc) const
+  {
+    return loc.latitude >= lat_min and loc.latitude <= lat_max and loc.longitude >= lon_min and
+           loc.longitude <= lon_max;
+  }
+};
+
+/// \brief Maps a coarse UE location to a TAC, for the UE Location Derived TAC in NR NTN IE of TS 38.413.
+///
+/// Empty in a cell without a configured mapping, in which case no TAC is ever derived.
+struct ntn_location_mapping {
+  /// Areas in configuration order. The first area containing the position wins.
+  std::vector<ntn_tac_area> tac_areas;
+
+  bool empty() const { return tac_areas.empty(); }
+};
+
+/// \brief Derives the TAC to report for a coarse UE location, TS 38.413 UE Location Derived TAC in NR NTN.
+///
+/// The derived TAC is the tracking area the UE is geographically in, TS 23.502 sec. 4.10, which need not be one the
+/// cell broadcasts: a TAC change in system information is not synchronised with the illumination on ground,
+/// TS 38.300 sec. 16.14.3.1, so a UE outside the broadcast areas is the case this IE exists to report.
+///
+/// \param[in] mapping  Areas configured for the serving cell.
+/// \param[in] position Position reported by the UE.
+/// \return The derived TAC, or nullopt when the position matches no configured area.
+std::optional<tac_t> derive_tac_from_location(const ntn_location_mapping& mapping, const reference_location& position);
+
+} // namespace ocudu
