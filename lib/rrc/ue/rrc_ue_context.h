@@ -8,6 +8,7 @@
 #include "ocudu/asn1/rrc_nr/ul_dcch_msg_ies.h"
 #include "ocudu/ran/five_g_s_tmsi.h"
 #include "ocudu/ran/plmn_identity.h"
+#include "ocudu/rrc/coarse_ue_location.h"
 #include "ocudu/rrc/rrc_cell_context.h"
 #include "ocudu/rrc/rrc_du.h"
 #include "ocudu/rrc/rrc_ue.h"
@@ -58,6 +59,8 @@ public:
   std::optional<rrc_resume_context_t> remote_resume_context;
   byte_buffer                         cell_group_config;
   bool                                reestablishment_ongoing = false;
+  /// Last coarse UE location reported by the UE.
+  std::optional<coarse_ue_location> coarse_location;
   // NAS messages received while UE is in RRC Inactive, to be sent after successful resume.
   std::vector<byte_buffer> pending_dl_nas_transport_messages;
   rrc_ue_logger&           logger;

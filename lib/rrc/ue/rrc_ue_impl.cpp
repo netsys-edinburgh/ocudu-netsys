@@ -3,9 +3,11 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "rrc_ue_impl.h"
+#include "procedures/rrc_ue_information_procedure.h"
 #include "rrc_asn1_helpers.h"
 #include "ocudu/adt/format.h"
 #include "ocudu/asn1/rrc_nr/rrc_nr.h"
+#include "ocudu/ran/band_helper.h"
 #include "ocudu/support/ocudu_assert.h"
 
 using namespace ocudu;
@@ -141,6 +143,25 @@ void rrc_ue_impl::on_new_as_security_context(bool security_mode_active)
                           security::ciphering_enabled::off,
                           sec_cfg);
   srb1.enable_tx_security(security::integrity_enabled::on, security::ciphering_enabled::off, sec_cfg);
+}
+
+void rrc_ue_impl::on_as_security_activated()
+{
+  // The UE comes back on a new RRC UE with no coarse location, and no Security Mode Command to ask for one.
+  // TS 38.300 sec. 16.14.8 gates the request on AS security, which is active by the time this is called.
+  request_coarse_ue_location();
+}
+
+void rrc_ue_impl::request_coarse_ue_location()
+{
+  // Only worth asking for in an NTN cell, whose footprint can span several tracking areas. Queued rather than
+  // awaited, so a silent UE does not hold up the context setup.
+  if (std::none_of(context.cell.bands.begin(), context.cell.bands.end(), band_helper::is_ntn_band)) {
+    return;
+  }
+
+  cu_cp_ue_notifier.schedule_async_task(
+      launch_async<rrc_ue_information_procedure>(context, *this, cu_cp_ue_notifier, *event_mng, logger));
 }
 
 // Builds the UE's current radio bearer configuration (all active DRBs across all PDU sessions) from the UP

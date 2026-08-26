@@ -176,6 +176,12 @@ public:
   ///
   /// \param[in] security_mode_present Indicates whether the UE is already in security mode or not (yet).
   virtual void on_new_as_security_context(bool security_mode_active) = 0;
+
+  /// \brief Notify that AS security is active on a UE the procedure brought back on a new RRC UE.
+  ///
+  /// Resume and re-establishment activate security without a Security Mode Command, so this is what tells the RRC UE
+  /// that anything gated on AS security may now run.
+  virtual void on_as_security_activated() = 0;
 };
 
 /// Interface to notify about NGAP messages.
@@ -303,6 +309,11 @@ public:
 
   /// \brief Initiate the UE capability transfer procedure.
   virtual async_task<bool> handle_rrc_ue_capability_transfer_request(const rrc_ue_capability_transfer_request& msg) = 0;
+
+  /// \brief Asks the UE for its coarse location, if the serving cell is one whose location is worth asking for.
+  ///
+  /// TS 38.331 sec. 5.7.10.2 allows the request from AS security onwards, leaving the caller to pick the point.
+  virtual void request_coarse_ue_location() = 0;
 
   /// \brief Get the RRC UE release context.
   /// \returns The release context of the UE. If SRB1 is not created yet, a RrcReject message is contained in the

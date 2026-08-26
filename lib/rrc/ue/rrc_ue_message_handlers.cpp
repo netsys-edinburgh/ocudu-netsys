@@ -20,6 +20,7 @@
 #include "ocudu/asn1/rrc_nr/ul_ccch_msg.h"
 #include "ocudu/ran/rb_id.h"
 #include "ocudu/support/ocudu_assert.h"
+#include <algorithm>
 #include <chrono>
 
 using namespace ocudu;
@@ -239,7 +240,8 @@ void rrc_ue_impl::handle_pdu(const srb_id_t srb_id, byte_buffer rrc_pdu, bool in
   {
     asn1::cbit_ref bref(rrc_pdu);
     if (ul_dcch_msg.unpack(bref) != asn1::OCUDUASN_SUCCESS or
-        ul_dcch_msg.msg.type().value != ul_dcch_msg_type_c::types_opts::c1) {
+        (ul_dcch_msg.msg.type().value != ul_dcch_msg_type_c::types_opts::c1 and
+         ul_dcch_msg.msg.type().value != ul_dcch_msg_type_c::types_opts::msg_class_ext)) {
       logger.log_error(rrc_pdu.begin(), rrc_pdu.end(), "Failed to unpack DCCH UL PDU");
       return;
     }
@@ -259,6 +261,11 @@ void rrc_ue_impl::handle_pdu(const srb_id_t srb_id, byte_buffer rrc_pdu, bool in
   // AC=+: Message can be sent unciphered after security activation.
   // AC=-: Message should never be sent unciphered after security activation.
   // AC=NA: Message can never bet sent after security activation.
+
+  if (ul_dcch_msg.msg.type().value == ul_dcch_msg_type_c::types_opts::msg_class_ext) {
+    handle_ul_dcch_msg_class_ext(ul_dcch_msg, integrity_verified);
+    return;
+  }
 
   switch (ul_dcch_msg.msg.c1().type().value) {
     case ul_dcch_msg_type_c::c1_c_::types_opts::options::ul_info_transfer:
@@ -317,6 +324,29 @@ void rrc_ue_impl::handle_pdu(const srb_id_t srb_id, byte_buffer rrc_pdu, bool in
         return;
       }
       handle_measurement_report(ul_dcch_msg.msg.c1().meas_report());
+      break;
+    default:
+      logger.log_error("Unsupported DCCH UL message type");
+      break;
+  }
+}
+
+void rrc_ue_impl::handle_ul_dcch_msg_class_ext(const asn1::rrc_nr::ul_dcch_msg_s& ul_dcch_msg, bool integrity_verified)
+{
+  if (ul_dcch_msg.msg.msg_class_ext().type().value != ul_dcch_msg_type_c::msg_class_ext_c_::types_opts::c2) {
+    logger.log_error("Unsupported DCCH UL message class extension");
+    return;
+  }
+
+  const auto& c2 = ul_dcch_msg.msg.msg_class_ext().c2();
+  switch (c2.type().value) {
+    case ul_dcch_msg_type_c::msg_class_ext_c_::c2_c_::types_opts::ue_info_resp_r16:
+      // P=- AI=- CI=- (Info: may carry the coarse UE location, so never accepted unprotected.)
+      if (!integrity_verified) {
+        handle_illegal_pdu_integrity(c2.type().to_string(), integrity_verified);
+        return;
+      }
+      handle_rrc_transaction_complete(ul_dcch_msg, c2.ue_info_resp_r16().rrc_transaction_id);
       break;
     default:
       logger.log_error("Unsupported DCCH UL message type");
@@ -816,6 +846,10 @@ async_task<bool> rrc_ue_impl::handle_handover_reconfiguration_complete_expected(
 
       // The UE in the target cell is in connected state on RRCReconfigurationComplete reception.
       context.state = rrc_state::connected;
+
+      // A handover target serves the UE from a new RRC UE, with no coarse location and no Security Mode Command to
+      // ask for one. Security is already active, which TS 38.300 sec. 16.14.8 gates the request on.
+      request_coarse_ue_location();
 
       // Notify metrics.
       metrics_notifier.on_new_rrc_connection();

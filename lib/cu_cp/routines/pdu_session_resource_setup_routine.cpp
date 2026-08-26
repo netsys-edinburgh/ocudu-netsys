@@ -297,6 +297,9 @@ void pdu_session_resource_setup_routine::operator()(
     }
   }
 
+  // Asked for once the UE is set up, so the exchange competes with nothing. Nothing here waits for it.
+  rrc_ue->request_coarse_ue_location();
+
   // We are done, all good.
   CORO_RETURN(handle_pdu_session_resource_setup_result(true));
 }

@@ -71,6 +71,7 @@ public:
                                                                      bool release_on_failure = true) override;
   bool             store_ue_capabilities(byte_buffer ue_capabilities) override;
   async_task<bool> handle_rrc_ue_capability_transfer_request(const rrc_ue_capability_transfer_request& msg) override;
+  void             request_coarse_ue_location() override;
   rrc_ue_release_context
                           get_rrc_ue_release_context(bool                                          requires_rrc_message,
                                                      std::optional<std::chrono::seconds>           release_wait_time = std::nullopt,
@@ -135,8 +136,11 @@ private:
   void handle_rrc_resume_request(const asn1::rrc_nr::rrc_resume_request_s& msg, rnti_t c_rnti);
   void handle_ul_info_transfer(const asn1::rrc_nr::ul_info_transfer_ies_s& ul_info_transfer);
   void handle_security_mode_complete(const asn1::rrc_nr::security_mode_complete_s& msg);
+
   void handle_measurement_report(const asn1::rrc_nr::meas_report_s& msg);
   void handle_rrc_transaction_complete(const asn1::rrc_nr::ul_dcch_msg_s& msg, uint8_t transaction_id_);
+  /// Dispatches the UL-DCCH message class extension, which is where UEInformationResponse lives.
+  void handle_ul_dcch_msg_class_ext(const asn1::rrc_nr::ul_dcch_msg_s& ul_dcch_msg, bool integrity_verified);
   void cancel_rrc_transaction(uint8_t transaction_id_);
 
   // message senders
@@ -151,6 +155,7 @@ private:
   // rrc_ue_security_mode_command_proc_notifier
   void on_new_dl_dcch(srb_id_t srb_id, const asn1::rrc_nr::dl_dcch_msg_s& dl_dcch_msg) override;
   void on_new_as_security_context(bool security_mode_active) override;
+  void on_as_security_activated() override;
 
   // helpers
   void handle_illegal_pdu_integrity(const char* msg, bool integrity_verified);

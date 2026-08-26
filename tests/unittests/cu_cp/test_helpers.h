@@ -760,6 +760,8 @@ public:
     return launch_no_op_task(ue_cap_transfer_outcome);
   }
 
+  void request_coarse_ue_location() override {}
+
   rrc_ue_release_context
   get_rrc_ue_release_context(bool                                          requires_rrc_msg,
                              std::optional<std::chrono::seconds>           release_wait_time,
@@ -880,6 +882,7 @@ public:
 
   // RRC UE Reestablishment proc notifier.
   void on_new_as_security_context(bool security_mode_active) override {}
+  void on_as_security_activated() override {}
 
   // Interface functions.
   rrc_ue_controller&              get_controller() override { return *this; }

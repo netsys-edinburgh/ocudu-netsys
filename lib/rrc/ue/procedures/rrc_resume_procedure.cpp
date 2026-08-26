@@ -218,6 +218,7 @@ bool rrc_resume_procedure::transfer_retrieved_context_and_update_keys()
   srb1_msg.srb_id   = srb_id_t::srb1;
   srb_notifier.create_srb(srb1_msg);
   rrc_ue_resume_notifier.on_new_as_security_context(/* security_mode_active */ true);
+  rrc_ue_resume_notifier.on_as_security_activated();
 
   return true;
 }
