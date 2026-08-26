@@ -57,3 +57,8 @@ add_executable(ntn_configuration_manager_test ntn_configuration_manager_test.cpp
 target_include_directories(ntn_configuration_manager_test PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(ntn_configuration_manager_test ocudu_ntn_lib ocudu_support ocudulog gtest gtest_main)
 gtest_discover_tests(ntn_configuration_manager_test)
+
+add_executable(reference_location_test reference_location_test.cpp)
+target_include_directories(reference_location_test PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(reference_location_test ocudu_lpp_lib ocudu_support ocudulog gtest gtest_main)
+gtest_discover_tests(reference_location_test)

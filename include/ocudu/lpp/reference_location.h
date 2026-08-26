@@ -6,6 +6,7 @@
 
 #include "ocudu/adt/byte_buffer.h"
 #include "ocudu/ran/reference_location.h"
+#include <optional>
 
 namespace ocudu {
 namespace lpp {
@@ -19,6 +20,11 @@ namespace lpp {
 /// \param[in] loc Reference location. Out-of-range coordinates are clamped to the encodable range.
 /// \return A 6-byte buffer holding the packed Ellipsoid-Point.
 byte_buffer pack_reference_location(const reference_location& loc);
+
+/// Unpacks a 6-byte LPP ReferenceLocation-r17 IE (TS 37.355 sec. 5.1) into a reference location.
+/// \param[in] packed Buffer holding the packed Ellipsoid-Point.
+/// \return The decoded reference location, or nullopt if the buffer does not hold a valid Ellipsoid-Point.
+std::optional<reference_location> unpack_reference_location(const byte_buffer& packed);
 
 } // namespace lpp
 } // namespace ocudu

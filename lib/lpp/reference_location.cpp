@@ -34,3 +34,31 @@ byte_buffer lpp::pack_reference_location(const reference_location& loc)
   ocudu_assert(ret == asn1::OCUDUASN_SUCCESS, "Failed to pack LPP Ellipsoid-Point reference location");
   return buf;
 }
+
+std::optional<reference_location> lpp::unpack_reference_location(const byte_buffer& packed)
+{
+  // 1 sign bit plus 23 and 24 coordinate bits. A longer buffer is not an Ellipsoid-Point, and decoding its first 48
+  // bits would yield a plausible but wrong position.
+  constexpr size_t ellipsoid_point_size = 6;
+  if (packed.length() != ellipsoid_point_size) {
+    return std::nullopt;
+  }
+
+  asn1::cbit_ref               bref{packed};
+  asn1::lpp::ellipsoid_point_s ep;
+  if (ep.unpack(bref) != asn1::OCUDUASN_SUCCESS) {
+    return std::nullopt;
+  }
+
+  // TS 23.032 sec. 6.1: N <= 2^23 * |lat| / 90 < N+1 and N <= 2^24 * lon / 360 < N+1.
+  constexpr double lat_scale = 8388608.0;  // 2^23
+  constexpr double lon_scale = 16777216.0; // 2^24
+
+  reference_location loc;
+  loc.latitude = static_cast<double>(ep.degrees_latitude) * 90.0 / lat_scale;
+  if (ep.latitude_sign == asn1::lpp::ellipsoid_point_s::latitude_sign_opts::south) {
+    loc.latitude = -loc.latitude;
+  }
+  loc.longitude = static_cast<double>(ep.degrees_longitude) * 360.0 / lon_scale;
+  return loc;
+}
