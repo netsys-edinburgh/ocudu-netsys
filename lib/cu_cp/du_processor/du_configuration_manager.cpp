@@ -83,8 +83,14 @@ private:
   du_configuration_manager& parent;
 };
 
-du_configuration_manager::du_configuration_manager(const gnb_id_t& gnb_id_, const std::vector<plmn_identity>& plmns_) :
-  gnb_id(gnb_id_), plmns(plmns_), logger(ocudulog::fetch_basic_logger("CU-CP"))
+du_configuration_manager::du_configuration_manager(
+    const gnb_id_t&                               gnb_id_,
+    const std::vector<plmn_identity>&             plmns_,
+    const std::vector<ntn_cell_location_mapping>& ntn_location_mappings_) :
+  gnb_id(gnb_id_),
+  plmns(plmns_),
+  ntn_location_mappings(ntn_location_mappings_),
+  logger(ocudulog::fetch_basic_logger("CU-CP"))
 {
 }
 
@@ -136,8 +142,9 @@ extract_broadcast_tac_list(const nr_cell_global_id_t& cgi, const byte_buffer& pa
   return tac_list;
 }
 
-static du_cell_configuration create_du_cell_config(du_cell_index_t                   cell_idx,
-                                                   const cu_cp_du_served_cells_item& f1ap_cell_cfg)
+du_cell_configuration
+du_configuration_manager::create_du_cell_config(du_cell_index_t                   cell_idx,
+                                                const cu_cp_du_served_cells_item& f1ap_cell_cfg) const
 {
   const auto&           cell_req = f1ap_cell_cfg.served_cell_info;
   du_cell_configuration cell;
@@ -165,7 +172,31 @@ static du_cell_configuration create_du_cell_config(du_cell_index_t              
   cell.sys_info.packed_mib  = f1ap_cell_cfg.gnb_du_sys_info->mib_msg.copy();
   cell.sys_info.packed_sib1 = f1ap_cell_cfg.gnb_du_sys_info->sib1_msg.copy();
   cell.tac_list             = extract_broadcast_tac_list(cell.cgi, cell.sys_info.packed_sib1, cell.tac);
+  cell.location_mapping     = get_location_mapping(cell);
   return cell;
+}
+
+/// \brief Returns the configured coarse-location mapping of a cell, if any.
+ntn_location_mapping du_configuration_manager::get_location_mapping(const du_cell_configuration& cell) const
+{
+  auto mapping_it = std::find_if(ntn_location_mappings.begin(), ntn_location_mappings.end(), [&cell](const auto& item) {
+    return item.nci == cell.cgi.nci;
+  });
+  if (mapping_it == ntn_location_mappings.end()) {
+    return {};
+  }
+
+  // Only an NTN cell is ever asked for a position, so a mapping on any other cell is configuration that can never be
+  // reached.
+  if (std::none_of(cell.bands.begin(), cell.bands.end(), band_helper::is_ntn_band)) {
+    logger.warning("Cell={}: Location mapping is configured, but the cell is not an NTN cell. No TAC will be derived "
+                   "for it",
+                   cell.cgi.nci);
+  }
+
+  logger.info("Cell={}: Configured {} coarse UE location areas", cell.cgi.nci, mapping_it->mapping.tac_areas.size());
+
+  return mapping_it->mapping;
 }
 
 expected<const du_configuration_context*, du_setup_result::rejected>

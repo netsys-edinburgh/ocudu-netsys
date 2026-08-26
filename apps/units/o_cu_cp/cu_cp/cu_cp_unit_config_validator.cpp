@@ -774,6 +774,48 @@ static bool validate_cells_appconfig(const gnb_id_t gnb_id, span<const cu_cp_uni
       return false;
     }
   }
+
+  return true;
+}
+
+/// Validates the coarse UE location to TAC mapping.
+///
+/// A mapping that cannot yield a valid TAC is a configuration error rather than something to warn about, so it is
+/// rejected here. Whether the TACs agree with what a cell actually broadcasts is only known once the gNB-DU has
+/// connected, so the CU-CP checks that separately and warns.
+static bool validate_ntn_location_mapping_appconfig(const cu_cp_unit_config& config)
+{
+  std::set<uint64_t> configured_cells;
+  for (const auto& cell_mapping : config.ntn_location_mapping) {
+    if (!configured_cells.insert(cell_mapping.nr_cell_id).second) {
+      fmt::print("cell={:#x} ntn_location_mapping: the cell is configured more than once\n", cell_mapping.nr_cell_id);
+      return false;
+    }
+
+    if (cell_mapping.tac_areas.empty()) {
+      fmt::print("cell={:#x} ntn_location_mapping: at least one TAC area must be configured\n",
+                 cell_mapping.nr_cell_id);
+      return false;
+    }
+
+    for (const auto& area : cell_mapping.tac_areas) {
+      if (area.lat_min >= area.lat_max) {
+        fmt::print("cell={:#x} ntn_location_mapping: tac={} lat_min must be smaller than lat_max\n",
+                   cell_mapping.nr_cell_id,
+                   area.tac);
+        return false;
+      }
+      // A box crossing the antimeridian cannot be expressed as a single lon_min < lon_max rectangle.
+      if (area.lon_min >= area.lon_max) {
+        fmt::print("cell={:#x} ntn_location_mapping: tac={} lon_min must be smaller than lon_max. An area crossing "
+                   "the antimeridian must be split in two\n",
+                   cell_mapping.nr_cell_id,
+                   area.tac);
+        return false;
+      }
+    }
+  }
+
   return true;
 }
 
@@ -791,6 +833,11 @@ static bool validate_cu_cp_appconfig(const gnb_id_t gnb_id, const cu_cp_unit_con
 
   // validate NTN neighbor cell config
   if (!validate_ntn_appconfig(config)) {
+    return false;
+  }
+
+  // validate the coarse UE location to TAC mapping
+  if (!validate_ntn_location_mapping_appconfig(config)) {
     return false;
   }
 

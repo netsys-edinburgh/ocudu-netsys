@@ -9,6 +9,7 @@
 #include "ocudu/ran/du_cell_index.h"
 #include "ocudu/ran/nr_band.h"
 #include "ocudu/ran/nr_cgi.h"
+#include "ocudu/ran/ntn_location_mapping.h"
 #include "ocudu/ran/pci.h"
 #include "ocudu/ran/tac.h"
 
@@ -43,6 +44,8 @@ struct du_cell_configuration {
   byte_buffer meas_timing_cfg;
   /// System Information provided by the DU for this cell.
   du_sys_info sys_info;
+  /// \brief Coarse UE location to TAC mapping configured for this cell. Empty unless configured.
+  ntn_location_mapping location_mapping;
   /// Deactivated PLMN identitys initially served by the cell.
   std::vector<plmn_identity> deactivated_plmns;
 };

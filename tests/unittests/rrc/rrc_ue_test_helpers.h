@@ -54,6 +54,12 @@ static security::security_context generate_security_context(ue_security_manager&
   return sec_ctxt;
 }
 
+/// Serving cell the RRC UE under test is created on.
+struct rrc_ue_test_cell_params {
+  std::vector<nr_band> bands            = {nr_band::n78};
+  ntn_location_mapping location_mapping = {};
+};
+
 /// Helper class to setup RRC UE for testing specific
 /// RRC procedures
 class rrc_ue_test_helper
@@ -84,7 +90,7 @@ protected:
   {
   }
 
-  void init()
+  void init(const rrc_ue_test_cell_params& cell_params = {})
   {
     // Add UE to UE manager.
     allocated_ue_index = ue_mng.add_ue(cu_cp_du_index_t::min);
@@ -102,7 +108,8 @@ protected:
     rrc_ue_create_msg.rrc_ue_cu_cp_notifier = &rrc_ue_cu_cp_notifier;
     rrc_ue_create_msg.measurement_notifier  = &rrc_ue_cu_cp_notifier;
     rrc_ue_create_msg.cu_cp_ue_notifier     = &ue_mng.find_ue(allocated_ue_index)->get_rrc_ue_cu_cp_ue_notifier();
-    rrc_ue_create_msg.cell.bands.push_back(nr_band::n78);
+    rrc_ue_create_msg.cell.bands            = cell_params.bands;
+    rrc_ue_create_msg.cell.location_mapping = cell_params.location_mapping;
     rrc_ue_create_msg.cell.plmn_identity_list.push_back(plmn_identity::test_value());
     rrc_ue_create_msg.cell.timers.t301 = test_t301;
 

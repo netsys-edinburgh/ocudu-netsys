@@ -7,6 +7,7 @@
 #include "ocudu/adt/byte_buffer.h"
 #include "ocudu/ran/band_helper.h"
 #include "ocudu/ran/nr_cgi.h"
+#include "ocudu/ran/ntn_location_mapping.h"
 #include "ocudu/ran/pci.h"
 #include "ocudu/ran/tac.h"
 #include <cstdint>
@@ -45,6 +46,8 @@ struct rrc_cell_context {
   std::vector<nr_band>       bands;     ///< Required for capability band filter.
   rrc_timers_t               timers;
   std::vector<plmn_identity> plmn_identity_list; ///< PLMN identities broadcasted in SIB1.
+  /// Coarse UE location to TAC mapping of this cell, TS 38.413. Empty unless configured.
+  ntn_location_mapping location_mapping;
 };
 
 } // namespace ocucp

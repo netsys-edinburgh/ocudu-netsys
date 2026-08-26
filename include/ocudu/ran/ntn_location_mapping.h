@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ocudu/adt/span.h"
+#include "ocudu/ran/nr_cell_identity.h"
 #include "ocudu/ran/reference_location.h"
 #include "ocudu/ran/tac.h"
 #include <optional>
@@ -40,6 +41,12 @@ struct ntn_location_mapping {
   std::vector<ntn_tac_area> tac_areas;
 
   bool empty() const { return tac_areas.empty(); }
+};
+
+/// \brief The location mapping configured for one NTN cell.
+struct ntn_cell_location_mapping {
+  nr_cell_identity     nci;
+  ntn_location_mapping mapping;
 };
 
 /// \brief Derives the TAC to report for a coarse UE location, TS 38.413 UE Location Derived TAC in NR NTN.

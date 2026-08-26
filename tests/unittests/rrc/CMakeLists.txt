@@ -20,7 +20,8 @@ set(SOURCES
         rrc_ue_reest_proc_test.cpp
         rrc_ue_resume_proc_test.cpp
         rrc_ue_ho_prep_info_test.cpp
-        rrc_ue_meas_report_test.cpp)
+        rrc_ue_meas_report_test.cpp
+        rrc_ue_coarse_location_test.cpp)
 
 add_executable(rrc_ue_test ${SOURCES})
 target_include_directories(rrc_ue_test PRIVATE ${CMAKE_SOURCE_DIR})

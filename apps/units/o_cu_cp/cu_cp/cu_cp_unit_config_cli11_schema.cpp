@@ -426,6 +426,27 @@ static void configure_cli11_cells_args(CLI::App& app, cu_cp_unit_cell_config_ite
       app, "--ncells", config.ncells, configure_cli11_ncell_args, "Sets the list of neighbor cells known to the CU-CP");
 }
 
+/// Configures the CLI11 NTN TAC area arguments.
+static void configure_cli11_ntn_tac_area_args(CLI::App& app, cu_cp_unit_ntn_tac_area& config)
+{
+  add_option(app, "--tac", config.tac, "TAC to report for a UE inside this area")
+      ->capture_default_str()
+      ->range(0U, 0xffffffU);
+  add_option(app, "--lat_min", config.lat_min, "Southern edge of the area, in degrees")->range(-90.0, 90.0);
+  add_option(app, "--lat_max", config.lat_max, "Northern edge of the area, in degrees")->range(-90.0, 90.0);
+  add_option(app, "--lon_min", config.lon_min, "Western edge of the area, in degrees")->range(-180.0, 180.0);
+  add_option(app, "--lon_max", config.lon_max, "Eastern edge of the area, in degrees")->range(-180.0, 180.0);
+}
+
+/// Configures the CLI11 NTN location mapping arguments.
+static void configure_cli11_ntn_location_mapping_args(CLI::App& app, cu_cp_unit_ntn_location_mapping_item& config)
+{
+  add_option(app, "--nr_cell_id", config.nr_cell_id, "Cell the mapping applies to")
+      ->range(static_cast<uint64_t>(0U), nr_cell_identity::max().value());
+  add_option_object_list<cu_cp_unit_ntn_tac_area>(
+      app, "--tac_areas", config.tac_areas, configure_cli11_ntn_tac_area_args, "Sets the areas mapped to a TAC");
+}
+
 /// Configures the CLI11 mobility arguments.
 static void configure_cli11_mobility_args(CLI::App& app, cu_cp_unit_mobility_config& config)
 {
@@ -780,6 +801,13 @@ static void configure_cli11_cu_cp_args(CLI::App& app, cu_cp_unit_config& cu_cp_p
 
   CLI::App* mobility_subcmd = add_subcommand(app, "mobility", "Mobility configuration");
   configure_cli11_mobility_args(*mobility_subcmd, cu_cp_params.mobility_config);
+
+  // Coarse UE location to TAC mapping, TS 38.413 UE Location Derived TAC in NR NTN.
+  add_option_object_list<cu_cp_unit_ntn_location_mapping_item>(app,
+                                                               "--ntn_location_mapping",
+                                                               cu_cp_params.ntn_location_mapping,
+                                                               configure_cli11_ntn_location_mapping_args,
+                                                               "Sets the coarse UE location to TAC mapping per cell");
 
   CLI::App* rrc_subcmd = add_subcommand(app, "rrc", "RRC specific configuration");
   configure_cli11_rrc_args(*rrc_subcmd, cu_cp_params.rrc_config);

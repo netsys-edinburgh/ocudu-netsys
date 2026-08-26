@@ -7,6 +7,7 @@
 #include "du_configuration_handler.h"
 #include "ocudu/f1ap/cu_cp/f1ap_cu_configuration_update.h"
 #include "ocudu/ocudulog/logger.h"
+#include "ocudu/ran/ntn_location_mapping.h"
 #include "ocudu/ran/plmn_identity.h"
 
 namespace ocudu::ocucp {
@@ -15,7 +16,9 @@ namespace ocudu::ocucp {
 class du_configuration_manager
 {
 public:
-  du_configuration_manager(const gnb_id_t& gnb_id_, const std::vector<plmn_identity>& plmns_);
+  du_configuration_manager(const gnb_id_t&                               gnb_id_,
+                           const std::vector<plmn_identity>&             plmns_,
+                           const std::vector<ntn_cell_location_mapping>& ntn_location_mappings_ = {});
 
   /// Create a new DU configuration handler.
   std::unique_ptr<du_configuration_handler> create_du_handler();
@@ -38,9 +41,15 @@ private:
   validation_result validate_du_config_update(const du_config_update_request& req) const;
   validation_result validate_cell_config_request(const cu_cp_du_served_cells_item& served_cell) const;
 
+  du_cell_configuration create_du_cell_config(du_cell_index_t                   cell_idx,
+                                              const cu_cp_du_served_cells_item& f1ap_cell_cfg) const;
+  ntn_location_mapping  get_location_mapping(const du_cell_configuration& cell) const;
+
   const gnb_id_t                   gnb_id;
   const std::vector<plmn_identity> plmns;
-  ocudulog::basic_logger&          logger;
+  /// Coarse UE location to TAC mappings, matched to a served cell by NR Cell Identity.
+  const std::vector<ntn_cell_location_mapping> ntn_location_mappings;
+  ocudulog::basic_logger&                      logger;
 
   std::unordered_map<gnb_du_id_t, du_configuration_context> dus;
 };

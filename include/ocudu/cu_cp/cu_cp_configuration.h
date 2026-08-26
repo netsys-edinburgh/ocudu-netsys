@@ -15,6 +15,7 @@
 #include "ocudu/f1ap/cu_cp/f1ap_configuration.h"
 #include "ocudu/ntn/ntn_configuration_manager_config.h"
 #include "ocudu/ran/cu_cp_types.h"
+#include "ocudu/ran/ntn_location_mapping.h"
 #include "ocudu/ran/supported_tracking_area.h"
 #include "ocudu/rrc/rrc_ue_config.h"
 #include "ocudu/support/executors/task_executor.h"
@@ -209,6 +210,11 @@ struct cu_cp_configuration {
   /// that periodically refreshes the NTN neighbour cell info of the measurement configuration, fed by DU reference
   /// time reports.
   std::optional<ocudu_ntn::ntn_configuration_manager_config> ntn;
+  /// \brief Coarse UE location to TAC mappings, one entry per NTN cell.
+  ///
+  /// Feeds the UE Location Derived TAC in NR NTN IE of TS 38.413. A cell without an entry never reports a derived
+  /// TAC.
+  std::vector<ntn_cell_location_mapping> ntn_location_mappings;
 };
 
 } // namespace ocucp

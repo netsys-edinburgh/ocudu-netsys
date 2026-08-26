@@ -34,6 +34,8 @@ struct du_repository_config {
   unsigned                                      rrc_version;
   bool                                          enable_rrc_metrics;
   f1ap_configuration                            f1ap;
+  /// Coarse UE location to TAC mappings, one entry per NTN cell.
+  std::vector<ntn_cell_location_mapping> ntn_location_mappings;
 };
 
 /// DU processor repository dependencies.

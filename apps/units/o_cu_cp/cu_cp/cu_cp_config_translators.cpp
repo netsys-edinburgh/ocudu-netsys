@@ -643,6 +643,22 @@ static ocucp::mobility_configuration generate_mobility_conf(const cu_cp_unit_con
           .cho_timeout                        = std::chrono::milliseconds{cu_cfg.mobility_config.cho_timeout_ms}}};
 }
 
+/// Generates the coarse UE location to TAC mappings and returns them.
+static std::vector<ntn_cell_location_mapping> generate_ntn_location_mappings(const cu_cp_unit_config& cu_cfg)
+{
+  std::vector<ntn_cell_location_mapping> mappings;
+  for (const auto& cell_cfg : cu_cfg.ntn_location_mapping) {
+    ntn_cell_location_mapping mapping;
+    mapping.nci = nr_cell_identity::create(cell_cfg.nr_cell_id).value();
+    for (const auto& area : cell_cfg.tac_areas) {
+      mapping.mapping.tac_areas.push_back(
+          ntn_tac_area{area.tac, area.lat_min, area.lat_max, area.lon_min, area.lon_max});
+    }
+    mappings.push_back(std::move(mapping));
+  }
+  return mappings;
+}
+
 /// Generates the services configuration and returns it.
 static ocucp::cu_cp_configuration::service_params generate_services_conf()
 {
@@ -676,6 +692,8 @@ ocucp::cu_cp_configuration ocudu::generate_cu_cp_config(const cu_cp_unit_config&
     out_cell.barred      = cell.cell_barred;
     out_cfg.cells.push_back(out_cell);
   }
+
+  out_cfg.ntn_location_mappings = generate_ntn_location_mappings(cu_cfg);
 
   if (!config_helpers::is_valid_configuration(out_cfg)) {
     report_error("Invalid CU-CP configuration.\n");

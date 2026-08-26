@@ -295,6 +295,24 @@ static YAML::Node build_cu_cp_mobility_report_section(const cu_cp_unit_report_co
   return node;
 }
 
+static YAML::Node build_cu_cp_ntn_location_mapping_section(const cu_cp_unit_ntn_location_mapping_item& config)
+{
+  YAML::Node node;
+
+  node["nr_cell_id"] = config.nr_cell_id;
+  for (const auto& area : config.tac_areas) {
+    YAML::Node area_node;
+    area_node["tac"]     = area.tac;
+    area_node["lat_min"] = area.lat_min;
+    area_node["lat_max"] = area.lat_max;
+    area_node["lon_min"] = area.lon_min;
+    area_node["lon_max"] = area.lon_max;
+    node["tac_areas"].push_back(area_node);
+  }
+
+  return node;
+}
+
 static YAML::Node build_cu_cp_mobility_section(const cu_cp_unit_mobility_config& config)
 {
   YAML::Node node;
@@ -362,6 +380,9 @@ static void fill_cu_cp_section(YAML::Node node, const cu_cp_unit_config& config)
     node["xnap"] = build_cu_cp_xnap_section(config.xnap_config);
   }
   node["mobility"] = build_cu_cp_mobility_section(config.mobility_config);
+  for (const auto& cell_mapping : config.ntn_location_mapping) {
+    node["ntn_location_mapping"].push_back(build_cu_cp_ntn_location_mapping_section(cell_mapping));
+  }
   node["rrc"]      = build_cu_cp_rrc_section(config.rrc_config);
   node["security"] = build_cu_cp_security_section(config.security_config);
   // Merge into any existing F1AP/E1AP nodes the appconfig writer may have populated (bind_addrs, sctp...).

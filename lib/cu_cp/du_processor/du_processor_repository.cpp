@@ -27,7 +27,7 @@ du_processor_repository::du_processor_repository(const du_repository_config&    
   du_conn_notif(dependencies.du_conn_notif),
   ref_time_report_notifier(dependencies.ref_time_report_notifier),
   logger(dependencies.logger),
-  du_cfg_mng(cfg.gnb_id, config_helpers::get_supported_plmns(cfg.ngaps))
+  du_cfg_mng(cfg.gnb_id, config_helpers::get_supported_plmns(cfg.ngaps), cfg.ntn_location_mappings)
 {
 }
 

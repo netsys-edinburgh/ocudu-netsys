@@ -154,9 +154,11 @@ void rrc_ue_impl::on_as_security_activated()
 
 void rrc_ue_impl::request_coarse_ue_location()
 {
-  // Only worth asking for in an NTN cell, whose footprint can span several tracking areas. Queued rather than
-  // awaited, so a silent UE does not hold up the context setup.
-  if (std::none_of(context.cell.bands.begin(), context.cell.bands.end(), band_helper::is_ntn_band)) {
+  // Only worth asking for in an NTN cell, whose footprint can span several tracking areas, and only when the cell
+  // configures the areas that turn a position into a TAC. Without them the answer has no use, and the UE is spared
+  // the exchange.
+  if (context.cell.location_mapping.empty() or
+      std::none_of(context.cell.bands.begin(), context.cell.bands.end(), band_helper::is_ntn_band)) {
     return;
   }
 
