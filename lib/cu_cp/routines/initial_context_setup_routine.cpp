@@ -177,7 +177,8 @@ void initial_context_setup_routine::operator()(
       user_location_info.nr_cgi   = {request.guami.plmn, cell_ctx.cgi.nci};
       user_location_info.tai      = {request.guami.plmn, cell_ctx.tac};
       user_location_info.tac_list = cell_ctx.tac_list;
-      auto report                 = loc_mng.get_direct_location_report(request.ue_index, user_location_info, loc_req);
+      rrc_ue.fill_ue_derived_location(user_location_info);
+      auto report = loc_mng.get_direct_location_report(request.ue_index, user_location_info, loc_req);
       ngap_ue_location_reporting_handler.handle_location_report_transmission(report);
     }
   }

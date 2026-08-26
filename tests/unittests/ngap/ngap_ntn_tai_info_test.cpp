@@ -56,17 +56,53 @@ TEST(ngap_ntn_tai_info_test, multi_tac_cell_reports_every_broadcast_tac)
   EXPECT_EQ(asn1_uli.tai.tac.to_number(), 7);
 }
 
-TEST(ngap_ntn_tai_info_test, ue_location_derived_tac_is_absent)
+TEST(ngap_ntn_tai_info_test, ue_location_derived_tac_is_absent_without_a_coarse_ue_location)
 {
   const asn1::ngap::user_location_info_nr_s asn1_uli = cu_cp_user_location_info_to_asn1(make_uli({7, 8, 9}));
 
-  // Deriving it needs the coarse UE location, which the gNB does not request yet.
   EXPECT_FALSE(asn1_uli.ie_exts.nr_ntn_tai_info.ue_location_derived_tac_in_nr_ntn_present);
+}
+
+TEST(ngap_ntn_tai_info_test, ue_location_derived_tac_is_reported_when_it_was_derived)
+{
+  cu_cp_user_location_info_nr uli = make_uli({7, 8, 9});
+  uli.ue_location_derived_tac     = 8;
+
+  const asn1::ngap::user_location_info_nr_s asn1_uli = cu_cp_user_location_info_to_asn1(uli);
+
+  ASSERT_TRUE(asn1_uli.ie_exts.nr_ntn_tai_info.ue_location_derived_tac_in_nr_ntn_present);
+  EXPECT_EQ(asn1_uli.ie_exts.nr_ntn_tai_info.ue_location_derived_tac_in_nr_ntn.to_number(), 8);
+
+  // The derived TAC is reported alongside the broadcast list, not instead of it.
+  EXPECT_EQ(asn1_uli.ie_exts.nr_ntn_tai_info.tac_list_in_nr_ntn.size(), 3);
+  EXPECT_EQ(asn1_uli.tai.tac.to_number(), 7);
+}
+
+TEST(ngap_ntn_tai_info_test, single_tac_ntn_cell_reports_ntn_tai_information_once_a_tac_is_derived)
+{
+  // TS 38.300 sec. 16.14.3.1 leaves broadcasting several TACs optional, so an NTN cell may broadcast one TAC and still
+  // report the TAC derived from the UE location, sec. 16.14.5. A derived TAC only exists where a location mapping is
+  // configured, which no terrestrial cell has, so this state is reached by an NTN cell alone.
+  cu_cp_user_location_info_nr uli = make_uli({});
+  uli.ue_location_derived_tac     = 9;
+
+  const asn1::ngap::user_location_info_nr_s asn1_uli = cu_cp_user_location_info_to_asn1(uli);
+
+  ASSERT_TRUE(asn1_uli.ie_exts.nr_ntn_tai_info_present);
+  ASSERT_TRUE(asn1_uli.ie_exts.nr_ntn_tai_info.ue_location_derived_tac_in_nr_ntn_present);
+  EXPECT_EQ(asn1_uli.ie_exts.nr_ntn_tai_info.ue_location_derived_tac_in_nr_ntn.to_number(), 9);
+
+  // TS 38.413 sec. 9.3.3.53 takes at least one TAC, which is the single TAC the cell broadcasts.
+  ASSERT_EQ(asn1_uli.ie_exts.nr_ntn_tai_info.tac_list_in_nr_ntn.size(), 1);
+  EXPECT_EQ(asn1_uli.ie_exts.nr_ntn_tai_info.tac_list_in_nr_ntn[0].to_number(), 7);
 }
 
 TEST(ngap_ntn_tai_info_test, ntn_tai_information_survives_a_pack_unpack_round_trip)
 {
-  const asn1::ngap::user_location_info_nr_s asn1_uli = cu_cp_user_location_info_to_asn1(make_uli({7, 8, 9}));
+  cu_cp_user_location_info_nr uli = make_uli({7, 8, 9});
+  uli.ue_location_derived_tac     = 8;
+
+  const asn1::ngap::user_location_info_nr_s asn1_uli = cu_cp_user_location_info_to_asn1(uli);
 
   byte_buffer   buf;
   asn1::bit_ref bref{buf};
@@ -79,4 +115,6 @@ TEST(ngap_ntn_tai_info_test, ntn_tai_information_survives_a_pack_unpack_round_tr
   ASSERT_TRUE(unpacked.ie_exts.nr_ntn_tai_info_present) << "NR NTN TAI Information did not survive the round trip";
   ASSERT_EQ(unpacked.ie_exts.nr_ntn_tai_info.tac_list_in_nr_ntn.size(), 3);
   EXPECT_EQ(unpacked.ie_exts.nr_ntn_tai_info.tac_list_in_nr_ntn[2].to_number(), 9);
+  ASSERT_TRUE(unpacked.ie_exts.nr_ntn_tai_info.ue_location_derived_tac_in_nr_ntn_present);
+  EXPECT_EQ(unpacked.ie_exts.nr_ntn_tai_info.ue_location_derived_tac_in_nr_ntn.to_number(), 8);
 }

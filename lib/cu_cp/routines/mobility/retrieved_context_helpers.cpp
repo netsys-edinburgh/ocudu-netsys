@@ -72,6 +72,7 @@ ocudu::ocucp::fill_retrieved_context_path_switch_request(cu_cp_ue&              
   path_switch_req.user_location_info.nr_cgi   = {selected_plmn, cell_context.cgi.nci};
   path_switch_req.user_location_info.tai      = {selected_plmn, cell_context.tac};
   path_switch_req.user_location_info.tac_list = cell_context.tac_list;
+  ue.get_rrc_ue()->fill_ue_derived_location(path_switch_req.user_location_info);
 
   const security::security_context& sec_context = ue.get_security_manager().get_security_context();
   path_switch_req.supported_enc_algos           = sec_context.supported_enc_algos;
@@ -162,6 +163,7 @@ void ocudu::ocucp::start_retrieved_context_location_reporting(cu_cp_ue&         
     user_location_info.nr_cgi   = {selected_plmn, cell_context.cgi.nci};
     user_location_info.tai      = {selected_plmn, cell_context.tac};
     user_location_info.tac_list = cell_context.tac_list;
+    ue.get_rrc_ue()->fill_ue_derived_location(user_location_info);
 
     loc_report_handler.handle_location_report_transmission(
         ue.get_location_manager().get_direct_location_report(ue.get_ue_index(), user_location_info, loc_req));

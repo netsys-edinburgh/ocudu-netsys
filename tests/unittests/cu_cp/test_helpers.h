@@ -760,6 +760,11 @@ public:
     return launch_no_op_task(ue_cap_transfer_outcome);
   }
 
+  void fill_ue_derived_location(cu_cp_user_location_info_nr& user_location_info) const override
+  {
+    user_location_info.ue_location_derived_tac = ue_location_derived_tac;
+  }
+
   void request_coarse_ue_location() override {}
 
   rrc_ue_release_context
@@ -906,8 +911,9 @@ public:
   byte_buffer last_ue_capabilities;
 
 private:
-  ocudulog::basic_logger&               logger                      = ocudulog::fetch_basic_logger("TEST");
-  bool                                  ue_cap_transfer_outcome     = true;
+  ocudulog::basic_logger&               logger                  = ocudulog::fetch_basic_logger("TEST");
+  bool                                  ue_cap_transfer_outcome = true;
+  std::optional<tac_t>                  ue_location_derived_tac;
   bool                                  rrc_reconfiguration_outcome = false;
   unsigned                              test_transaction_id;
   static_vector<srb_id_t, MAX_NOF_SRBS> srb_vec;

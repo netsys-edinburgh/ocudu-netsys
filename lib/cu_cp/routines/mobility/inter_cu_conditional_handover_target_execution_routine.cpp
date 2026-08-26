@@ -269,6 +269,7 @@ cu_cp_path_switch_request inter_cu_conditional_handover_target_execution_routine
   path_switch_request.user_location_info.nr_cgi   = {ue->get_ue_context().plmn, cell_context.cgi.nci};
   path_switch_request.user_location_info.tai      = {ue->get_ue_context().plmn, cell_context.tac};
   path_switch_request.user_location_info.tac_list = cell_context.tac_list;
+  ue->get_rrc_ue()->fill_ue_derived_location(path_switch_request.user_location_info);
 
   path_switch_request.supported_enc_algos = ue->get_security_manager().get_security_context().supported_enc_algos;
   path_switch_request.supported_int_algos = ue->get_security_manager().get_security_context().supported_int_algos;

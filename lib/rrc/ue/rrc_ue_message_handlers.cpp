@@ -391,6 +391,7 @@ void rrc_ue_impl::handle_ul_info_transfer(const ul_info_transfer_ies_s& ul_info_
   ul_nas_msg.user_location_info.nr_cgi   = {context.plmn_id, context.cell.cgi.nci};
   ul_nas_msg.user_location_info.tai      = {context.plmn_id, context.cell.tac};
   ul_nas_msg.user_location_info.tac_list = context.cell.tac_list;
+  fill_ue_derived_location(ul_nas_msg.user_location_info);
 
   if (!ngap_notifier.on_ul_nas_transport_message(ul_nas_msg)) {
     logger.log_info(
@@ -928,6 +929,7 @@ rrc_ue_impl::get_rrc_ue_release_context(bool                                    
   release_context.user_location_info.nr_cgi   = {context.plmn_id, context.cell.cgi.nci};
   release_context.user_location_info.tai      = {context.plmn_id, context.cell.tac};
   release_context.user_location_info.tac_list = context.cell.tac_list;
+  fill_ue_derived_location(release_context.user_location_info);
 
   if (requires_rrc_message) {
     if (context.pdcp_manager.get_srb_ids().empty()) {

@@ -81,6 +81,7 @@ void inter_cu_handover_execution_target_routine::operator()(coro_context<async_t
     user_location_info.nr_cgi   = {ue->get_ue_context().plmn, target_cell.cgi.nci};
     user_location_info.tai      = {ue->get_ue_context().plmn, target_cell.tac};
     user_location_info.tac_list = target_cell.tac_list;
+    ue->get_rrc_ue()->fill_ue_derived_location(user_location_info);
 
     ngap.get_ngap_control_message_handler().handle_inter_cu_ho_rrc_recfg_complete(ue->get_ue_index(),
                                                                                   user_location_info);
@@ -90,6 +91,7 @@ void inter_cu_handover_execution_target_routine::operator()(coro_context<async_t
                                                    ue->get_rrc_ue()->get_cell_context(),
                                                    ue->get_ue_context().plmn,
                                                    ue->get_security_manager().get_security_context());
+    ue->get_rrc_ue()->fill_ue_derived_location(path_switch_request.user_location_info);
 
     // Send Path Switch Request from here.
     CORO_AWAIT_VALUE(path_switch_response,

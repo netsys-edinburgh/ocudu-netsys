@@ -166,6 +166,20 @@ void rrc_ue_impl::request_coarse_ue_location()
       launch_async<rrc_ue_information_procedure>(context, *this, cu_cp_ue_notifier, *event_mng, logger));
 }
 
+void rrc_ue_impl::fill_ue_derived_location(cu_cp_user_location_info_nr& user_location_info) const
+{
+  user_location_info.ue_location_derived_tac = get_ue_location_derived_tac();
+}
+
+std::optional<tac_t> rrc_ue_impl::get_ue_location_derived_tac() const
+{
+  if (not context.coarse_location.has_value()) {
+    return std::nullopt;
+  }
+
+  return derive_tac_from_location(context.cell.location_mapping, context.coarse_location->position);
+}
+
 // Builds the UE's current radio bearer configuration (all active DRBs across all PDU sessions) from the UP
 // context.
 static rrc_radio_bearer_config build_source_radio_bearer_config(const up_context& up_ctxt)

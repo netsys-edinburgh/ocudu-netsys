@@ -71,7 +71,11 @@ public:
                                                                      bool release_on_failure = true) override;
   bool             store_ue_capabilities(byte_buffer ue_capabilities) override;
   async_task<bool> handle_rrc_ue_capability_transfer_request(const rrc_ue_capability_transfer_request& msg) override;
+  void             fill_ue_derived_location(cu_cp_user_location_info_nr& user_location_info) const override;
   void             request_coarse_ue_location() override;
+
+  /// Returns the TAC of the configured area holding the coarse position the UE reported, if any.
+  std::optional<tac_t> get_ue_location_derived_tac() const;
   rrc_ue_release_context
                           get_rrc_ue_release_context(bool                                          requires_rrc_message,
                                                      std::optional<std::chrono::seconds>           release_wait_time = std::nullopt,

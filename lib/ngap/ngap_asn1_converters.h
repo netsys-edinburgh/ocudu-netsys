@@ -227,18 +227,30 @@ cu_cp_user_location_info_to_asn1(const cu_cp_user_location_info_nr& cu_cp_user_l
     asn1_user_location_info.time_stamp_present = true;
     asn1_user_location_info.time_stamp.from_number(cu_cp_user_location_info.time_stamp.value());
   }
-  // NR NTN TAI Information, TS 38.413: the TAI above carries one TAC, so report the full broadcast list here. An
-  // AMF reading this IE ignores that TAI; one that does not support it still has it.
-  if (not cu_cp_user_location_info.tac_list.empty()) {
+  // NR NTN TAI Information, TS 38.413 sec. 9.3.3.53: the TAI above carries one TAC, so report every broadcast TAC
+  // here, plus the one derived from the UE location when known. Both are filled: an AMF that reads this IE ignores
+  // the TAI, sec. 9.3.1.16, while an older one skips the IE and uses the TAI. Broadcasting several TACs is optional,
+  // TS 38.300 sec. 16.14.3.1, so a single-TAC cell reports the IE too once a TAC is derived, sec. 16.14.5.
+  if (not cu_cp_user_location_info.tac_list.empty() or cu_cp_user_location_info.ue_location_derived_tac.has_value()) {
     asn1_user_location_info.ie_exts_present                      = true;
     asn1_user_location_info.ie_exts.nr_ntn_tai_info_present      = true;
     asn1_user_location_info.ie_exts.nr_ntn_tai_info.serving_plmn = cu_cp_user_location_info.tai.plmn_id.to_bytes();
-    for (tac_t tac : cu_cp_user_location_info.tac_list) {
+
+    // TS 38.331: a cell broadcasting a single TAC carries it in trackingAreaCode, which the CU-CP keeps in the TAI
+    // alone. The TAC List in NR NTN takes one entry at least, TS 38.413 sec. 9.3.3.53, so report that TAC here.
+    const tac_list_t single_tac{cu_cp_user_location_info.tai.tac};
+    for (tac_t tac : cu_cp_user_location_info.tac_list.empty() ? single_tac : cu_cp_user_location_info.tac_list) {
       asn1::fixed_octstring<3, true> asn1_tac;
       asn1_tac.from_number(tac);
       asn1_user_location_info.ie_exts.nr_ntn_tai_info.tac_list_in_nr_ntn.push_back(asn1_tac);
     }
-    // UE Location Derived TAC needs the coarse UE location, not reported yet.
+
+    // UE Location Derived TAC in NR NTN, TS 38.413 sec. 9.3.3.53: reported only when the UE location is known.
+    if (cu_cp_user_location_info.ue_location_derived_tac.has_value()) {
+      asn1_user_location_info.ie_exts.nr_ntn_tai_info.ue_location_derived_tac_in_nr_ntn_present = true;
+      asn1_user_location_info.ie_exts.nr_ntn_tai_info.ue_location_derived_tac_in_nr_ntn.from_number(
+          cu_cp_user_location_info.ue_location_derived_tac.value());
+    }
   }
 
   return asn1_user_location_info;

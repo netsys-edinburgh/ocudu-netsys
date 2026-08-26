@@ -90,6 +90,37 @@ TEST_F(du_configuration_manager_test, when_two_dus_have_valid_configs_then_the_t
   ASSERT_EQ(du_cfg_mng.nof_dus(), 2);
 }
 
+TEST(du_configuration_manager_ntn_test, a_cell_broadcasting_a_single_tac_keeps_its_location_mapping)
+{
+  // TS 38.300 sec. 16.14.3.1 leaves broadcasting several TACs optional, and TS 38.331 keeps the single TAC of such a
+  // cell in trackingAreaCode, which leaves trackingAreaList empty. That cell still derives its own TAC, reported as
+  // the single entry of the TAC List in NR NTN, so the mapping must survive.
+  ntn_tac_area area;
+  area.tac     = 7;
+  area.lat_min = 50.0;
+  area.lat_max = 52.0;
+  area.lon_min = 14.0;
+  area.lon_max = 17.0;
+
+  ntn_cell_location_mapping mapping;
+  mapping.nci = nr_cell_identity::create(gnb_id_t{411, 22}, 0).value();
+  mapping.mapping.tac_areas.push_back(area);
+
+  du_configuration_manager du_cfg_mng{gnb_id_t{411, 22}, {plmn_identity::test_value()}, {mapping}};
+
+  auto du_cfg_updater = du_cfg_mng.create_du_handler();
+  auto setup_req      = create_basic_du_setup_request();
+  auto ret            = du_cfg_updater->handle_new_du_config(setup_req);
+  ASSERT_TRUE(ret.has_value()) << "DU setup failed: " << ret.error().cause_str;
+  ASSERT_EQ(du_cfg_updater->get_context().served_cells.size(), 1);
+
+  const du_cell_configuration& cell = du_cfg_updater->get_context().served_cells[0];
+  ASSERT_TRUE(cell.tac_list.empty()) << "the cell must broadcast no trackingAreaList for this case";
+  ASSERT_FALSE(cell.location_mapping.empty());
+  ASSERT_EQ(cell.location_mapping.tac_areas.size(), 1);
+  EXPECT_EQ(cell.location_mapping.tac_areas[0].tac, 7);
+}
+
 TEST_F(du_configuration_manager_test, when_du_has_duplicate_du_id_then_setup_fails)
 {
   auto setup_req1      = create_basic_du_setup_request(0);

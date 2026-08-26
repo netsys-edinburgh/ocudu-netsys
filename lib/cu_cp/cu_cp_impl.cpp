@@ -1093,6 +1093,7 @@ cu_cp_impl::handle_new_ue_context_modification_request(const ngap_ue_context_mod
     mod_response.user_location_info->nr_cgi   = {ue->get_ue_context().plmn, cell_ctx.cgi.nci};
     mod_response.user_location_info->tai      = {ue->get_ue_context().plmn, cell_ctx.tac};
     mod_response.user_location_info->tac_list = cell_ctx.tac_list;
+    ue->get_rrc_ue()->fill_ue_derived_location(*mod_response.user_location_info);
   }
 
   return launch_async(
@@ -1606,6 +1607,7 @@ void cu_cp_impl::handle_location_reporting_control_message(cu_cp_ue_index_t     
     user_location_info.nr_cgi   = {ue->get_ue_context().plmn, cell_ctx.cgi.nci};
     user_location_info.tai      = {ue->get_ue_context().plmn, cell_ctx.tac};
     user_location_info.tac_list = cell_ctx.tac_list;
+    ue->get_rrc_ue()->fill_ue_derived_location(user_location_info);
     auto report = ue->get_location_manager().get_direct_location_report(ue_index, user_location_info, msg);
 
     auto* ngap = ngap_db.find_ngap(ue->get_ue_context().plmn);
@@ -1636,6 +1638,7 @@ void cu_cp_impl::handle_location_update(cu_cp_ue_index_t ue_index)
   user_location_info.nr_cgi   = {ue->get_ue_context().plmn, cell_ctx.cgi.nci};
   user_location_info.tai      = {ue->get_ue_context().plmn, cell_ctx.tac};
   user_location_info.tac_list = cell_ctx.tac_list;
+  ue->get_rrc_ue()->fill_ue_derived_location(user_location_info);
 
   auto opt_report = ue->get_location_manager().get_location_report(ue_index, user_location_info);
   if (!opt_report.has_value()) {
