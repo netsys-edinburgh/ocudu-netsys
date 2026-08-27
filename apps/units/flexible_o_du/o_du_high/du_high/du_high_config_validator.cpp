@@ -367,6 +367,7 @@ static bool validate_pdsch_cell_unit_config(const du_high_unit_pdsch_config& con
 static bool validate_csi_cell_unit_config(const du_high_unit_csi_config&                      config,
                                           subcarrier_spacing                                  scs_common,
                                           unsigned                                            cell_bw_crbs,
+                                          unsigned                                            nof_antennas_dl,
                                           const std::optional<du_high_unit_tdd_ul_dl_config>& tdd_cfg)
 {
   // CSI RS period limitation due to TS 38.214 Section 5.1.6.1.1:
@@ -391,6 +392,29 @@ static bool validate_csi_cell_unit_config(const du_high_unit_csi_config&        
           csi_period_slots);
       return false;
     }
+  }
+
+  if (config.type2_codebook_enabled) {
+    if (not config.csi_rs_enabled) {
+      fmt::print("Type-II CSI reporting requires CSI-RS to be enabled.\n");
+      return false;
+    }
+
+    // As per TS 38.214 Section 5.2.2.2.3, the Type-II codebook is only defined for 4 or more CSI-RS ports.
+    if (nof_antennas_dl < 4) {
+      fmt::print("Type-II CSI reporting requires at least 4 DL antennas, given {}.\n", nof_antennas_dl);
+      return false;
+    }
+
+    // The Type-II PMI is reported in CSI Part 2, which is only multiplexed in PUSCH.
+    if (config.report_type != csi_report_type::aperiodic) {
+      fmt::print("Type-II CSI reporting requires aperiodic CSI reporting, as the PMI is carried in CSI Part 2.\n");
+      return false;
+    }
+
+    // TODO: remove this check once the Type-II CSI report handling is in place.
+    fmt::print("Type-II CSI reporting is not supported yet.\n");
+    return false;
   }
 
   return true;
@@ -1845,7 +1869,8 @@ static bool validate_base_cell_unit_config(const du_high_unit_base_cell_config& 
     return false;
   }
 
-  if (!validate_csi_cell_unit_config(config.csi_cfg, config.common_scs, nof_crbs, config.tdd_ul_dl_cfg)) {
+  if (!validate_csi_cell_unit_config(
+          config.csi_cfg, config.common_scs, nof_crbs, config.nof_antennas_dl, config.tdd_ul_dl_cfg)) {
     return false;
   }
 

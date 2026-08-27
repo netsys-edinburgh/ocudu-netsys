@@ -687,6 +687,11 @@ static void configure_cli11_csi_args(CLI::App& app, du_high_unit_csi_config& csi
       ->default_str("periodic")
       ->check(CLI::IsMember({"periodic", "aperiodic"}, CLI::ignore_case));
   add_option(app,
+             "--type2_codebook_enabled",
+             csi_params.type2_codebook_enabled,
+             "Enable Type-II CSI reporting for the UEs that support the Type-II codebook")
+      ->capture_default_str();
+  add_option(app,
              "--meas_csi_rs_slot_offset",
              csi_params.meas_csi_slot_offset,
              "Slot offset of first CSI-RS resource used for measurement")

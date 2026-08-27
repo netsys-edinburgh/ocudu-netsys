@@ -1089,6 +1089,10 @@ struct du_high_unit_csi_config {
   int pwr_ctrl_offset = 0;
   /// \brief Type of CSI reporting configuration to use.
   csi_report_type report_type = csi_report_type::periodic;
+  /// \brief Enable Type-II CSI reporting in the cell for UEs that support Type-II codebook.
+  ///
+  /// Note the use of precoding Type-II codebooks limits the maximum number of layer per UE to 2.
+  bool type2_codebook_enabled = false;
 };
 
 /// \brief Configuration of a single DL-PRS resource within a PRS Resource Set.

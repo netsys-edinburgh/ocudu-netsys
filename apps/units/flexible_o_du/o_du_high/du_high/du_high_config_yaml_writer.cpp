@@ -636,9 +636,10 @@ static YAML::Node build_du_high_csi_section(const du_high_unit_csi_config& confi
 {
   YAML::Node node;
 
-  node["csi_rs_enabled"]  = config.csi_rs_enabled;
-  node["csi_rs_period"]   = config.csi_rs_period_msec;
-  node["pwr_ctrl_offset"] = config.pwr_ctrl_offset;
+  node["csi_rs_enabled"]         = config.csi_rs_enabled;
+  node["csi_rs_period"]          = config.csi_rs_period_msec;
+  node["pwr_ctrl_offset"]        = config.pwr_ctrl_offset;
+  node["type2_codebook_enabled"] = config.type2_codebook_enabled;
   switch (config.report_type) {
     case csi_report_type::aperiodic:
       node["report_type"] = "aperiodic";
