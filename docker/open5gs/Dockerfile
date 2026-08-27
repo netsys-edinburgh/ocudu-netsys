@@ -7,11 +7,11 @@ FROM ubuntu:$OS_VERSION AS base
 ENV PYTHONBUFFERED=1
 ARG DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update \
+RUN DEBIAN_FRONTEND=noninteractive apt-get update \
     && apt install -y software-properties-common \
     && rm -rf /var/lib/apt/lists/*
 
-RUN apt-get update \
+RUN DEBIAN_FRONTEND=noninteractive apt-get update \
     && apt-get install -y \
     python3-pip \
     python3-setuptools \
@@ -49,11 +49,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 ARG MONGO_MAJOR_VERSION=6
-RUN apt-get update && apt-get install -y --no-install-recommends wget gnupg \
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y --no-install-recommends wget gnupg \
     && wget -qO - https://www.mongodb.org/static/pgp/server-${MONGO_MAJOR_VERSION}.0.asc | apt-key add \
     && . /etc/os-release \
     && echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu $UBUNTU_CODENAME/mongodb-org/${MONGO_MAJOR_VERSION}.0 multiverse" | tee /etc/apt/sources.list.d/mongodb-org-${MONGO_MAJOR_VERSION}.0.list \
-    && apt-get update && apt-get install -y --no-install-recommends mongodb-org \
+    && DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y --no-install-recommends mongodb-org \
     && apt-get autoremove && apt-get clean
 
 # To set a fixed version of open5gs use
