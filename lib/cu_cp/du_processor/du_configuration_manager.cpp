@@ -183,6 +183,13 @@ ntn_location_mapping du_configuration_manager::get_location_mapping(const du_cel
     return item.nci == cell.cgi.nci;
   });
   if (mapping_it == ntn_location_mappings.end()) {
+    // Only an NTN cell derives anything from a position, so a terrestrial one without a mapping says nothing.
+    if (not ntn_location_mappings.empty() and
+        std::any_of(cell.bands.begin(), cell.bands.end(), band_helper::is_ntn_band)) {
+      logger.info("Cell={}: No coarse UE location mapping is configured for this cell, so it derives no TAC from a "
+                  "reported position",
+                  cell.cgi.nci);
+    }
     return {};
   }
 
@@ -193,6 +200,8 @@ ntn_location_mapping du_configuration_manager::get_location_mapping(const du_cel
                    "for it",
                    cell.cgi.nci);
   }
+
+  logger.info("Cell={}: Configured {} coarse UE location areas", cell.cgi.nci, mapping_it->mapping.tac_areas.size());
 
   logger.info("Cell={}: Configured {} coarse UE location areas", cell.cgi.nci, mapping_it->mapping.tac_areas.size());
 

@@ -177,7 +177,22 @@ std::optional<tac_t> rrc_ue_impl::get_ue_location_derived_tac() const
     return std::nullopt;
   }
 
-  return derive_tac_from_location(context.cell.location_mapping, context.coarse_location->position);
+  std::optional<tac_t> derived_tac =
+      derive_tac_from_location(context.cell.location_mapping, context.coarse_location->position);
+  if (not derived_tac.has_value()) {
+    logger.log_debug("No TAC derived from the coarse UE location lat={:.4f} lon={:.4f} reported {}s ago. Cause: {}",
+                     context.coarse_location->position.latitude,
+                     context.coarse_location->position.longitude,
+                     std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() -
+                                                                      context.coarse_location->received_at)
+                         .count(),
+                     context.cell.location_mapping.empty() ? "the cell has no location mapping"
+                                                           : "the position is outside every configured area");
+    return std::nullopt;
+  }
+
+  logger.log_debug("Derived TAC={} from the coarse UE location", derived_tac.value());
+  return derived_tac;
 }
 
 // Builds the UE's current radio bearer configuration (all active DRBs across all PDU sessions) from the UP
