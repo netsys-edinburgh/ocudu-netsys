@@ -26,6 +26,7 @@ class rrc_ue_information_procedure
 public:
   rrc_ue_information_procedure(rrc_ue_context_t&                           context_,
                                rrc_ue_security_mode_command_proc_notifier& rrc_ue_notifier_,
+                               rrc_ue_context_update_notifier&             cu_cp_notifier_,
                                rrc_ue_cu_cp_ue_notifier&                   cu_cp_ue_notifier_,
                                rrc_ue_event_manager&                       event_mng_,
                                rrc_ue_logger&                              logger_);
@@ -44,6 +45,7 @@ private:
   rrc_ue_context_t& context;
 
   rrc_ue_security_mode_command_proc_notifier& rrc_ue;            // handler to the parent RRC UE object
+  rrc_ue_context_update_notifier&             cu_cp_notifier;    // handler to the CU-CP
   rrc_ue_cu_cp_ue_notifier&                   cu_cp_ue_notifier; // handler to the CU-CP UE
   rrc_ue_event_manager&                       event_mng;         // event manager for the RRC UE entity
   rrc_ue_logger&                              logger;

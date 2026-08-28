@@ -147,6 +147,12 @@ public:
 
   void on_up_context_setup_required(const up_context& ctxt) override { logger.info("UP context setup requested"); }
 
+  void on_ue_location_update() override
+  {
+    logger.info("UE location update reported");
+    ++nof_ue_location_updates;
+  }
+
   up_context on_up_context_required() override
   {
     logger.info("UP context requested");
@@ -191,6 +197,9 @@ public:
   up_context up_ctxt;
 
   cu_cp_ue_context_release_request last_cu_cp_ue_context_release_request;
+
+  /// Counts the coarse UE location updates reported to the CU-CP.
+  unsigned nof_ue_location_updates = 0;
 
 private:
   rrc_ue_reestablishment_context_response reest_context = {};

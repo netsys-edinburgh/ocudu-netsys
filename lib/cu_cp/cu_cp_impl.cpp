@@ -2039,7 +2039,8 @@ void cu_cp_impl::handle_rrc_ue_creation(cu_cp_ue_index_t ue_index, rrc_ue_interf
                                                           get_cu_cp_ue_removal_handler(),
                                                           controller,
                                                           ue->get_up_resource_manager(),
-                                                          get_cu_cp_measurement_handler());
+                                                          get_cu_cp_measurement_handler(),
+                                                          get_cu_cp_location_manager_handler());
 }
 
 byte_buffer cu_cp_impl::handle_target_cell_sib1_required(cu_cp_du_index_t du_index, nr_cell_global_id_t cgi)

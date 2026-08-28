@@ -42,6 +42,10 @@ struct dummy_cu_cp_measurement_handler : public cu_cp_measurement_handler {
   void handle_measurement_report(const cu_cp_ue_index_t ue_index, const rrc_meas_results& meas_results) override {}
 };
 
+struct dummy_cu_cp_location_manager_handler : public cu_cp_location_manager_handler {
+  void handle_location_update(cu_cp_ue_index_t ue_index) override {}
+};
+
 struct dummy_cu_cp_ue_removal_handler : public cu_cp_ue_removal_handler {
   async_task<void> handle_ue_removal_request(cu_cp_ue_index_t ue_index) override { return launch_no_op_task(); }
   void             handle_pending_ue_task_cancellation(cu_cp_ue_index_t ue_index) override {}
@@ -95,7 +99,8 @@ public:
                                                             ue_rem_handler,
                                                             ue_admission_handler,
                                                             ue_mng.find_ue(ue_index)->get_up_resource_manager(),
-                                                            meas_handler);
+                                                            meas_handler,
+                                                            location_handler);
   }
   byte_buffer handle_target_cell_sib1_required(cu_cp_du_index_t du_index, nr_cell_global_id_t cgi) override
   {
@@ -120,11 +125,12 @@ public:
   void handle_served_cells_updated() override {}
 
 private:
-  ue_manager&                         ue_mng;
-  dummy_cu_cp_ue_admission_controller ue_admission_handler;
-  dummy_cu_cp_measurement_handler     meas_handler;
-  dummy_cu_cp_ue_removal_handler      ue_rem_handler;
-  dummy_cu_cp_rrc_ue_interface        rrc_ue_handler;
+  ue_manager&                          ue_mng;
+  dummy_cu_cp_ue_admission_controller  ue_admission_handler;
+  dummy_cu_cp_measurement_handler      meas_handler;
+  dummy_cu_cp_location_manager_handler location_handler;
+  dummy_cu_cp_ue_removal_handler       ue_rem_handler;
+  dummy_cu_cp_rrc_ue_interface         rrc_ue_handler;
 };
 
 } // namespace

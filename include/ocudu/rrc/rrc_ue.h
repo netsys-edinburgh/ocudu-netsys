@@ -567,6 +567,10 @@ public:
   /// \param[in] ctxt The UP context to setup.
   virtual void on_up_context_setup_required(const up_context& ctxt) = 0;
 
+  /// \brief Notifies the CU-CP that the location the UE reports has changed, so that a Location Report is sent when
+  /// the AMF configured location reporting.
+  virtual void on_ue_location_update() = 0;
+
   /// \brief Get the UP context of the UE.
   /// \returns The UP context of the UE.
   virtual up_context on_up_context_required() = 0;

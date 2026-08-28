@@ -12,11 +12,13 @@ using namespace asn1::rrc_nr;
 
 rrc_ue_information_procedure::rrc_ue_information_procedure(rrc_ue_context_t&                           context_,
                                                            rrc_ue_security_mode_command_proc_notifier& rrc_ue_notifier_,
+                                                           rrc_ue_context_update_notifier&             cu_cp_notifier_,
                                                            rrc_ue_cu_cp_ue_notifier& cu_cp_ue_notifier_,
                                                            rrc_ue_event_manager&     event_mng_,
                                                            rrc_ue_logger&            logger_) :
   context(context_),
   rrc_ue(rrc_ue_notifier_),
+  cu_cp_notifier(cu_cp_notifier_),
   cu_cp_ue_notifier(cu_cp_ue_notifier_),
   event_mng(event_mng_),
   logger(logger_)
@@ -106,6 +108,16 @@ void rrc_ue_information_procedure::store_coarse_location(const ue_info_resp_r16_
     return;
   }
 
+  // Only a position that moved can derive a new TAC.
+  const bool moved = not context.coarse_location.has_value() or
+                     context.coarse_location->position.latitude != position->latitude or
+                     context.coarse_location->position.longitude != position->longitude;
+
   context.coarse_location = coarse_ue_location{position.value(), std::chrono::steady_clock::now()};
   logger.log_debug("Stored coarse UE location lat={:.4f} lon={:.4f}", position->latitude, position->longitude);
+
+  if (moved) {
+    // A new position may mean a new derived TAC, so report it now rather than wait for the next message carrying one.
+    cu_cp_notifier.on_ue_location_update();
+  }
 }

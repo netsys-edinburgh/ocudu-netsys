@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "cu_cp_test_environment.h"
+#include "lib/cu_cp/ue_location_manager/ue_location_manager.h"
 #include "tests/test_doubles/ngap/ngap_test_message_validators.h"
 #include "tests/unittests/ngap/ngap_test_messages.h"
 #include "ocudu/adt/format.h"
@@ -328,4 +329,49 @@ TEST_F(cu_cp_location_reporting_test,
             asn1::ngap::event_type_opts::change_of_serve_cell);
   ASSERT_EQ(location_report->user_location_info.type(),
             asn1::ngap::user_location_info_c::types_opts::user_location_info_nr);
+}
+
+namespace {
+
+cu_cp_user_location_info_nr make_uli(std::optional<tac_t> derived_tac = std::nullopt)
+{
+  cu_cp_user_location_info_nr uli;
+  uli.nr_cgi.plmn_id          = plmn_identity::test_value();
+  uli.nr_cgi.nci              = nr_cell_identity::create(0x66c000).value();
+  uli.tai                     = {plmn_identity::test_value(), 7};
+  uli.ue_location_derived_tac = derived_tac;
+  return uli;
+}
+
+/// Reports the second of two consecutive locations, with change_of_serve_cell reporting alone active.
+std::optional<location_report> report_after(const cu_cp_user_location_info_nr& first,
+                                            const cu_cp_user_location_info_nr& second)
+{
+  ue_location_manager_cfg cfg;
+  cfg.report_on_cell_change = true;
+
+  ue_location_manager mng;
+  mng.set_config(cfg);
+
+  mng.get_location_report(cu_cp_ue_index_t::min, first);
+  return mng.get_location_report(cu_cp_ue_index_t::min, second);
+}
+
+} // namespace
+
+TEST(cu_cp_location_change_test, an_unchanged_location_is_not_reported_again)
+{
+  const cu_cp_user_location_info_nr uli = make_uli(9);
+
+  EXPECT_FALSE(report_after(uli, uli).has_value());
+}
+
+TEST(cu_cp_location_change_test, a_changed_derived_tac_is_reported_without_a_change_of_cell)
+{
+  // The UE moved into another area of the same cell, so the TAC reported to the AMF changed while the serving cell
+  // did not.
+  const std::optional<location_report> report = report_after(make_uli(9), make_uli(8));
+  ASSERT_TRUE(report.has_value());
+  ASSERT_TRUE(report->user_location_info.ue_location_derived_tac.has_value());
+  EXPECT_EQ(report->user_location_info.ue_location_derived_tac.value(), 8);
 }

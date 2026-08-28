@@ -162,8 +162,8 @@ void rrc_ue_impl::request_coarse_ue_location()
     return;
   }
 
-  cu_cp_ue_notifier.schedule_async_task(
-      launch_async<rrc_ue_information_procedure>(context, *this, cu_cp_ue_notifier, *event_mng, logger));
+  cu_cp_ue_notifier.schedule_async_task(launch_async<rrc_ue_information_procedure>(
+      context, *this, cu_cp_notifier, cu_cp_ue_notifier, *event_mng, logger));
 }
 
 void rrc_ue_impl::fill_ue_derived_location(cu_cp_user_location_info_nr& user_location_info) const

@@ -143,9 +143,12 @@ ue_location_manager::get_location_report(cu_cp_ue_index_t                   ue_i
     return std::nullopt;
   }
 
-  // Suppress report if only change_of_serve_cell reporting is active and the cell hasn't changed since the last report.
+  // Suppress report if only change_of_serve_cell reporting is active and the location hasn't changed since the last
+  // report. The location holds the TAC derived from the UE's own position, so moving between areas counts as a new
+  // location without a cell change.
   if (cfg.report_on_cell_change && !cfg.report_ue_presence_in_aoi && cfg.last_reported_location.has_value() &&
-      cfg.last_reported_location->nr_cgi == user_location_info.nr_cgi) {
+      cfg.last_reported_location->nr_cgi == user_location_info.nr_cgi &&
+      cfg.last_reported_location->ue_location_derived_tac == user_location_info.ue_location_derived_tac) {
     return std::nullopt;
   }
 

@@ -5,12 +5,15 @@
 #include "rrc_ue_test_helpers.h"
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
 #include "ocudu/asn1/rrc_nr/dl_dcch_msg.h"
+#include "ocudu/asn1/rrc_nr/ul_dcch_msg.h"
+#include "ocudu/lpp/reference_location.h"
 #include <gtest/gtest.h>
 
 using namespace ocudu;
 using namespace ocucp;
 
-/// Covers which serving cells the coarse UE location is asked for, TS 38.300 sec. 16.14.8.
+/// Covers the coarse UE location exchange, TS 38.300 sec. 16.14.8: which cells it runs on, and what the
+/// response does to the stored position.
 class rrc_ue_coarse_location : public rrc_ue_test_helper, public ::testing::Test
 {
 protected:
@@ -66,6 +69,50 @@ protected:
     const asn1::rrc_nr::ue_info_request_r16_ies_s& ies     = request.crit_exts.ue_info_request_r16();
     return ies.non_crit_ext_present and ies.non_crit_ext.coarse_location_request_r17_present;
   }
+
+  /// Feeds a UEInformationResponse back, carrying \c coarse_location_info as the coarseLocationInfo-r17 IE.
+  void receive_ue_information_response(const std::vector<uint8_t>& coarse_location_info, bool with_v1700_ext = true)
+  {
+    asn1::rrc_nr::ul_dcch_msg_s       ul_dcch_msg;
+    asn1::rrc_nr::ue_info_resp_r16_s& ue_info_resp =
+        ul_dcch_msg.msg.set_msg_class_ext().set_c2().set_ue_info_resp_r16();
+    ue_info_resp.rrc_transaction_id = sent_request().rrc_transaction_id;
+
+    asn1::rrc_nr::ue_info_resp_r16_ies_s& ies = ue_info_resp.crit_exts.set_ue_info_resp_r16();
+    if (with_v1700_ext) {
+      ies.non_crit_ext_present = true;
+      ies.non_crit_ext.coarse_location_info_r17.from_bytes(coarse_location_info);
+    }
+
+    byte_buffer   pdu;
+    asn1::bit_ref bref{pdu};
+    ASSERT_EQ(ul_dcch_msg.pack(bref), asn1::OCUDUASN_SUCCESS);
+
+    rrc_ue->handle_ul_dcch_pdu(srb_id_t::srb1, std::move(pdu), /* integrity_verified */ true);
+  }
+
+  /// Brings up a cell worth asking on and sends the request.
+  void init_and_request()
+  {
+    init_cell(nr_band::n256, /* with_mapping */ true);
+    rrc_ue->request_coarse_ue_location();
+    ASSERT_TRUE(coarse_location_was_requested());
+  }
+
+  /// The TAC the RRC UE derives for the stored position, as the NGAP reads it out of the UE.
+  std::optional<tac_t> derived_tac()
+  {
+    cu_cp_user_location_info_nr user_location_info;
+    rrc_ue->fill_ue_derived_location(user_location_info);
+    return user_location_info.ue_location_derived_tac;
+  }
+
+  /// An Ellipsoid-Point of TS 37.355, the shape the UE reports its coarse location in.
+  static std::vector<uint8_t> packed_position(const reference_location& loc)
+  {
+    byte_buffer packed = lpp::pack_reference_location(loc);
+    return std::vector<uint8_t>(packed.begin(), packed.end());
+  }
 };
 
 TEST_F(rrc_ue_coarse_location, ntn_cell_with_a_mapping_is_asked_for_the_coarse_location)
@@ -116,4 +163,70 @@ TEST_F(rrc_ue_coarse_location, ue_without_as_security_is_not_asked)
   rrc_ue->request_coarse_ue_location();
 
   EXPECT_FALSE(coarse_location_was_requested());
+}
+
+TEST_F(rrc_ue_coarse_location, reported_position_is_stored_and_reported_to_the_cu_cp)
+{
+  init_and_request();
+
+  receive_ue_information_response(packed_position({51.0, 15.0}));
+
+  // The TAC of the area holding the position, which only a correctly decoded and stored one yields.
+  EXPECT_EQ(derived_tac(), 7);
+  EXPECT_EQ(rrc_ue_cu_cp_notifier.nof_ue_location_updates, 1);
+}
+
+TEST_F(rrc_ue_coarse_location, a_position_that_did_not_move_is_reported_once)
+{
+  init_and_request();
+  receive_ue_information_response(packed_position({51.0, 15.0}));
+
+  // Asking again yields the same coordinates, which derive the same TAC.
+  rrc_ue->request_coarse_ue_location();
+  receive_ue_information_response(packed_position({51.0, 15.0}));
+
+  EXPECT_EQ(derived_tac(), 7);
+  EXPECT_EQ(rrc_ue_cu_cp_notifier.nof_ue_location_updates, 1);
+}
+
+TEST_F(rrc_ue_coarse_location, a_position_that_moved_is_reported_again)
+{
+  init_and_request();
+  receive_ue_information_response(packed_position({51.0, 15.0}));
+
+  // The UE moved into the adjoining area, so the TAC the AMF is told changes with it.
+  rrc_ue->request_coarse_ue_location();
+  receive_ue_information_response(packed_position({53.0, 15.0}));
+
+  EXPECT_EQ(derived_tac(), 8);
+  EXPECT_EQ(rrc_ue_cu_cp_notifier.nof_ue_location_updates, 2);
+}
+
+TEST_F(rrc_ue_coarse_location, response_without_the_v1700_extension_reports_nothing)
+{
+  // A UE that does not implement the r17 extension answers without it.
+  init_and_request();
+
+  receive_ue_information_response({}, /* with_v1700_ext */ false);
+
+  EXPECT_EQ(rrc_ue_cu_cp_notifier.nof_ue_location_updates, 0);
+}
+
+TEST_F(rrc_ue_coarse_location, response_without_a_position_reports_nothing)
+{
+  // coarseLocationInfo has no presence flag, so "not available" arrives as an empty octet string.
+  init_and_request();
+
+  receive_ue_information_response({});
+
+  EXPECT_EQ(rrc_ue_cu_cp_notifier.nof_ue_location_updates, 0);
+}
+
+TEST_F(rrc_ue_coarse_location, undecodable_position_reports_nothing)
+{
+  init_and_request();
+
+  receive_ue_information_response({0xff, 0xff, 0xff});
+
+  EXPECT_EQ(rrc_ue_cu_cp_notifier.nof_ue_location_updates, 0);
 }
