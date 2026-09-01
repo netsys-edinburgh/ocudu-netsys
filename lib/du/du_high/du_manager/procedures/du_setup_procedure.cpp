@@ -151,6 +151,12 @@ void du_setup_procedure::operator()(coro_context<async_task<void>>& ctx)
 
   // Handle F1 setup result and activate cells.
   CORO_AWAIT(handle_f1_setup_response(response_msg));
+  if (not response_msg.has_value()) {
+    // The CU-CP rejected the F1 Setup and the TNL association was torn down as a result. Unlike a failed TNL
+    // connection, this is a decision of the CU-CP and not a transient failure, so it is not retried. Close the
+    // application instead of leaving the DU running with no served cell and no way back.
+    report_error("F1 Setup failed. Cause: {}", failure_cause);
+  }
 
   // Notify successful setup and deliver packed F1 setup PDU bytes via notifier.
   if (ctxt.params.f1ap.f1_setup_complete_notifier != nullptr) {
@@ -273,6 +279,7 @@ async_task<void> du_setup_procedure::handle_f1_setup_response(const f1_setup_res
         break;
       case f1_setup_failure::result_code::proc_failure:
         failure_cause = "DU failed to run F1 Setup Procedure";
+        break;
       default:
         report_fatal_error("Invalid F1 Setup Response");
     }

@@ -22,7 +22,8 @@ struct du_start_request {
   static constexpr unsigned unlimited_retries = std::numeric_limits<unsigned>::max();
 
   /// Whether the cells need to be reconfigured.
-  bool                      configure_cells                = true;
+  bool configure_cells = true;
+  /// Maximum number of F1-C TNL connection attempts. A rejected F1 Setup is not retried and is not counted here.
   unsigned                  max_f1c_tnl_connection_retries = 1;
   std::chrono::milliseconds f1c_tnl_connection_retry_wait{1000};
 };
