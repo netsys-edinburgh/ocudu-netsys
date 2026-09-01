@@ -37,7 +37,10 @@ void du_manager_controller_impl::start()
           CORO_BEGIN(ctx);
 
           // Connect to CU-CP and send F1 Setup Request and await for F1 setup response.
-          CORO_AWAIT(launch_async<du_setup_procedure>(proc_ctxt));
+          // Note: The setup is retried indefinitely, so that the DU does not require the CU-CP to be reachable on
+          // startup.
+          CORO_AWAIT(
+              launch_async<du_setup_procedure>(proc_ctxt, du_start_request{true, du_start_request::unlimited_retries}));
 
           // Update DU state to "running".
           proc_ctxt.ctxt.running = true;

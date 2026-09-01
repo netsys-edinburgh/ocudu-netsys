@@ -8,6 +8,7 @@
 #include "du_proc_context_view.h"
 #include "procedure_logger.h"
 #include "ocudu/f1ap/du/f1ap_du_connection_manager.h"
+#include <limits>
 
 namespace ocudu {
 namespace odu {
@@ -17,6 +18,9 @@ struct du_manager_params;
 
 /// Request to transition the DU to operational mode.
 struct du_start_request {
+  /// Value of \c max_f1c_tnl_connection_retries that requests an unlimited number of setup attempts.
+  static constexpr unsigned unlimited_retries = std::numeric_limits<unsigned>::max();
+
   /// Whether the cells need to be reconfigured.
   bool                      configure_cells                = true;
   unsigned                  max_f1c_tnl_connection_retries = 1;

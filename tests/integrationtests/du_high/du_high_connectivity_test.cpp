@@ -8,6 +8,7 @@
 #include "ocudu/asn1/f1ap/common.h"
 #include "ocudu/f1ap/f1ap_message.h"
 #include <gtest/gtest.h>
+#include <thread>
 
 using namespace ocudu;
 using namespace odu;
@@ -29,6 +30,24 @@ protected:
     // Clearing the F1AP messages sent during setup for further tests.
     cu_notifier.f1ap_ul_msgs.clear();
   }
+
+  /// \brief Processes pending test thread tasks until \c cond is met or the timeout elapses.
+  ///
+  /// Unlike \c run_until, it does not dispatch slot indications, so it can be used while the DU has no cell
+  /// configured, i.e. while it is still trying to set the F1 interface up.
+  bool poll_until(const std::function<bool()>& cond, std::chrono::milliseconds timeout = std::chrono::seconds{5})
+  {
+    static constexpr std::chrono::milliseconds poll_period{10};
+    for (std::chrono::milliseconds elapsed{0}; elapsed < timeout; elapsed += poll_period) {
+      workers.test_worker.run_pending_tasks();
+      if (cond()) {
+        return true;
+      }
+      std::this_thread::sleep_for(poll_period);
+    }
+    workers.test_worker.run_pending_tasks();
+    return cond();
+  }
 };
 
 TEST_F(du_high_connectivity_test, when_du_does_not_start_then_no_f1_setup_is_sent)
@@ -49,6 +68,28 @@ TEST_F(du_high_connectivity_test, when_du_starts_it_then_initiates_f1_setup)
   ASSERT_EQ(this->cu_notifier.f1ap_ul_msgs.size(), 1);
   ASSERT_EQ(this->cu_notifier.f1ap_ul_msgs.rbegin()->second.pdu.type().value, f1ap_pdu_c::types_opts::init_msg);
   ASSERT_EQ(this->cu_notifier.f1ap_ul_msgs.rbegin()->second.pdu.init_msg().proc_code, ASN1_F1AP_ID_F1_SETUP);
+}
+
+TEST_F(du_high_connectivity_test, when_cu_cp_is_not_reachable_on_start_then_du_retries_the_tnl_association)
+{
+  // CU-CP is not reachable yet.
+  cu_notifier.set_f1_channel_state(false);
+
+  // start() only returns once the F1 Setup completed, so the DU has to be started from a separate thread while the
+  // CU-CP is down.
+  std::thread start_thread([this]() { du_hi->start(); });
+
+  // No F1 Setup Request can be sent while the F1-C TNL association is down.
+  EXPECT_FALSE(poll_until([this]() { return not cu_notifier.f1ap_ul_msgs.empty(); }, std::chrono::milliseconds{100}));
+
+  // The CU-CP becomes reachable and the DU completes its setup.
+  cu_notifier.set_f1_channel_state(true);
+  start_thread.join();
+
+  ASSERT_TRUE(poll_until([this]() { return not cu_notifier.f1ap_ul_msgs.empty(); }));
+  ASSERT_EQ(cu_notifier.f1ap_ul_msgs.size(), 1);
+  ASSERT_EQ(cu_notifier.f1ap_ul_msgs.rbegin()->second.pdu.type().value, f1ap_pdu_c::types_opts::init_msg);
+  ASSERT_EQ(cu_notifier.f1ap_ul_msgs.rbegin()->second.pdu.init_msg().proc_code, ASN1_F1AP_ID_F1_SETUP);
 }
 
 TEST_F(du_high_connectivity_test, when_f1_connection_is_lost_then_du_detects_connection_loss)

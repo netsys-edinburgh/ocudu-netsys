@@ -69,6 +69,12 @@ static mac_cell_creation_request make_mac_cell_config(du_cell_index_t           
   return mac_cfg;
 }
 
+/// Formats the maximum number of F1-C TNL connection attempts for logging.
+static std::string format_max_retries(unsigned max_retries)
+{
+  return max_retries == du_start_request::unlimited_retries ? "unlimited" : std::to_string(max_retries);
+}
+
 static std::string make_sib_mapping_info_str(span<const sib_type> sib_mapping)
 {
   std::string out;
@@ -125,7 +131,7 @@ void du_setup_procedure::operator()(coro_context<async_task<void>>& ctx)
        ++count) {
     ctxt.logger.warning("F1-C TNL association with CU-CP attempt {}/{} failed. Retrying in {} ms...",
                         count + 1,
-                        request.max_f1c_tnl_connection_retries,
+                        format_max_retries(request.max_f1c_tnl_connection_retries),
                         request.f1c_tnl_connection_retry_wait.count());
     CORO_AWAIT(async_wait_for(timer, request.f1c_tnl_connection_retry_wait));
   }

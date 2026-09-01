@@ -106,7 +106,10 @@ void dummy_f1c_test_client::set_f1_channel_state(bool up)
     // Remote node disconnected.
     f1c_is_up = false;
     auto func = std::move(on_connection_loss);
-    func();
+    if (not func.is_empty()) {
+      // Note: No connection was ever established, e.g. when emulating a CU-CP that is not reachable yet.
+      func();
+    }
   } else {
     f1c_is_up = true;
   }
