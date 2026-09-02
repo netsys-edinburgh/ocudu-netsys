@@ -253,23 +253,7 @@ sctp_network_client_impl::connect(std::unique_ptr<sctp_association_sdu_notifier>
     if (errno == 0) {
       cause = "IO broker could not register socket";
     }
-    if (not connect_failure_printed) {
-      connect_failure_printed = true;
-      fmt::print("{}: Failed to connect to {} on [{}]:{}. error=\"{}\" timeout={}ms\n",
-                 node_cfg.if_name,
-                 client_cfg.dest_name,
-                 fmt::join(client_cfg.connect_addresses, ", "),
-                 client_cfg.connect_port,
-                 cause,
-                 now_ms.count());
-    }
-    logger.error("{}: Failed to connect to {} on [{}]:{}. error=\"{}\" timeout={}ms",
-                 node_cfg.if_name,
-                 client_cfg.dest_name,
-                 fmt::join(client_cfg.connect_addresses, ", "),
-                 client_cfg.connect_port,
-                 cause,
-                 now_ms.count());
+    handle_connect_failure(fmt::format("error=\"{}\" timeout={}ms", cause, now_ms.count()));
     return nullptr;
   }
 
@@ -295,19 +279,7 @@ sctp_network_client_impl::connect(std::unique_ptr<sctp_association_sdu_notifier>
   }
 
   if (peer_addrs.empty()) {
-    if (not connect_failure_printed) {
-      connect_failure_printed = true;
-      fmt::print("{}: Failed to connect to {} on [{}]:{}. Failed to get peer addresses.\n",
-                 node_cfg.if_name,
-                 client_cfg.dest_name,
-                 fmt::join(client_cfg.connect_addresses, ", "),
-                 client_cfg.connect_port);
-    }
-    logger.error("{}: Failed to connect to {} on [{}]:{}. Failed to get peer addresses.",
-                 node_cfg.if_name,
-                 client_cfg.dest_name,
-                 fmt::join(client_cfg.connect_addresses, ", "),
-                 client_cfg.connect_port);
+    handle_connect_failure("Failed to get peer addresses.");
     return nullptr;
   }
 
@@ -326,10 +298,18 @@ sctp_network_client_impl::connect(std::unique_ptr<sctp_association_sdu_notifier>
       established_addrs.push_back(peer_addr.to_string());
     }
 
+    // Report how long the connection took to establish, if it was retried.
+    const std::string retry_info = nof_consecutive_connect_failures == 0
+                                       ? std::string{}
+                                       : fmt::format(" after {} failed attempt{}",
+                                                     nof_consecutive_connect_failures,
+                                                     nof_consecutive_connect_failures == 1 ? "" : "s");
+
     // fmt::format of fmt::join view is required before passing to the logger, otherwise TSAN may report use-after-free.
-    logger.info("{}: SCTP connection to {} established. Configured: [{}]:{}, established: [{}]",
+    logger.info("{}: SCTP connection to {} established{}. Configured: [{}]:{}, established: [{}]",
                 node_cfg.if_name,
                 client_cfg.dest_name,
+                retry_info,
                 fmt::format("{}", fmt::join(client_cfg.connect_addresses, ", ")),
                 client_cfg.connect_port,
                 fmt::format("{}", fmt::join(established_addrs, ", ")));
@@ -360,9 +340,39 @@ sctp_network_client_impl::connect(std::unique_ptr<sctp_association_sdu_notifier>
   }
 
   // The connection is up, so a failure of a future one is worth announcing again.
-  connect_failure_printed = false;
+  nof_consecutive_connect_failures = 0;
 
   return std::make_unique<sctp_send_notifier>(*this, peer_addrs[0]);
+}
+
+void sctp_network_client_impl::handle_connect_failure(const std::string& cause)
+{
+  // fmt::format of the fmt::join view is required before passing it to the logger, otherwise TSAN may report a
+  // use-after-free.
+  const std::string msg = fmt::format("{}: Failed to connect to {} on [{}]:{}. {}",
+                                      node_cfg.if_name,
+                                      client_cfg.dest_name,
+                                      fmt::format("{}", fmt::join(client_cfg.connect_addresses, ", ")),
+                                      client_cfg.connect_port,
+                                      cause);
+
+  ++nof_consecutive_connect_failures;
+
+  if (nof_consecutive_connect_failures == 1) {
+    // First failure of this outage. Announce it in STDOUT as well, so that it is not missed.
+    fmt::print("{}\n", msg);
+    logger.warning("{}", msg);
+    return;
+  }
+
+  // The connection is being retried. Only report once every period, so that the log is not flooded but a lasting
+  // outage stays visible.
+  if (nof_consecutive_connect_failures % connect_failure_log_period == 0) {
+    logger.warning("{} Attempt {}.", msg, nof_consecutive_connect_failures);
+    return;
+  }
+
+  logger.debug("{}", msg);
 }
 
 void sctp_network_client_impl::receive()

@@ -53,9 +53,18 @@ private:
   io_broker&     broker;
   task_executor& io_rx_executor;
 
-  // Whether the last connection failure was already announced in STDOUT. Set to avoid flooding the console when the
-  // connection is retried periodically. The failures are still logged on every attempt.
-  bool connect_failure_printed = false;
+  // Number of consecutive failed connection attempts, reset once a connection is established. A periodic retry would
+  // otherwise flood the console and the log: the first failure of an outage is announced in STDOUT and logged as a
+  // warning, the ones that follow are logged at debug level, and a warning is logged again every
+  // \c connect_failure_log_period attempts so that a lasting outage stays visible. A failure that is being retried is
+  // not logged as an error, as the connection is expected to recover on its own.
+  unsigned nof_consecutive_connect_failures = 0;
+
+  // Number of consecutive connection failures between two warning level log entries.
+  static constexpr unsigned connect_failure_log_period = 60;
+
+  // Announces and logs a failed connection attempt, throttling the repetitions.
+  void handle_connect_failure(const std::string& cause);
 
   // Handler of IO events. It is only accessed by the backend (io_broker), once the connection is set up.
   std::unique_ptr<sctp_association_sdu_notifier> recv_handler;
