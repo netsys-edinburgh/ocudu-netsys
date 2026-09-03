@@ -53,7 +53,9 @@ bool e1ap_cu_up_impl::connect_to_cu_cp()
 {
   e1ap_message_notifier* notif = connection_handler.connect_to_cu_cp();
   if (!notif) {
-    logger.log_warning("Failed to connect to CU-CP");
+    // Note: Logged at debug level, as the SCTP gateway already reports the failure with its cause, and the CU-UP
+    // reports once that the connection is being retried in the background.
+    logger.log_debug("Failed to connect to CU-CP");
     return false;
   }
   pdu_notifier = std::make_unique<e1ap_message_notifier_with_logging>(*this, *notif);
