@@ -52,7 +52,6 @@ private:
   std::unique_ptr<gtpu_demux_dispatch_queue> echo_batched_queue;
 
   // Components
-  std::atomic<bool>                                  e1ap_connected = {false};
   std::vector<std::unique_ptr<e1ap_interface>>       e1aps;
   std::unique_ptr<ngu_session_manager>               ngu_session_mngr;
   std::vector<std::unique_ptr<gtpu_tnl_pdu_session>> ngu_sessions;

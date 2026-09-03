@@ -171,10 +171,9 @@ void cu_up::start()
   std::promise<void> p;
   std::future<void>  fut = p.get_future();
 
-  bool connected = false;
-  if (!ctrl_executor.execute([this, &p, &connected]() {
+  if (not ctrl_executor.execute([this, &p]() {
         main_ctrl_loop.schedule(
-            [this, &p, &connected, e1ap = e1aps.end()](coro_context<async_task<void>>& ctx) mutable {
+            [this, &p, connected = bool{false}, e1ap = e1aps.end()](coro_context<async_task<void>>& ctx) mutable {
               CORO_BEGIN(ctx);
 
               // Connect to CU-CP and send E1 Setup Request and await for E1 setup response.
@@ -186,6 +185,14 @@ void cu_up::start()
                                      cu_up_setup_routine_dependencies{.logger            = logger,
                                                                       .e1ap_conn_mng     = **e1ap,
                                                                       .e1_setup_notifier = e1_setup_notifier.get()}));
+
+                if (not connected) {
+                  // Keep trying in the background, so that the CU-UP does not require the CU-CP to be reachable on
+                  // startup. Note: the connection loss handler also covers a connection that was never established.
+                  logger.info("e1={}: CU-CP is not reachable. Retrying the E1 connection in the background",
+                              fmt::underlying((*e1ap)->get_e1_index()));
+                  cu_up_mng->handle_e1ap_connection_drop((*e1ap)->get_e1_index());
+                }
               }
 
               if (cfg.test_mode_cfg.enabled) {
@@ -203,11 +210,8 @@ void cu_up::start()
     report_fatal_error("Unable to initiate CU-UP setup routine");
   }
 
-  // Block waiting for CU-UP setup to complete.
+  // Block waiting for the first CU-CP connection attempt of every E1 interface to complete.
   fut.wait();
-  if (!connected) {
-    report_error("CU-UP failed to connect to CU-CP");
-  }
   logger.info("CU-UP started successfully");
 }
 

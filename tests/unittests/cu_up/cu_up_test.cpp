@@ -72,13 +72,38 @@ public:
       dummy_cu_cp_handler& parent;
     };
 
+    nof_connection_requests++;
+
+    if (nof_connections_to_reject > 0) {
+      // Simulate a CU-CP that is not reachable. Dropping the Rx notifier tears the E1 interface down again.
+      nof_connections_to_reject--;
+      return nullptr;
+    }
+
     cu_up_rx_pdu_notifier = std::move(cu_up_rx_pdu_notifier_);
 
     return std::make_unique<dummy_cu_up_tx_pdu_notifier>(*this);
   }
 
+  /// Number of connection requests that are rejected before the CU-CP starts accepting them.
+  std::atomic<unsigned> nof_connections_to_reject{0};
+  /// Number of connection requests received so far.
+  std::atomic<unsigned> nof_connection_requests{0};
+
 private:
   std::unique_ptr<e1ap_message_notifier> cu_up_rx_pdu_notifier;
+};
+
+/// Counts the successful E1 Setup procedures.
+class dummy_e1_setup_notifier : public cu_up_e1_setup_complete_notifier
+{
+public:
+  void on_e1_setup_complete(byte_buffer req, byte_buffer resp, gnb_cu_up_id_t gnb_cu_up_id) override
+  {
+    nof_setups_completed++;
+  }
+
+  std::atomic<unsigned> nof_setups_completed{0};
 };
 
 /// Fixture class for CU-UP test
@@ -132,6 +157,9 @@ protected:
 
   cu_up_dependencies get_default_cu_up_dependencies()
   {
+    auto setup_notifier = std::make_unique<dummy_e1_setup_notifier>();
+    e1_setup_notifier   = setup_notifier.get();
+
     cu_up_dependencies deps{.exec_mapper          = *exec_pool,
                             .f1u_teid_allocator   = *f1u_teid_allocator,
                             .f1u_gateway          = *f1u_gw,
@@ -141,9 +169,22 @@ protected:
                             .pdcp_metric_notifier = nullptr,
                             .e1_conn_clients      = {&e1ap_client},
                             .ngu_gws              = {},
-                            .e1_setup_notifier    = nullptr};
+                            .e1_setup_notifier    = std::move(setup_notifier)};
     deps.ngu_gws.push_back(create_udp_gtpu_gateway(cu_up_udp_cfg, *broker, *executor, *executor));
     return deps;
+  }
+
+  /// Polls \c predicate until it holds or the timeout elapses.
+  static bool wait_until(const std::function<bool()>& predicate, std::chrono::milliseconds timeout)
+  {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (not predicate()) {
+      if (std::chrono::steady_clock::now() > deadline) {
+        return false;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    return true;
   }
 
   void init(const cu_up_config& cfg, cu_up_dependencies&& deps)
@@ -166,6 +207,7 @@ protected:
   std::unique_ptr<timer_manager> app_timers;
 
   dummy_cu_cp_handler                e1ap_client;
+  dummy_e1_setup_notifier*           e1_setup_notifier = nullptr;
   dummy_inner_f1u_bearer             f1u_bearer;
   std::unique_ptr<gtpu_teid_pool>    f1u_teid_allocator;
   std::unique_ptr<dummy_f1u_gateway> f1u_gw;
@@ -235,6 +277,32 @@ protected:
     return {sock_fd, upf_addr};
   }
 };
+
+//////////////////////////////////////////////////////////////////////////////////////
+/* E1 Connection                                                                    */
+//////////////////////////////////////////////////////////////////////////////////////
+TEST_F(cu_up_test, when_cu_cp_is_reachable_on_startup_then_e1_is_setup_on_the_first_attempt)
+{
+  init(get_default_cu_up_config(), get_default_cu_up_dependencies());
+
+  ASSERT_EQ(e1ap_client.nof_connection_requests, 1U);
+  ASSERT_EQ(e1_setup_notifier->nof_setups_completed, 1U);
+}
+
+TEST_F(cu_up_test, when_cu_cp_is_not_reachable_on_startup_then_cu_up_starts_and_retries_the_e1_connection)
+{
+  // Simulate a CU-CP that is not reachable for the first connection attempt.
+  e1ap_client.nof_connections_to_reject = 1;
+
+  // The CU-UP must start, even though the E1 connection could not be established.
+  init(get_default_cu_up_config(), get_default_cu_up_dependencies());
+
+  // The scheduled reconnection must establish the E1 connection and run the E1 Setup.
+  ASSERT_TRUE(
+      wait_until([this]() { return e1_setup_notifier->nof_setups_completed == 1U; }, std::chrono::milliseconds{5000}))
+      << "CU-UP did not retry the E1 connection after the failed attempt on startup";
+  ASSERT_EQ(e1ap_client.nof_connection_requests, 2U);
+}
 
 //////////////////////////////////////////////////////////////////////////////////////
 /* User Data Flow                                                                   */
