@@ -511,6 +511,23 @@ prach_occasion_info unittests::build_valid_prach_occassion()
   return prach;
 }
 
+prs_info unittests::build_valid_prs_pdu()
+{
+  prs_info prs;
+
+  prs.scs             = subcarrier_spacing::kHz30;
+  prs.cp              = cyclic_prefix::NORMAL;
+  prs.n_id_prs        = 1023;
+  prs.comb_size       = prs_comb_size::four;
+  prs.comb_offset     = 3;
+  prs.nof_symbols     = prs_num_symbols::twelve;
+  prs.symbols         = {2, 14};
+  prs.crbs            = {12, 60};
+  prs.power_offset_db = -3;
+
+  return prs;
+}
+
 ul_sched_info_test_helper unittests::build_valid_pusch_pdu()
 {
   ul_sched_info_test_helper helper;

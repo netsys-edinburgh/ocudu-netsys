@@ -62,12 +62,6 @@ struct du_cell_config {
   /// Geographical coordinates of the cell/TRP antenna, Direct definition (normal or high accuracy), as per
   /// TS 38.473, Section 9.3.1.184. Reported to the gNB-CU in the TRP Information Response procedure.
   std::optional<trp_position_direct_accuracy_t> trp_geo_coordinates;
-
-  /// \brief DL-PRS configuration of the cell/TRP, as per TS 38.455, Section 9.2.44.
-  ///
-  /// DL-PRS is disabled when no resource set is configured. Reported to the gNB-CU in the TRP Information Response
-  /// procedure.
-  prs_config prs_cfg;
 };
 
 } // namespace odu

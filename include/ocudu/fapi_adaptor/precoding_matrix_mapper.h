@@ -21,6 +21,7 @@ struct mac_pdsch_precoding_info {
 struct mac_pdcch_precoding_info {};
 struct mac_ssb_precoding_info {};
 struct mac_csi_rs_precoding_info {};
+struct mac_prs_precoding_info {};
 
 namespace fapi_adaptor {
 
@@ -57,6 +58,9 @@ public:
 
   /// Maps the given MAC precoding information into a precoding matrix index.
   unsigned map(const mac_ssb_precoding_info& precoding_info) const;
+
+  /// Maps the given MAC precoding information into a precoding matrix index.
+  unsigned map(const mac_prs_precoding_info& precoding_info) const;
 
 private:
   /// Sector identifier;

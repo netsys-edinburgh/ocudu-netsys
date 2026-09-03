@@ -38,6 +38,14 @@ unsigned precoding_matrix_mapper::map(const mac_ssb_precoding_info& precoding_in
   return ssb_codebook_offsets[0] + get_ssb_precoding_matrix_index();
 }
 
+unsigned precoding_matrix_mapper::map(const mac_prs_precoding_info& precoding_info) const
+{
+  // [Implementation-defined] The DL-PRS is transmitted on a single antenna port, as per TS 38.211, Section 7.2, so it
+  // carries one layer and no MIMO precoding applies. The codebook has no DL-PRS entry, so the one-layer/one-port SSB
+  // entry is reused.
+  return ssb_codebook_offsets[0] + get_ssb_precoding_matrix_index();
+}
+
 unsigned precoding_matrix_mapper::map(const mac_pdcch_precoding_info& precoding_info) const
 {
   return pdcch_codebook_offsets[0] + get_pdcch_precoding_matrix_index();

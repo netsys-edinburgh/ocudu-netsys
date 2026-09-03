@@ -7,6 +7,7 @@
 #include "pdu_translators/pdcch.h"
 #include "pdu_translators/pdsch.h"
 #include "pdu_translators/prach.h"
+#include "pdu_translators/prs.h"
 #include "pdu_translators/pucch.h"
 #include "pdu_translators/pusch.h"
 #include "pdu_translators/srs.h"
@@ -89,6 +90,16 @@ static void add_csi_rs_pdus_to_dl_request(fapi::dl_tti_request_builder& builder,
   }
 }
 
+static void add_prs_pdus_to_dl_request(fapi::dl_tti_request_builder&  builder,
+                                       span<const prs_info>           prs_list,
+                                       const precoding_matrix_mapper& pm_mapper,
+                                       unsigned                       cell_nof_prbs)
+{
+  for (const auto& pdu : prs_list) {
+    convert_prs_mac_to_fapi(builder, pdu, pm_mapper, cell_nof_prbs);
+  }
+}
+
 static void add_pdsch_pdus_to_dl_request(fapi::dl_tti_request_builder&    builder,
                                          span<const sib_information>      sibs,
                                          span<const rar_information>      rars,
@@ -145,6 +156,9 @@ void mac_to_fapi_fastpath_translator::on_new_downlink_scheduler_results(const ma
 
   // Add CSI-RS PDUs to the DL_TTI.request message.
   add_csi_rs_pdus_to_dl_request(builder, dl_res.dl_res->csi_rs);
+
+  // Add DL-PRS PDUs to the DL_TTI.request message.
+  add_prs_pdus_to_dl_request(builder, dl_res.dl_res->prs, *pm_mapper, cell_nof_prbs);
 
   // Add PDSCH PDUs to the DL_TTI.request message.
   add_pdsch_pdus_to_dl_request(builder,

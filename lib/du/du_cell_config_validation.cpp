@@ -1075,7 +1075,7 @@ static check_outcome check_prs_resource_set(const prs_resource_set&             
 
 static check_outcome check_prs_config(const du_cell_config& cell_cfg)
 {
-  const prs_config& prs_cfg = cell_cfg.prs_cfg;
+  const prs_config& prs_cfg = cell_cfg.ran.prs_cfg;
 
   // DL-PRS is disabled when no resource set is configured.
   if (prs_cfg.resource_sets.empty()) {

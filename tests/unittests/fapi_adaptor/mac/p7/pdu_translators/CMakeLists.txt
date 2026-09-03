@@ -20,6 +20,11 @@ target_link_libraries(mac_fapi_ssb_adaptor_test ocudu_mac_fapi_adaptors ocudu_su
 target_include_directories(mac_fapi_ssb_adaptor_test PRIVATE ${CMAKE_SOURCE_DIR}/lib/fapi_adaptor/mac/p7/pdu_translators)
 gtest_discover_tests(mac_fapi_ssb_adaptor_test)
 
+add_executable(mac_fapi_prs_adaptor_test dl_prs_pdu_test.cpp)
+target_link_libraries(mac_fapi_prs_adaptor_test ocudu_mac_fapi_adaptors ocudu_fapi_precoding_matrix_tools ocudu_support ocudulog ocudu_mac_translator_helpers gtest gtest_main)
+target_include_directories(mac_fapi_prs_adaptor_test PRIVATE ${CMAKE_SOURCE_DIR}/lib/fapi_adaptor/mac/p7/pdu_translators)
+gtest_discover_tests(mac_fapi_prs_adaptor_test)
+
 add_executable(mac_fapi_prach_adaptor_test ul_prach_pdu_test.cpp)
 target_link_libraries(mac_fapi_prach_adaptor_test ocudu_mac_fapi_adaptors ocudu_support gtest gtest_main ocudu_mac_translator_helpers)
 target_include_directories(mac_fapi_prach_adaptor_test PRIVATE ${CMAKE_SOURCE_DIR}/lib/fapi_adaptor/mac/p7/pdu_translators)

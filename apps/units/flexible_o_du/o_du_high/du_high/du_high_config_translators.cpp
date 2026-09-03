@@ -819,7 +819,7 @@ std::vector<odu::du_cell_config> ocudu::generate_du_cell_config(const du_high_un
     const unsigned nof_crbs = band_helper::get_n_rbs_from_bw(base_cell.channel_bw_mhz, param.scs_common, freq_range);
 
     // DL-PRS parameters.
-    out_cell.prs_cfg = make_prs_config(base_cell.prs_cfg, nof_crbs);
+    out_cell.ran.prs_cfg = make_prs_config(base_cell.prs_cfg, nof_crbs);
 
     // MAC Cell Group Config parameters.
     out_cell.mcg_params = make_mac_cell_group_params(base_cell);
