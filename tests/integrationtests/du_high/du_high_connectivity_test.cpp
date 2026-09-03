@@ -14,10 +14,14 @@ using namespace ocudu;
 using namespace odu;
 using namespace asn1::f1ap;
 
-class du_high_connectivity_test : public du_high_env_simulator, public testing::Test
+class du_high_connectivity_test_base : public du_high_env_simulator
 {
 protected:
-  du_high_connectivity_test() : du_high_env_simulator(du_high_env_sim_params{.nof_cells = 1, .auto_start = false}) {}
+  explicit du_high_connectivity_test_base(bool retry_f1c_connection = false) :
+    du_high_env_simulator(
+        du_high_env_sim_params{.nof_cells = 1, .auto_start = false, .retry_f1c_connection = retry_f1c_connection})
+  {
+  }
 
   void run_f1_setup()
   {
@@ -50,6 +54,16 @@ protected:
   }
 };
 
+class du_high_connectivity_test : public du_high_connectivity_test_base, public testing::Test
+{};
+
+/// Test suite of a DU that retries the F1-C TNL connection instead of closing the application when it fails.
+class du_high_f1c_retry_test : public du_high_connectivity_test_base, public testing::Test
+{
+protected:
+  du_high_f1c_retry_test() : du_high_connectivity_test_base(true) {}
+};
+
 TEST_F(du_high_connectivity_test, when_du_does_not_start_then_no_f1_setup_is_sent)
 {
   // DU-high is not started, so no F1 setup should be sent.
@@ -70,7 +84,7 @@ TEST_F(du_high_connectivity_test, when_du_starts_it_then_initiates_f1_setup)
   ASSERT_EQ(this->cu_notifier.f1ap_ul_msgs.rbegin()->second.pdu.init_msg().proc_code, ASN1_F1AP_ID_F1_SETUP);
 }
 
-TEST_F(du_high_connectivity_test, when_cu_cp_is_not_reachable_on_start_then_du_retries_the_tnl_association)
+TEST_F(du_high_f1c_retry_test, when_cu_cp_is_not_reachable_on_start_then_du_retries_the_tnl_association)
 {
   // CU-CP is not reachable yet.
   cu_notifier.set_f1_channel_state(false);

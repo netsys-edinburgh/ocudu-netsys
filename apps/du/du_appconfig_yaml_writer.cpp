@@ -62,8 +62,9 @@ static void fill_du_appconfig_f1u_section(YAML::Node node, const odu::f1u_appcon
 
 static void fill_du_appconfig_f1ap_section(YAML::Node node, const odu::f1ap_appconfig& config)
 {
-  node["addrs"]      = config.cu_cp_addresses;
-  node["bind_addrs"] = config.bind_addresses;
+  node["addrs"]            = config.cu_cp_addresses;
+  node["bind_addrs"]       = config.bind_addresses;
+  node["retry_connection"] = config.retry_connection;
   fill_sctp_config_in_yaml_schema(node, config.sctp);
 }
 

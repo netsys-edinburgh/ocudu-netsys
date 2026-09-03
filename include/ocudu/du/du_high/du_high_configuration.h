@@ -63,6 +63,13 @@ struct du_high_configuration {
     std::size_t srb_tx_window_seg_pool_size = rlc_srb_tx_window_seg_pool_size;
   };
 
+  struct f1ap_config {
+    /// Whether a failed F1-C TNL connection is retried indefinitely on startup, so that the DU does not require the
+    /// CU-CP to be reachable when it is started. When disabled, the DU makes a single attempt and closes the
+    /// application if it fails. The reconnection that follows a lost F1-C connection is retried either way.
+    bool retry_tnl_connection = false;
+  };
+
   struct metrics_config {
     bool                      enable_sched    = false;
     bool                      enable_sched_ue = true;
@@ -76,6 +83,7 @@ struct du_high_configuration {
 
   rlc_config          rlc;
   du_high_ran_config  ran;
+  f1ap_config         f1ap;
   metrics_config      metrics;
   du_test_mode_config test_cfg;
   /// Optional NTN configuration. When present with at least one cell, the DU-high creates an NTN configuration

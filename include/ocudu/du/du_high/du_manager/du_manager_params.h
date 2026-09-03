@@ -59,6 +59,9 @@ struct du_manager_params {
     f1ap_ue_context_manager&       ue_mng;
     f1ap_metrics_collector&        metrics;
     du_f1_setup_complete_notifier* f1_setup_complete_notifier = nullptr;
+    /// Whether a failed F1-C TNL connection is retried indefinitely on startup, instead of closing the application
+    /// after a single attempt. The reconnection that follows a lost F1-C connection is retried either way.
+    bool retry_tnl_connection = false;
   };
 
   struct f1u_config_params {

@@ -78,6 +78,8 @@ du_high_configuration odu::create_du_high_configuration(const du_high_env_sim_pa
     cfg.ran.sched_cfg.ue = params.sched_ue_expert_cfg.value();
   }
 
+  cfg.f1ap.retry_tnl_connection = params.retry_f1c_connection;
+
   cfg.metrics.enable_f1ap    = true;
   cfg.metrics.enable_mac     = true;
   cfg.metrics.enable_rlc     = true;

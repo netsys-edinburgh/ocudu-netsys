@@ -54,10 +54,11 @@ private:
   task_executor& io_rx_executor;
 
   // Number of consecutive failed connection attempts, reset once a connection is established. A periodic retry would
-  // otherwise flood the console and the log: the first failure of an outage is announced in STDOUT and logged as a
-  // warning, the ones that follow are logged at debug level, and a warning is logged again every
-  // \c connect_failure_log_period attempts so that a lasting outage stays visible. A failure that is being retried is
-  // not logged as an error, as the connection is expected to recover on its own.
+  // otherwise flood the console and the log: the first failure of an outage is announced in STDOUT and logged, the
+  // ones that follow are logged at debug level, and a warning is logged again every \c connect_failure_log_period
+  // attempts so that a lasting outage stays visible. A failure that is being retried is logged as a warning rather
+  // than an error, as the connection is expected to recover on its own, whereas one that is not retried is final and
+  // is logged as an error. See \c sctp_network_connector_config::connection_is_retried.
   unsigned nof_consecutive_connect_failures = 0;
 
   // Number of consecutive connection failures between two warning level log entries.

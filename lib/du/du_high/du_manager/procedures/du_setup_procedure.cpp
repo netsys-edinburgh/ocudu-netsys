@@ -126,9 +126,11 @@ void du_setup_procedure::operator()(coro_context<async_task<void>>& ctx)
   proc_logger.log_proc_started();
 
   // Establish TNL association with the CU-CP.
-  for (; count != request.max_f1c_tnl_connection_retries and not ctxt.ctxt.stop_command_received and
-         not ctxt.params.f1ap.conn_mng.connect_to_cu_cp();
-       ++count) {
+  for (; not ctxt.ctxt.stop_command_received and not ctxt.params.f1ap.conn_mng.connect_to_cu_cp(); ++count) {
+    if (count + 1 >= request.max_f1c_tnl_connection_retries) {
+      // No attempt is left, so the failure is final and the gateway already reported its cause.
+      report_error("F1 Setup failed. Cause: F1-C TNL connection failed");
+    }
     // Only the first attempt is reported at warning level. The SCTP gateway announces the repetitions periodically, so
     // reporting each one of them here would flood the log of a DU that is waiting for its CU-CP.
     if (count == 0) {
@@ -143,9 +145,6 @@ void du_setup_procedure::operator()(coro_context<async_task<void>>& ctx)
                         request.f1c_tnl_connection_retry_wait.count());
     }
     CORO_AWAIT(async_wait_for(timer, request.f1c_tnl_connection_retry_wait));
-  }
-  if (count == request.max_f1c_tnl_connection_retries) {
-    report_error("F1 Setup failed. Cause: F1-C TNL connection failed");
   }
   if (ctxt.ctxt.stop_command_received) {
     // DU is being shutdown.

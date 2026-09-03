@@ -1675,6 +1675,11 @@ struct du_high_unit_config {
   std::vector<ntn_satellite_config> ntn_satellites;
   /// RLC configuration.
   du_high_unit_rlc_config rlc_cfg;
+  /// \brief Whether a failed F1-C TNL connection is retried indefinitely on startup.
+  ///
+  /// \note It is not part of the DU-high CLI schema. Only the applications that connect to a remote CU-CP own an F1-C
+  /// TNL connection, so the option lives in their own F1AP section and is copied here before the unit is created.
+  bool retry_f1c_connection = false;
 
   /// Returns true if testmode is enabled, false otherwise.
   bool is_testmode_enabled() const { return test_mode_cfg.test_ue.rnti != rnti_t::INVALID_RNTI; }

@@ -1535,6 +1535,8 @@ void ocudu::generate_du_high_config(odu::du_high_configuration& du_hi_cfg, const
   du_hi_cfg.metrics.enable_du_proc  = du_high_unit_cfg.metrics.layers_cfg.enable_du_proc;
   du_hi_cfg.metrics.period          = std::chrono::milliseconds{du_high_unit_cfg.metrics.du_report_period};
 
+  du_hi_cfg.f1ap.retry_tnl_connection = du_high_unit_cfg.retry_f1c_connection;
+
   // Validates the derived parameters.
   du_hi_cfg.ran.srbs                  = generate_du_srb_config(du_high_unit_cfg);
   du_hi_cfg.ran.qos                   = generate_du_qos_config(du_high_unit_cfg);

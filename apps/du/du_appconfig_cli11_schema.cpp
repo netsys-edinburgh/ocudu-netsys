@@ -42,6 +42,12 @@ static void configure_cli11_f1ap_args(CLI::App& app, odu::f1ap_appconfig& f1c_pa
       "multi-homing. If left empty, implicit bind is performed. The '--bind_addr' name is a deprecated alias and "
       "should not be used.")
       ->capture_default_str();
+  add_option(app,
+             "--retry_connection",
+             f1c_params.retry_connection,
+             "Keep retrying the F1-C connection setup instead of closing the application when it fails. Allows the DU "
+             "to be started before the CU-CP is reachable.")
+      ->capture_default_str();
   configure_cli11_sctp_socket_args(app, f1c_params.sctp);
 }
 

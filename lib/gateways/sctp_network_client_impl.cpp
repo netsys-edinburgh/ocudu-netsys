@@ -359,9 +359,14 @@ void sctp_network_client_impl::handle_connect_failure(const std::string& cause)
   ++nof_consecutive_connect_failures;
 
   if (nof_consecutive_connect_failures == 1) {
-    // First failure of this outage. Announce it in STDOUT as well, so that it is not missed.
+    // First failure of this outage. Announce it in STDOUT as well, so that it is not missed. A failure that is not
+    // retried is final, so it is reported as an error.
     fmt::print("{}\n", msg);
-    logger.warning("{}", msg);
+    if (client_cfg.connection_is_retried) {
+      logger.warning("{}", msg);
+    } else {
+      logger.error("{}", msg);
+    }
     return;
   }
 

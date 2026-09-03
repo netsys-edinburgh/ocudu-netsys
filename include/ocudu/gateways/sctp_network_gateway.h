@@ -50,6 +50,12 @@ struct sctp_network_connector_config : public sctp_network_gateway_config {
   std::string              dest_name;
   std::vector<std::string> connect_addresses;
   int                      connect_port = 0;
+  /// \brief Whether the user of the client retries a failed connection attempt.
+  ///
+  /// It only affects how a failed attempt is reported: a connection that is retried is expected to recover on its own,
+  /// so its failures are reported as warnings and the repetitions are throttled, while a failure that is not retried
+  /// is reported as an error.
+  bool connection_is_retried = false;
 };
 
 /// \brief Interface to inject PDUs into gateway entity.

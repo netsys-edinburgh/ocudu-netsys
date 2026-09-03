@@ -38,6 +38,8 @@ struct du_high_env_sim_params {
   std::optional<unsigned>                      prach_frequency_start;
   std::optional<srs_periodicity>               srs_period;
   bool                                         active_cells_on_start = true;
+  /// Whether a failed F1-C TNL connection is retried instead of closing the application.
+  bool retry_f1c_connection = false;
 };
 
 du_high_configuration create_du_high_configuration(const du_high_env_sim_params& params = {});
