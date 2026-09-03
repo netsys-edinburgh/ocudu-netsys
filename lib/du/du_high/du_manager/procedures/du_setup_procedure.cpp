@@ -151,9 +151,6 @@ void du_setup_procedure::operator()(coro_context<async_task<void>>& ctx)
     CORO_EARLY_RETURN();
   }
 
-  // Configure cells.
-  configure_du_cells();
-
   // Initiate F1 Setup.
   CORO_AWAIT_VALUE(response_msg, start_f1_setup_request());
 
@@ -179,12 +176,8 @@ void du_setup_procedure::operator()(coro_context<async_task<void>>& ctx)
   CORO_RETURN();
 }
 
-void du_setup_procedure::configure_du_cells()
+void odu::configure_du_cells(const du_proc_context_view& ctxt)
 {
-  if (not request.configure_cells) {
-    // No need to reconfigure cells.
-    return;
-  }
   ctxt.cell_mng.remove_all_cells();
 
   // Save cell configurations.

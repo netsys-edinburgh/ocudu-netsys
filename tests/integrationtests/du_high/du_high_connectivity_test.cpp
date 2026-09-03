@@ -89,21 +89,31 @@ TEST_F(du_high_f1c_retry_test, when_cu_cp_is_not_reachable_on_start_then_du_retr
   // CU-CP is not reachable yet.
   cu_notifier.set_f1_channel_state(false);
 
-  // start() only returns once the F1 Setup completed, so the DU has to be started from a separate thread while the
-  // CU-CP is down.
-  std::thread start_thread([this]() { du_hi->start(); });
+  // The start does not wait for the F1 Setup to complete, as the CU-CP may never show up.
+  du_hi->start();
 
   // No F1 Setup Request can be sent while the F1-C TNL association is down.
   EXPECT_FALSE(poll_until([this]() { return not cu_notifier.f1ap_ul_msgs.empty(); }, std::chrono::milliseconds{100}));
 
   // The CU-CP becomes reachable and the DU completes its setup.
   cu_notifier.set_f1_channel_state(true);
-  start_thread.join();
 
   ASSERT_TRUE(poll_until([this]() { return not cu_notifier.f1ap_ul_msgs.empty(); }));
   ASSERT_EQ(cu_notifier.f1ap_ul_msgs.size(), 1);
   ASSERT_EQ(cu_notifier.f1ap_ul_msgs.rbegin()->second.pdu.type().value, f1ap_pdu_c::types_opts::init_msg);
   ASSERT_EQ(cu_notifier.f1ap_ul_msgs.rbegin()->second.pdu.init_msg().proc_code, ASN1_F1AP_ID_F1_SETUP);
+}
+
+TEST_F(du_high_f1c_retry_test, when_cu_cp_is_not_reachable_then_du_can_still_be_stopped)
+{
+  // CU-CP is not reachable and never will be.
+  cu_notifier.set_f1_channel_state(false);
+  du_hi->start();
+
+  // The stop cancels the pending setup instead of waiting for a CU-CP that is not coming.
+  du_hi->stop();
+
+  ASSERT_TRUE(cu_notifier.f1ap_ul_msgs.empty());
 }
 
 TEST_F(du_high_connectivity_test, when_f1_connection_is_lost_then_du_detects_connection_loss)

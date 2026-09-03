@@ -38,7 +38,7 @@ void f1c_disconnection_handling_procedure::operator()(coro_context<async_task<vo
   proc_logger.log_progress("DU activity was stopped. Attempting to re-establish F1-C connection..");
 
   // Attempt a new F1 setup connection.
-  CORO_AWAIT(launch_async<du_setup_procedure>(ctxt, du_start_request{false, du_start_request::unlimited_retries}));
+  CORO_AWAIT(launch_async<du_setup_procedure>(ctxt, du_start_request{du_start_request::unlimited_retries}));
 
   proc_logger.log_proc_completed();
 
