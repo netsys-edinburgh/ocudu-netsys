@@ -38,6 +38,7 @@ struct cu_up_manager_impl_dependencies {
   timer_manager&                                      timers;
   dlt_pcap&                                           gtpu_pcap;
   fifo_async_task_scheduler&                          cu_up_task_scheduler;
+  cu_up_e1_setup_complete_notifier*                   e1_setup_notifier;
 };
 
 /// CU-UP manager implementation.
@@ -121,6 +122,7 @@ private:
   gtpu_demux&                                         ngu_demux;
   cu_up_executor_mapper&                              exec_mapper;
   timer_manager&                                      timers;
+  cu_up_e1_setup_complete_notifier*                   e1_setup_notifier;
 
   // Logger
   ocudulog::basic_logger& logger = ocudulog::fetch_basic_logger("CU-UP", false);

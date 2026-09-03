@@ -137,7 +137,8 @@ cu_up::cu_up(const cu_up_config& config_, cu_up_dependencies dependencies) :
                                       .f1u_gateway          = dependencies.f1u_gateway,
                                       .timers               = dependencies.timers,
                                       .gtpu_pcap            = dependencies.gtpu_pcap,
-                                      .cu_up_task_scheduler = main_ctrl_loop});
+                                      .cu_up_task_scheduler = main_ctrl_loop,
+                                      .e1_setup_notifier    = e1_setup_notifier.get()});
 
   // > Connect E1AP(s) to CU-UP manager.
   for (auto& e1ap_cu_up_mng_adapter : e1ap_cu_up_mng_adapters) {

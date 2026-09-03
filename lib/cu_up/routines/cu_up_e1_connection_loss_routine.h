@@ -5,6 +5,7 @@
 #pragma once
 
 #include "../ue_manager.h"
+#include "ocudu/cu_up/cu_up_e1_setup_notifier.h"
 
 namespace ocudu::ocuup {
 
@@ -17,12 +18,13 @@ struct cu_up_e1_connection_loss_routine_config {
 
 /// Holds the CU-CP E1 connection loss routine dependencies.
 struct cu_up_e1_connection_loss_routine_dependencies {
-  std::atomic<bool>&      stop_command;
-  e1ap_interface&         e1ap;
-  ue_manager&             ue_mng;
-  timer_manager&          timers;
-  task_executor&          ctrl_exec;
-  ocudulog::basic_logger& logger;
+  std::atomic<bool>&                stop_command;
+  e1ap_interface&                   e1ap;
+  ue_manager&                       ue_mng;
+  timer_manager&                    timers;
+  task_executor&                    ctrl_exec;
+  ocudulog::basic_logger&           logger;
+  cu_up_e1_setup_complete_notifier* e1_setup_notifier;
 };
 
 /// CU-CP E1 connection loss routine.
@@ -42,10 +44,11 @@ private:
   std::vector<std::string> plmns;
   std::atomic<bool>&       stop_command;
 
-  unique_timer            retry_timer;
-  e1ap_interface&         e1ap;
-  ue_manager&             ue_mng;
-  ocudulog::basic_logger& logger;
+  unique_timer                      retry_timer;
+  e1ap_interface&                   e1ap;
+  ue_manager&                       ue_mng;
+  cu_up_e1_setup_complete_notifier* e1_setup_notifier;
+  ocudulog::basic_logger&           logger;
 
   bool reconnected{false};
 };

@@ -51,6 +51,7 @@ cu_up_manager_impl::cu_up_manager_impl(const cu_up_manager_impl_config&       co
   ngu_demux(dependencies.ngu_demux),
   exec_mapper(dependencies.exec_mapper),
   timers(dependencies.timers),
+  e1_setup_notifier(dependencies.e1_setup_notifier),
   cu_up_task_scheduler(dependencies.cu_up_task_scheduler)
 {
   /// Create UE manager.
@@ -166,12 +167,13 @@ void cu_up_manager_impl::handle_e1ap_connection_drop(cu_up_e1_index_t e1_index)
   std::reference_wrapper<e1ap_interface> e1ap = e1aps[to_underlying(e1_index)];
   schedule_cu_up_async_task(launch_async<cu_up_e1_connection_loss_routine>(
       cu_up_e1_connection_loss_routine_config{.cu_up_id = cu_up_id, .cu_up_name = cu_up_name, .plmns = plmns},
-      cu_up_e1_connection_loss_routine_dependencies{.stop_command = stop_command,
-                                                    .e1ap         = e1ap,
-                                                    .ue_mng       = *ue_mng,
-                                                    .timers       = timers,
-                                                    .ctrl_exec    = exec_mapper.ctrl_executor(),
-                                                    .logger       = logger}));
+      cu_up_e1_connection_loss_routine_dependencies{.stop_command      = stop_command,
+                                                    .e1ap              = e1ap,
+                                                    .ue_mng            = *ue_mng,
+                                                    .timers            = timers,
+                                                    .ctrl_exec         = exec_mapper.ctrl_executor(),
+                                                    .logger            = logger,
+                                                    .e1_setup_notifier = e1_setup_notifier}));
 }
 
 async_task<void> cu_up_manager_impl::handle_e1_reset(const e1ap_reset& msg)

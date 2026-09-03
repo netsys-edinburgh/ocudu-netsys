@@ -130,7 +130,7 @@ struct cu_up_dependencies {
   std::vector<std::unique_ptr<gtpu_gateway>> ngu_gws;
   /// Xn-U gateways.
   std::vector<std::unique_ptr<gtpu_gateway>> xnu_gws;
-  /// Optional notifier invoked once after a successful E1 Setup.
+  /// Optional notifier invoked after every successful E1 Setup, including the ones that follow a reconnection.
   std::unique_ptr<cu_up_e1_setup_complete_notifier> e1_setup_notifier = nullptr;
 };
 

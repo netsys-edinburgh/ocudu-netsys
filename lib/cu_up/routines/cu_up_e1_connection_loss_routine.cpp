@@ -20,6 +20,7 @@ cu_up_e1_connection_loss_routine::cu_up_e1_connection_loss_routine(
   retry_timer(dependencies.timers.create_unique_timer(dependencies.ctrl_exec)),
   e1ap(dependencies.e1ap),
   ue_mng(dependencies.ue_mng),
+  e1_setup_notifier(dependencies.e1_setup_notifier),
   logger(dependencies.logger)
 {
 }
@@ -34,11 +35,11 @@ void cu_up_e1_connection_loss_routine::operator()(coro_context<async_task<void>>
 
   // Attempt a new E1 setup connection.
   for (;;) {
-    CORO_AWAIT_VALUE(
-        reconnected,
-        launch_async<cu_up_setup_routine>(
-            cu_up_setup_routine_config{.cu_up_id = cu_up_id, .cu_up_name = cu_up_name, .plmns = plmns},
-            cu_up_setup_routine_dependencies{.logger = logger, .e1ap_conn_mng = e1ap, .e1_setup_notifier = nullptr}));
+    CORO_AWAIT_VALUE(reconnected,
+                     launch_async<cu_up_setup_routine>(
+                         cu_up_setup_routine_config{.cu_up_id = cu_up_id, .cu_up_name = cu_up_name, .plmns = plmns},
+                         cu_up_setup_routine_dependencies{
+                             .logger = logger, .e1ap_conn_mng = e1ap, .e1_setup_notifier = e1_setup_notifier}));
     if (reconnected || stop_command) {
       break;
     }
