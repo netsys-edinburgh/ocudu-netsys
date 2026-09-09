@@ -2,12 +2,17 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
-#include "static_sched_validator.h"
+#include "ocudu/scheduler/config/static_sched_validator.h"
 #include "ocudu/adt/expected.h"
 #include "ocudu/adt/format.h"
 #include "ocudu/ran/band_helper.h"
+#include "ocudu/ran/csi_rs/csi_meas_config.h"
+#include "ocudu/ran/csi_rs/csi_rs_config_helpers.h"
+#include "ocudu/ran/csi_rs/csi_rs_pattern.h"
+#include "ocudu/ran/csi_rs/frequency_allocation_type.h"
 #include "ocudu/ran/resource_allocation/rb_interval.h"
 #include "ocudu/ran/ssb/ssb_mapping.h"
+#include "ocudu/scheduler/config/serving_cell_config_factory.h"
 #include "ocudu/scheduler/sched_consts.h"
 #include "ocudu/support/enum_utils.h"
 #include "ocudu/support/math/math_utils.h"
@@ -21,7 +26,7 @@ namespace {
 
 /// \brief Identifies the origin of a \c periodic_occasion.
 struct occasion_origin {
-  enum class signal_type : uint8_t { SSB, CSI_RS, PRS } type;
+  enum class signal_type : uint8_t { SSB, NZP_CSI_RS, CSI_IM, PRS } type;
   uint8_t primary_id;
   uint8_t secondary_id;
 };
@@ -94,8 +99,10 @@ std::string to_string(const occasion_origin& origin)
   switch (origin.type) {
     case occasion_origin::signal_type::SSB:
       return fmt::format("SSB occasion (ssb-Index={})", origin.primary_id);
-    case occasion_origin::signal_type::CSI_RS:
+    case occasion_origin::signal_type::NZP_CSI_RS:
       return fmt::format("NZP-CSI-RS resource (nzp-CSI-RS-ResourceId={})", origin.primary_id);
+    case occasion_origin::signal_type::CSI_IM:
+      return fmt::format("CSI-IM resource (csi-IM-ResourceId={})", origin.primary_id);
     case occasion_origin::signal_type::PRS:
       return fmt::format(
           "DL-PRS resource (PRS Resource Set Id={}, PRS Resource Id={})", origin.primary_id, origin.secondary_id);
@@ -142,12 +149,118 @@ std::vector<periodic_occasion> get_ssb_occasions(const ran_cell_config& ran)
   return occasions;
 }
 
+/// \brief Builds the periodic occasions of the cell's periodic NZP-CSI-RS resources.
+///
+/// \remark ZP-CSI-RS resources are deliberately excluded: they do not represent a transmission by the cell, but an
+/// instruction for the UE not to expect PDSCH there, so they cannot collide with anything.
+std::vector<periodic_occasion> get_nzp_csi_rs_occasions(const serving_cell_config& serv_cell_cfg)
+{
+  std::vector<periodic_occasion> occasions;
+
+  if (not serv_cell_cfg.csi_meas_cfg.has_value()) {
+    return occasions;
+  }
+
+  for (const nzp_csi_rs_resource& res : serv_cell_cfg.csi_meas_cfg->nzp_csi_rs_res_list) {
+    if (not res.csi_res_offset.has_value() or not res.csi_res_period.has_value()) {
+      // Aperiodic NZP-CSI-RS resources do not recur, so they cannot be modelled as periodic occasions.
+      continue;
+    }
+
+    const csi_rs_resource_mapping& res_mapping = res.res_mapping;
+    const unsigned                 row         = csi_rs::get_csi_rs_resource_mapping_row_number(
+        res_mapping.nof_ports, res_mapping.freq_density, res_mapping.cdm, res_mapping.fd_alloc);
+
+    csi_rs_pattern_configuration pattern_cfg{
+        .start_rb                 = res_mapping.freq_band_rbs.start(),
+        .nof_rb                   = res_mapping.freq_band_rbs.length(),
+        .csi_rs_mapping_table_row = row,
+        .symbol_l0                = res_mapping.first_ofdm_symbol_in_td,
+        .symbol_l1                = res_mapping.first_ofdm_symbol_in_td2.value_or(0),
+        .cdm                      = res_mapping.cdm,
+        .freq_density             = res_mapping.freq_density,
+    };
+    csi_rs::convert_freq_domain(pattern_cfg.freq_allocation_ref_idx, res_mapping.fd_alloc, row);
+
+    const csi_rs_pattern_port reserved = get_csi_rs_pattern(pattern_cfg).get_reserved_pattern();
+
+    periodic_occasion occ;
+    occ.origin      = {occasion_origin::signal_type::NZP_CSI_RS, static_cast<uint8_t>(res.res_id), 0};
+    occ.slot_period = to_underlying(*res.csi_res_period);
+    occ.slot_offset = *res.csi_res_offset;
+    occ.crbs        = res_mapping.freq_band_rbs;
+    for (unsigned sym = 0; sym != NOF_OFDM_SYM_PER_SLOT_NORMAL_CP; ++sym) {
+      if (not reserved.symbol_mask.test(sym)) {
+        continue;
+      }
+      for (unsigned re = 0; re != NOF_SUBCARRIERS_PER_RB; ++re) {
+        occ.re_masks[sym].set(re, reserved.re_mask.test(re));
+      }
+    }
+
+    occasions.push_back(occ);
+  }
+
+  return occasions;
+}
+
+/// \brief Builds the periodic occasions of the cell's periodic CSI-IM resources, as per TS 38.214, Section 5.2.2.4.
+///
+/// \remark A CSI-IM resource does not represent a transmission by the cell either, but it is still checked against
+/// other transmissions: if something lands on a CSI-IM resource's REs, the cell's own signal leaks into what is meant
+/// to be an interference-only measurement.
+std::vector<periodic_occasion> get_csi_im_occasions(const serving_cell_config& serv_cell_cfg)
+{
+  std::vector<periodic_occasion> occasions;
+
+  if (not serv_cell_cfg.csi_meas_cfg.has_value()) {
+    return occasions;
+  }
+
+  for (const csi_im_resource& res : serv_cell_cfg.csi_meas_cfg->csi_im_res_list) {
+    if (not res.csi_res_offset.has_value() or not res.csi_res_period.has_value() or
+        not res.csi_im_res_element_pattern.has_value()) {
+      // Aperiodic CSI-IM resources do not recur, so they cannot be modelled as periodic occasions.
+      continue;
+    }
+
+    const auto&    pattern         = *res.csi_im_res_element_pattern;
+    const unsigned nof_subcarriers = get_csi_im_pattern_nof_subcarriers(pattern.pattern_type);
+    const unsigned nof_symbols     = get_csi_im_pattern_nof_symbols(pattern.pattern_type);
+
+    periodic_occasion occ;
+    occ.origin      = {occasion_origin::signal_type::CSI_IM, static_cast<uint8_t>(res.res_id), 0};
+    occ.slot_period = to_underlying(*res.csi_res_period);
+    occ.slot_offset = *res.csi_res_offset;
+    occ.crbs        = res.freq_band_rbs;
+    for (unsigned sym = pattern.symbol_location, sym_end = sym + nof_symbols; sym != sym_end; ++sym) {
+      for (unsigned sc = pattern.subcarrier_location, sc_end = sc + nof_subcarriers; sc != sc_end; ++sc) {
+        occ.re_masks[sym].set(sc);
+      }
+    }
+
+    occasions.push_back(occ);
+  }
+
+  return occasions;
+}
+
+/// Appends \c src to \c dst.
+void append(std::vector<periodic_occasion>& dst, std::vector<periodic_occasion> src)
+{
+  dst.insert(dst.end(), std::make_move_iterator(src.begin()), std::make_move_iterator(src.end()));
+}
+
 } // namespace
 
 error_type<std::string> ocudu::check_static_resource_collisions(const ran_cell_config& ran)
 {
-  // TODO: convert CSI-RS and PRS into periodic occasions as well.
+  // TODO: convert DL-PRS into periodic occasions as well.
+  const serving_cell_config serv_cell_cfg = config_helpers::make_default_ue_cell_config(ran).serv_cell_cfg;
+
   std::vector<periodic_occasion> occasions = get_ssb_occasions(ran);
+  append(occasions, get_nzp_csi_rs_occasions(serv_cell_cfg));
+  append(occasions, get_csi_im_occasions(serv_cell_cfg));
 
   // Check every pair of occasions for a collision.
   for (auto it = occasions.begin(); it != occasions.end(); ++it) {

@@ -190,6 +190,20 @@ struct csi_im_resource {
   bool operator!=(const csi_im_resource& rhs) const { return !(rhs == *this); }
 };
 
+/// \brief Number of consecutive REs in frequency occupied by a CSI-IM resource element pattern, i.e., the first
+/// parameter of the pattern name, Pattern0 (2,2) or Pattern1 (4,1). See TS 38.214, Section 5.2.2.4.
+constexpr unsigned get_csi_im_pattern_nof_subcarriers(csi_im_resource::csi_im_resource_element_pattern_type pattern)
+{
+  return pattern == csi_im_resource::csi_im_resource_element_pattern_type::pattern0 ? 2 : 4;
+}
+
+/// \brief Number of consecutive OFDM symbols occupied by a CSI-IM resource element pattern, i.e., the second
+/// parameter of the pattern name, Pattern0 (2,2) or Pattern1 (4,1). See TS 38.214, Section 5.2.2.4.
+constexpr unsigned get_csi_im_pattern_nof_symbols(csi_im_resource::csi_im_resource_element_pattern_type pattern)
+{
+  return pattern == csi_im_resource::csi_im_resource_element_pattern_type::pattern0 ? 2 : 1;
+}
+
 /// CSI-IM-ResourceSet is used to configure a set of one or more CSI Interference Management (IM) resources (their IDs)
 /// and set-specific parameters
 /// \remark See TS 38.331, \c CSI-IM-ResourceSet.
