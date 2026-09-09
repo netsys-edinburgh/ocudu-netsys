@@ -42,6 +42,8 @@ ocudu image:
     DOCKERFILE: docker
     MODE: publish
     ATTESTATION_FILE: /usr/local/share/ocudu.spdx
+    ATTESTATION_EXPECTED_FILES: "bin/ocu bin/ocucp bin/ocuup bin/odu bin/odu_low bin/odu_split_8 bin/odu_split_7_2 bin/gnb bin/gnb_split_8 bin/gnb_split_7_2 bin/ru_emulator"
+    STRIP_BIN: "0"
     OS: ubuntu
     OS_VERSION: "24.04"
     DOCKER_UHD_VERSION: "4.9.0.0"
@@ -65,7 +67,7 @@ ocudu image:
       fi
       export VERSION="$(git show -s --date=format:%Y%m%d --format=%cd ${CI_COMMIT_SHA})_${CI_COMMIT_SHORT_SHA}"
       echo "CI_SHARED_OCUDU_IMAGE_VERSION=${VERSION}" >> variables.env
-      export BUILD_ARGS="OS=${OS};OS_VERSION=${OS_VERSION};UHD_VERSION=${DOCKER_UHD_VERSION};DPDK_VERSION=${DOCKER_DPDK_VERSION};MARCH=${MARCH};NUM_JOBS=${CPU_JOBS};EXTRA_CMAKE_ARGS=\"${EXTRA_CMAKE_ARGS}\""
+      export BUILD_ARGS="OS=${OS};OS_VERSION=${OS_VERSION};UHD_VERSION=${DOCKER_UHD_VERSION};DPDK_VERSION=${DOCKER_DPDK_VERSION};MARCH=${MARCH};NUM_JOBS=${CPU_JOBS};STRIP_BIN=${STRIP_BIN};EXTRA_CMAKE_ARGS=\"${EXTRA_CMAKE_ARGS}\""
   artifacts:
     reports:
       dotenv: variables.env

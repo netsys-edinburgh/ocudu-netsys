@@ -21,10 +21,12 @@
     MULTI_ARCH_BUILD: "false"
     CACHE: "true"
     CACHE_MODE: "max"
+    ATTESTATION_FILE: /usr/local/share/ocudu.spdx
     IMAGE_REPOSITORY: ""
     IMAGE_TAG_OS: ""
     IMAGE_TAG_DRIVER: "false"
     COMPONENT: ""
+    STRIP_BIN: "0"
     DRIVER: ""
     OS: ubuntu
     OS_VERSION: "24.04"
@@ -75,6 +77,17 @@
       esac
     - export DOCKER_TARGET
     - |
+      case "${COMPONENT}" in
+        gnb)         ATTESTATION_EXPECTED_FILES="bin/gnb" ;;
+        du)          ATTESTATION_EXPECTED_FILES="bin/odu" ;;
+        cu)          ATTESTATION_EXPECTED_FILES="bin/ocu" ;;
+        cu-cp)       ATTESTATION_EXPECTED_FILES="bin/ocucp" ;;
+        cu-up)       ATTESTATION_EXPECTED_FILES="bin/ocuup" ;;
+        ru-emulator) ATTESTATION_EXPECTED_FILES="bin/ru_emulator" ;;
+        *) echo "Unsupported component SBOM inventory: ${COMPONENT}" >&2; exit 1 ;;
+      esac
+      export ATTESTATION_EXPECTED_FILES
+    - |
       ENABLE_UHD=Off
       ENABLE_DPDK=Off
       case "${DRIVER}" in
@@ -100,6 +113,7 @@
       NUM_JOBS=${CPU_JOBS};\
       TARGETARCH=${TARGETARCH};\
       COMPONENT=${COMPONENT};\
+      STRIP_BIN=${STRIP_BIN};\
       ENABLE_UHD=${ENABLE_UHD};\
       ENABLE_DPDK=${ENABLE_DPDK};\
       EXTRA_CMAKE_ARGS=${EXTRA_CMAKE_ARGS}"
