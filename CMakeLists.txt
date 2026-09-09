@@ -315,13 +315,22 @@ include(copyright)
 include(GNUInstallDirs)
 
 sbom_generate(
-    OUTPUT       "${CMAKE_INSTALL_PREFIX}/share/ocudu.spdx"
-    PROJECT      "OCUDU 5G CU DU"
-    SUPPLIER     "OCUDU Project"
-    SUPPLIER_URL "https://ocudu.org"
-    DOWNLOAD_URL "https://gitlab.com/ocudu/ocudu.git"
-    LICENSE      "LicenseRef-OCUDU"
+    OUTPUT            "${CMAKE_INSTALL_PREFIX}/share/ocudu.spdx"
+    INSTALL_COMPONENT SBOM
+    PROJECT           "OCUDU 5G CU DU"
+    SUPPLIER          "OCUDU Project"
+    SUPPLIER_URL      "https://ocudu.org"
+    DOWNLOAD_URL      "https://gitlab.com/ocudu/ocudu.git"
+    LICENSE           "LicenseRef-OCUDU"
 )
+
+set(OCUDU_SBOM_DEFAULT_TARGETS ru_emulator)
+if(NOT DISABLE_MBEDTLS AND NOT DISABLE_SCTP)
+    list(PREPEND OCUDU_SBOM_DEFAULT_TARGETS ocu ocucp ocuup odu odu_low gnb)
+endif()
+set(OCUDU_SBOM_TARGETS "${OCUDU_SBOM_DEFAULT_TARGETS}"
+    CACHE STRING "Executable targets included in the installed SBOM")
+set_property(GLOBAL PROPERTY OCUDU_SBOM_REGISTERED_TARGETS "")
 
 ########################################################################
 # Find dependencies
@@ -711,12 +720,25 @@ add_custom_target(all_ocudu_headers SOURCES ${ALL_HEADER_FILES})
 # Simple function to notify binary targets + Add target to SBOM
 ########################################################################
 
-function(notify_binary_target)
-    message(STATUS "Adding binary target: ${ARGV}")
-    sbom_add(
-        TARGET       ${ARGV}
-        LICENSE      "LicenseRef-OCUDU"
-    )
+function(notify_binary_target TARGET)
+    set(oneValueArgs FILENAME)
+    cmake_parse_arguments(NOTIFY_BINARY "" "${oneValueArgs}" "" ${ARGN})
+    if(NOTIFY_BINARY_UNPARSED_ARGUMENTS)
+        message(FATAL_ERROR "Unknown arguments: ${NOTIFY_BINARY_UNPARSED_ARGUMENTS}")
+    endif()
+
+    if(NOT "${TARGET}" IN_LIST OCUDU_SBOM_TARGETS)
+        message(STATUS "Excluding binary target from SBOM: ${TARGET}")
+        return()
+    endif()
+
+    message(STATUS "Adding binary target: ${TARGET}")
+    set(SBOM_ARGS TARGET ${TARGET} LICENSE "LicenseRef-OCUDU")
+    if(NOT "${NOTIFY_BINARY_FILENAME}" STREQUAL "")
+        list(APPEND SBOM_ARGS FILENAME "${NOTIFY_BINARY_FILENAME}")
+    endif()
+    sbom_add(${SBOM_ARGS})
+    set_property(GLOBAL APPEND PROPERTY OCUDU_SBOM_REGISTERED_TARGETS "${TARGET}")
 endfunction()
 
 ########################################################################
@@ -761,6 +783,13 @@ if (ENABLE_PLUGINS)
         endif()
     endforeach()
 endif ()
+
+get_property(OCUDU_SBOM_REGISTERED_TARGETS GLOBAL PROPERTY OCUDU_SBOM_REGISTERED_TARGETS)
+foreach(SBOM_TARGET IN LISTS OCUDU_SBOM_TARGETS)
+    if(NOT SBOM_TARGET IN_LIST OCUDU_SBOM_REGISTERED_TARGETS)
+        message(FATAL_ERROR "OCUDU_SBOM_TARGETS contains an unknown or unavailable target: ${SBOM_TARGET}")
+    endif()
+endforeach()
 
 ########################################################################
 # Export (selected) libraries
