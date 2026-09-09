@@ -10,6 +10,7 @@
 #include "ocudu/ran/csi_rs/csi_rs_config_helpers.h"
 #include "ocudu/ran/csi_rs/csi_rs_pattern.h"
 #include "ocudu/ran/csi_rs/frequency_allocation_type.h"
+#include "ocudu/ran/prs/prs.h"
 #include "ocudu/ran/resource_allocation/rb_interval.h"
 #include "ocudu/ran/ssb/ssb_mapping.h"
 #include "ocudu/scheduler/config/serving_cell_config_factory.h"
@@ -245,6 +246,47 @@ std::vector<periodic_occasion> get_csi_im_occasions(const serving_cell_config& s
   return occasions;
 }
 
+/// \brief Builds the periodic occasions of the cell's DL-PRS resources, as per TS 38.211, Section 7.4.1.7.
+std::vector<periodic_occasion> get_prs_occasions(const prs_config& prs_cfg)
+{
+  std::vector<periodic_occasion> occasions;
+
+  for (unsigned set_id = 0, nof_sets = prs_cfg.resource_sets.size(); set_id != nof_sets; ++set_id) {
+    const prs_resource_set& res_set           = prs_cfg.resource_sets[set_id];
+    const crb_interval      crbs              = {res_set.start_prb, res_set.start_prb + res_set.bandwidth_prbs};
+    const unsigned          comb_size         = static_cast<unsigned>(res_set.comb_size);
+    const unsigned          nof_symbols       = static_cast<unsigned>(res_set.nof_symbols);
+    const unsigned          repetition_factor = static_cast<unsigned>(res_set.repetition_factor);
+    const unsigned          time_gap          = static_cast<unsigned>(res_set.time_gap);
+
+    for (unsigned res_id = 0, nof_res = res_set.resources.size(); res_id != nof_res; ++res_id) {
+      const prs_resource& res = res_set.resources[res_id];
+
+      // The RE mask is the same for every repetition of the resource, as the frequency offset only depends on the
+      // symbol index within the resource, not on the slot or repetition index.
+      std::array<std::bitset<NOF_SUBCARRIERS_PER_RB>, NOF_OFDM_SYM_PER_SLOT_NORMAL_CP> re_masks{};
+      for (unsigned l = 0; l != nof_symbols; ++l) {
+        const unsigned k = (res.re_offset + get_prs_freq_offset(res_set.comb_size, l)) % comb_size;
+        for (unsigned re = k; re < NOF_SUBCARRIERS_PER_RB; re += comb_size) {
+          re_masks[res.symbol_offset + l].set(re);
+        }
+      }
+
+      for (unsigned rep = 0; rep != repetition_factor; ++rep) {
+        periodic_occasion occ;
+        occ.origin = {occasion_origin::signal_type::PRS, static_cast<uint8_t>(set_id), static_cast<uint8_t>(res_id)};
+        occ.slot_period = res_set.periodicity_slots;
+        occ.slot_offset = res_set.slot_offset + res.slot_offset + rep * time_gap;
+        occ.crbs        = crbs;
+        occ.re_masks    = re_masks;
+        occasions.push_back(occ);
+      }
+    }
+  }
+
+  return occasions;
+}
+
 /// Appends \c src to \c dst.
 void append(std::vector<periodic_occasion>& dst, std::vector<periodic_occasion> src)
 {
@@ -255,12 +297,12 @@ void append(std::vector<periodic_occasion>& dst, std::vector<periodic_occasion> 
 
 error_type<std::string> ocudu::check_static_resource_collisions(const ran_cell_config& ran)
 {
-  // TODO: convert DL-PRS into periodic occasions as well.
   const serving_cell_config serv_cell_cfg = config_helpers::make_default_ue_cell_config(ran).serv_cell_cfg;
 
   std::vector<periodic_occasion> occasions = get_ssb_occasions(ran);
   append(occasions, get_nzp_csi_rs_occasions(serv_cell_cfg));
   append(occasions, get_csi_im_occasions(serv_cell_cfg));
+  append(occasions, get_prs_occasions(ran.prs_cfg));
 
   // Check every pair of occasions for a collision.
   for (auto it = occasions.begin(); it != occasions.end(); ++it) {
