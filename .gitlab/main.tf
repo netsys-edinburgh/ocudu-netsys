@@ -117,7 +117,7 @@ module "settings" {
     keep_n            = 100
     older_than        = "7d"
     name_regex_delete = ".*"
-    name_regex_keep   = null
+    name_regex_keep   = ".*-stable$|^sha256-.*\\.(sig|att)$"
   }
 
   # =============================================================================
