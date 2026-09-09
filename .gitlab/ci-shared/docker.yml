@@ -181,6 +181,15 @@ variables:
       if [ ${MODE} = "publish" ]; then
         IMAGE_DIGEST="${IMAGE_NAME_VERSION}@$(regctl image digest ${IMAGE_NAME_VERSION})"
 
+        if [ -n "$ATTESTATION_FILE" ]; then
+          echo "=== Validating ${ATTESTATION_FILE} ==="
+          [ -n "${ATTESTATION_EXPECTED_FILES}" ] || { echo "ATTESTATION_EXPECTED_FILES is mandatory" >&2; exit 1; }
+          regctl image get-file "${IMAGE_NAME_VERSION}" "${ATTESTATION_FILE}" > build.spdx
+          ATTESTATION_IMAGE="${IMAGE_NAME_VERSION}" \
+            "${CI_PROJECT_DIR}/.gitlab/ci/deploy/validate_vendor_spdx.sh" \
+            build.spdx ${ATTESTATION_EXPECTED_FILES}
+        fi
+
         echo "=== Signing image ==="
         cosign sign ${IMAGE_DIGEST}
 
@@ -195,11 +204,6 @@ variables:
 
         if [ -n "$ATTESTATION_FILE" ]; then
           echo "=== Attesting ${ATTESTATION_FILE} ==="
-          [ -n "${ATTESTATION_EXPECTED_FILES}" ] || { echo "ATTESTATION_EXPECTED_FILES is mandatory" >&2; exit 1; }
-          regctl image get-file "${IMAGE_NAME_VERSION}" "${ATTESTATION_FILE}" > build.spdx
-          ATTESTATION_IMAGE="${IMAGE_NAME_VERSION}" \
-            "${CI_PROJECT_DIR}/.gitlab/ci/deploy/validate_vendor_spdx.sh" \
-            build.spdx ${ATTESTATION_EXPECTED_FILES}
           attest_spdx build.spdx
           echo ""
         fi
