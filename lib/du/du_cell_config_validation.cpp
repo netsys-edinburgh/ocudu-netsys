@@ -1006,6 +1006,36 @@ static check_outcome check_prs_resource_set(const prs_resource_set&             
                tdd_period_slots);
   }
 
+  if (res_set.muting_option1.has_value()) {
+    const prs_muting_option1& muting_opt1           = res_set.muting_option1.value();
+    const unsigned            muting_pattern_size   = muting_opt1.muting_pattern.size();
+    const unsigned            muting_bit_rep_factor = static_cast<unsigned>(muting_opt1.muting_bit_repetition_factor);
+
+    CHECK_TRUE(is_one_of(muting_pattern_size, prs_constants::VALID_MUTING_PATTERN_SIZES),
+               "Invalid muting pattern size ({} bits) of Muting Option 1 of PRS resource set {}",
+               muting_pattern_size,
+               set_id);
+
+    // As per TS 38.214, Section 5.1.6.5, the UE does not expect the product of the periodicity, the muting bit
+    // repetition factor and the muting pattern size of Muting Option 1 to exceed 2^mu x 10240.
+    const unsigned mu = to_numerology_value(dl_carrier.scs);
+    CHECK_EQ_OR_BELOW(res_set.periodicity_slots * muting_bit_rep_factor * muting_pattern_size,
+                      (1U << mu) * prs_constants::MAX_MUTING_OPTION1_PRODUCT_NUMEROLOGY0,
+                      "product of the periodicity, the muting bit repetition factor and the muting pattern size of "
+                      "Muting Option 1 of PRS resource set {}",
+                      set_id);
+  }
+
+  if (res_set.muting_option2.has_value()) {
+    const unsigned muting_pattern_size = res_set.muting_option2.value().muting_pattern.size();
+
+    CHECK_EQ(muting_pattern_size,
+             repetition_factor,
+             "muting pattern size of Muting Option 2 of PRS resource set {}. It must be equal to the resource "
+             "repetition factor",
+             set_id);
+  }
+
   CHECK_TRUE(not res_set.resources.empty(), "No PRS resource configured in PRS resource set {}", set_id);
   CHECK_EQ_OR_BELOW(res_set.resources.size(),
                     prs_constants::MAX_NOF_RESOURCES_PER_SET,

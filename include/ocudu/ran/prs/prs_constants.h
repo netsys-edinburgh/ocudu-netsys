@@ -8,6 +8,7 @@
 #pragma once
 
 #include "ocudu/adt/to_array.h"
+#include "ocudu/ran/time/radio_frame_constants.h"
 #include <algorithm>
 #include <cstdint>
 
@@ -62,5 +63,22 @@ inline constexpr unsigned MAX_SEQUENCE_ID = 4095;
 
 /// Maximum slot offset of a PRS resource, as per TS 38.455, Section 9.2.44, "Resource Slot Offset".
 inline constexpr unsigned MAX_RES_SLOT_OFFSET = 511;
+
+/// Valid DL-PRS muting pattern bitmap sizes, as per TS 37.355, Section 6.4.3, "NR-MutingPattern-r16".
+inline constexpr auto VALID_MUTING_PATTERN_SIZES = to_array<uint8_t>({2, 4, 6, 8, 16, 32});
+
+/// \brief Valid muting bit repetition factor values of a DL-PRS Muting Option 1 pattern.
+///
+/// See TS 37.355, Section 6.4.3, "DL-PRS-MutingOption1-r16".
+inline constexpr auto VALID_MUTING_BIT_REPETITION_FACTORS = to_array<uint8_t>({1, 2, 4, 8});
+
+/// \brief Maximum value of the product of the periodicity, the muting bit repetition factor and the muting pattern
+/// size of DL-PRS Muting Option 1, for numerology 0 (i.e., \f$\mu=0\f$).
+///
+/// Equal to the number of slots in one system frame cycle at numerology 0.
+///
+/// See TS 38.214, Section 5.1.6.5.
+inline constexpr unsigned MAX_MUTING_OPTION1_PRODUCT_NUMEROLOGY0 =
+    radio_frame_constants::NOF_SFNS * radio_frame_constants::NOF_SUBFRAMES_PER_FRAME;
 
 } // namespace ocudu::prs_constants
