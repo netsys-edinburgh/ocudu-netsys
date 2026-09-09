@@ -9,7 +9,9 @@
 #include "ocudu/support/math/pow2_utils.h"
 #include "ocudu/support/ocudu_assert.h"
 #include <cmath>
+#include <cstdint>
 #include <numeric>
+#include <tuple>
 
 namespace ocudu {
 
@@ -97,6 +99,72 @@ template <typename Integer, typename It>
 Integer lcm(It begin, It end)
 {
   return std::accumulate(begin, end, Integer(1), [](Integer a, Integer b) { return std::lcm<Integer>(a, b); });
+}
+
+/// \brief Applies the extended Euclidean algorithm to \c a and \c b.
+///
+/// \param[in] a First operand.
+/// \param[in] b Second operand.
+/// \return A tuple {g, x, y}, where g = gcd(a, b) and x, y are Bezout coefficients such that a*x + b*y = g.
+inline std::tuple<int64_t, int64_t, int64_t> extended_gcd(int64_t a, int64_t b)
+{
+  int64_t old_r = a;
+  int64_t r     = b;
+  int64_t old_x = 1;
+  int64_t cur_x = 0;
+  int64_t old_y = 0;
+  int64_t cur_y = 1;
+
+  while (r != 0) {
+    const int64_t quotient = old_r / r;
+
+    const int64_t next_r = old_r - quotient * r;
+    old_r                = r;
+    r                    = next_r;
+
+    const int64_t next_x = old_x - quotient * cur_x;
+    old_x                = cur_x;
+    cur_x                = next_x;
+
+    const int64_t next_y = old_y - quotient * cur_y;
+    old_y                = cur_y;
+    cur_y                = next_y;
+  }
+
+  return {old_r, old_x, old_y};
+}
+
+/// \brief Checks whether an s exists that satisfies the two congruences, s = a (mod n1) and s = b (mod n2).
+///
+/// \param[in] a First congruence residue.
+/// \param[in] n1 First congruence modulus.
+/// \param[in] b Second congruence residue.
+/// \param[in] n2 Second congruence modulus.
+/// \return True if a solution exists.
+inline bool crt_solvable(unsigned a, unsigned n1, unsigned b, unsigned n2)
+{
+  // Generalized Chinese Remainder Theorem states there is a solution iff: a mod gcd(n1, n2) = b mod gcd(n1, n2).
+  const unsigned g = std::gcd(n1, n2);
+  return (a % g) == (b % g);
+}
+
+/// \brief Finds the smallest s that satisfies the two congruences, s = a (mod n1) and s = b (mod n2).
+///
+/// \param[in] a First congruence residue.
+/// \param[in] n1 First congruence modulus.
+/// \param[in] b Second congruence residue.
+/// \param[in] n2 Second congruence modulus.
+/// \return The smallest non-negative s satisfying both congruences. The result is expressed modulo lcm(n1, n2).
+inline unsigned crt(unsigned a, unsigned n1, unsigned b, unsigned n2)
+{
+  ocudu_sanity_check(crt_solvable(a, n1, b, n2), "No solution exists for the given congruences");
+
+  const auto [g, x, y]       = extended_gcd(n1, n2);
+  const int64_t combined_mod = static_cast<int64_t>(n1) / g * n2;
+
+  int64_t s = a + static_cast<int64_t>(n1) * x * ((static_cast<int64_t>(b) - a) / g);
+  s         = ((s % combined_mod) + combined_mod) % combined_mod;
+  return static_cast<unsigned>(s);
 }
 
 } // namespace ocudu

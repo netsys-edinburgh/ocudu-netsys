@@ -8,6 +8,7 @@
 #include "ocudu/ran/slot_point.h"
 #include "ocudu/scheduler/config/pucch_resource_builder_params.h"
 #include "ocudu/support/enum_utils.h"
+#include "ocudu/support/math/math_utils.h"
 
 using namespace ocudu;
 using namespace csi_helper;
@@ -64,20 +65,7 @@ bool ocudu::csi_helper::is_csi_rs_period_valid(csi_resource_periodicity       cs
                                                                                unsigned csi_period,
                                                                                unsigned csi_offset)
 {
-  // The CSI and SR offsets collide if there exists a slot index s such that:
-  // - s = sr_offset mod sr_period
-  // - s = csi_offset mod csi_period
-  // We use the Chinese Remainder Theorem to check whether a solution for s exists.
-  const unsigned g = std::gcd(sr_period, csi_period);
-  if (g == 1) {
-    // If both periods are coprime, CRT states there is always a solution for s for any choice of offsets.
-    return true;
-  }
-
-  // Else, generalized CRT states there is a solution if and only if: i mod gcd(X, Y) = j mod gcd(X, Y), where:
-  //  - i and j are the offsets for SR and CSI, respectively.
-  //  - X and Y are the periods for SR and CSI, respectively.
-  return (sr_offset % g) == (csi_offset % g);
+  return crt_solvable(sr_offset, sr_period, csi_offset, csi_period);
 }
 
 std::optional<csi_resource_periodicity>
