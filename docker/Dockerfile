@@ -167,32 +167,31 @@ RUN if [ -z "$NUM_JOBS" ]; then NUM_JOBS=$(nproc); fi \
     && ARCH_FLAG=$([ "${TARGETARCH}" = "arm64" ] && echo "-DMCPU=${MARCH}" || echo "-DMARCH=${MARCH}") \
     && mkdir -p /opt/ocudu/bin \
     && case "${COMPONENT}" in \
-         gnb)           TARGETS="gnb";           SRC="apps/gnb/gnb";                  BIN="gnb" ;; \
-         du)            TARGETS="odu";           SRC="apps/du/odu";                   BIN="odu" ;; \
-         cu)            TARGETS="ocu";           SRC="apps/cu/ocu";                   BIN="ocu" ;; \
-         cu-cp)         TARGETS="ocucp";         SRC="apps/cu_cp/ocucp";              BIN="ocucp" ;; \
-         cu-up)         TARGETS="ocuup";         SRC="apps/cu_up/ocuup";              BIN="ocuup" ;; \
-         ru-emulator)   TARGETS="ru_emulator";   SRC="apps/examples/ofh/ru_emulator"; BIN="ru_emulator" ;; \
-         gnb_split_8)   TARGETS="gnb_split_8";   SRC="apps/gnb_split_8/gnb";          BIN="gnb_split_8" ;; \
-         gnb_split_7_2) TARGETS="gnb_split_7_2"; SRC="apps/gnb_split_7_2/gnb";        BIN="gnb_split_7_2" ;; \
-         odu_split_8)   TARGETS="odu_split_8";   SRC="apps/du_split_8/odu";            BIN="odu_split_8" ;; \
-         odu_split_7_2) TARGETS="odu_split_7_2"; SRC="apps/du_split_7_2/odu";          BIN="odu_split_7_2" ;; \
-         *)             TARGETS="${COMPONENT}" ;; \
+         gnb)           TARGETS="gnb";           SRC="apps/gnb/gnb";                  BIN="gnb";           SBOM_TARGETS="gnb" ;; \
+         du)            TARGETS="odu";           SRC="apps/du/odu";                   BIN="odu";           SBOM_TARGETS="odu" ;; \
+         cu)            TARGETS="ocu";           SRC="apps/cu/ocu";                   BIN="ocu";           SBOM_TARGETS="ocu" ;; \
+         cu-cp)         TARGETS="ocucp";         SRC="apps/cu_cp/ocucp";              BIN="ocucp";         SBOM_TARGETS="ocucp" ;; \
+         cu-up)         TARGETS="ocuup";         SRC="apps/cu_up/ocuup";              BIN="ocuup";         SBOM_TARGETS="ocuup" ;; \
+         ru-emulator)   TARGETS="ru_emulator";   SRC="apps/examples/ofh/ru_emulator"; BIN="ru_emulator";   SBOM_TARGETS="ru_emulator" ;; \
+         gnb_split_8)   TARGETS="gnb_split_8";   SRC="apps/gnb_split_8/gnb";          BIN="gnb_split_8";   SBOM_TARGETS="gnb_split_8" ;; \
+         gnb_split_7_2) TARGETS="gnb_split_7_2"; SRC="apps/gnb_split_7_2/gnb";        BIN="gnb_split_7_2"; SBOM_TARGETS="gnb_split_7_2" ;; \
+         odu_split_8)   TARGETS="odu_split_8";   SRC="apps/du_split_8/odu";            BIN="odu_split_8";   SBOM_TARGETS="odu_split_8" ;; \
+         odu_split_7_2) TARGETS="odu_split_7_2"; SRC="apps/du_split_7_2/odu";          BIN="odu_split_7_2"; SBOM_TARGETS="odu_split_7_2" ;; \
+         *)             TARGETS="${COMPONENT}"; SBOM_TARGETS="ocu;ocucp;ocuup;odu;odu_low;odu_split_8;odu_split_7_2;gnb;gnb_split_8;gnb_split_7_2;ru_emulator" ;; \
        esac \
     && /src/docker/scripts/builder.sh -c ${COMPILER} -m "-j${NUM_JOBS} ${TARGETS}" \
        -DBUILD_TESTING=False -DENABLE_UHD=${ENABLE_UHD} -DENABLE_DPDK=${ENABLE_DPDK} \
-       ${ARCH_FLAG} -DCMAKE_INSTALL_PREFIX=/opt/ocudu ${EXTRA_CMAKE_ARGS} /src \
+       ${ARCH_FLAG} -DCMAKE_INSTALL_PREFIX=/opt/ocudu "-DOCUDU_SBOM_TARGETS=${SBOM_TARGETS}" ${EXTRA_CMAKE_ARGS} /src \
     && if [ -n "${BIN}" ]; then \
          cp /src/build/${SRC} /opt/ocudu/bin/${BIN}; \
        else \
-         cmake --install /src/build; \
+         cmake --install /src/build --component Unspecified; \
          # Split targets are EXCLUDE_FROM_ALL in CMake so cmake --install skips them; copy manually. \
          cp /src/build/apps/gnb_split_8/gnb   /opt/ocudu/bin/gnb_split_8; \
          cp /src/build/apps/gnb_split_7_2/gnb /opt/ocudu/bin/gnb_split_7_2; \
          cp /src/build/apps/du_split_8/odu    /opt/ocudu/bin/odu_split_8; \
          cp /src/build/apps/du_split_7_2/odu  /opt/ocudu/bin/odu_split_7_2; \
-       fi \
-    && rm -rf /src
+       fi
 RUN if [ "${STRIP_BIN}" = "1" ]; then \
         command -v readelf >/dev/null 2>&1 || { echo "STRIP_BIN=1 requires readelf" >&2; exit 1; }; \
         command -v strip >/dev/null 2>&1 || { echo "STRIP_BIN=1 requires strip" >&2; exit 1; }; \
@@ -202,7 +201,9 @@ RUN if [ "${STRIP_BIN}" = "1" ]; then \
                 if [ -f "$f" ] && readelf -h "$f" >/dev/null 2>&1; then strip "$f"; fi; \
             done; \
         done; \
-    fi
+    fi \
+    && cmake --install /src/build --component SBOM \
+    && rm -rf /src
 
 ################################
 # Stage 2b: Build OCUDU lean   #
@@ -234,9 +235,8 @@ RUN if [ -z "$NUM_JOBS" ]; then NUM_JOBS=$(nproc); fi \
        esac \
     && /src/docker/scripts/builder.sh -c ${COMPILER} -m "-j${NUM_JOBS} ${TARGETS}" \
        -DBUILD_TESTING=False -DENABLE_UHD=Off -DENABLE_DPDK=Off \
-       ${ARCH_FLAG} -DCMAKE_INSTALL_PREFIX=/opt/ocudu ${EXTRA_CMAKE_ARGS} /src \
-    && cp /src/build/${SRC} /opt/ocudu/bin/${BIN} \
-    && rm -rf /src
+       ${ARCH_FLAG} -DCMAKE_INSTALL_PREFIX=/opt/ocudu "-DOCUDU_SBOM_TARGETS=${TARGETS}" ${EXTRA_CMAKE_ARGS} /src \
+    && cp /src/build/${SRC} /opt/ocudu/bin/${BIN}
 # Strip OCUDU binaries so runtime-lean receives stripped executables when STRIP_BIN=1.
 RUN if [ "${STRIP_BIN}" = "1" ]; then \
         command -v readelf >/dev/null 2>&1 || { echo "STRIP_BIN=1 requires readelf" >&2; exit 1; }; \
@@ -244,7 +244,9 @@ RUN if [ "${STRIP_BIN}" = "1" ]; then \
         for f in /opt/ocudu/bin/*; do \
             if [ -f "$f" ] && readelf -h "$f" >/dev/null 2>&1; then strip "$f"; fi; \
         done; \
-    fi
+    fi \
+    && cmake --install /src/build --component SBOM \
+    && rm -rf /src
 
 ######################################
 # Stage 2c: Build OCUDU with UHD     #
@@ -279,9 +281,8 @@ RUN if [ -z "$NUM_JOBS" ]; then NUM_JOBS=$(nproc); fi \
        esac \
     && /src/docker/scripts/builder.sh -c ${COMPILER} -m "-j${NUM_JOBS} ${TARGETS}" \
        -DBUILD_TESTING=False -DENABLE_UHD=On -DENABLE_DPDK=Off \
-       ${ARCH_FLAG} -DCMAKE_INSTALL_PREFIX=/opt/ocudu ${EXTRA_CMAKE_ARGS} /src \
-    && cp /src/build/${SRC} /opt/ocudu/bin/${BIN} \
-    && rm -rf /src
+       ${ARCH_FLAG} -DCMAKE_INSTALL_PREFIX=/opt/ocudu "-DOCUDU_SBOM_TARGETS=${TARGETS}" ${EXTRA_CMAKE_ARGS} /src \
+    && cp /src/build/${SRC} /opt/ocudu/bin/${BIN}
 # Strip OCUDU and UHD binaries so runtime-uhd receives stripped executables when STRIP_BIN=1.
 RUN if [ "${STRIP_BIN}" = "1" ]; then \
         command -v readelf >/dev/null 2>&1 || { echo "STRIP_BIN=1 requires readelf" >&2; exit 1; }; \
@@ -292,7 +293,9 @@ RUN if [ "${STRIP_BIN}" = "1" ]; then \
                 if [ -f "$f" ] && readelf -h "$f" >/dev/null 2>&1; then strip "$f"; fi; \
             done; \
         done; \
-    fi
+    fi \
+    && cmake --install /src/build --component SBOM \
+    && rm -rf /src
 
 #######################################
 # Stage 2d: Build OCUDU with DPDK     #
@@ -310,6 +313,7 @@ ARG TARGETARCH
 ARG COMPILER=gcc
 ARG EXTRA_CMAKE_ARGS=""
 ARG COMPONENT
+ARG STRIP_BIN=0
 
 ENV ROHC_DIR=/opt/rohc
 ENV DPDK_DIR=/opt/dpdk/${DPDK_VERSION}
@@ -327,8 +331,16 @@ RUN if [ -z "$NUM_JOBS" ]; then NUM_JOBS=$(nproc); fi \
        esac \
     && /src/docker/scripts/builder.sh -c ${COMPILER} -m "-j${NUM_JOBS} ${TARGETS}" \
        -DBUILD_TESTING=False -DENABLE_UHD=Off -DENABLE_DPDK=On \
-       ${ARCH_FLAG} -DCMAKE_INSTALL_PREFIX=/opt/ocudu ${EXTRA_CMAKE_ARGS} /src \
-    && cp /src/build/${SRC} /opt/ocudu/bin/${BIN} \
+       ${ARCH_FLAG} -DCMAKE_INSTALL_PREFIX=/opt/ocudu "-DOCUDU_SBOM_TARGETS=${TARGETS}" ${EXTRA_CMAKE_ARGS} /src \
+    && cp /src/build/${SRC} /opt/ocudu/bin/${BIN}
+RUN if [ "${STRIP_BIN}" = "1" ]; then \
+        command -v readelf >/dev/null 2>&1 || { echo "STRIP_BIN=1 requires readelf" >&2; exit 1; }; \
+        command -v strip >/dev/null 2>&1 || { echo "STRIP_BIN=1 requires strip" >&2; exit 1; }; \
+        for f in /opt/ocudu/bin/*; do \
+            if [ -f "$f" ] && readelf -h "$f" >/dev/null 2>&1; then strip "$f"; fi; \
+        done; \
+    fi \
+    && cmake --install /src/build --component SBOM \
     && rm -rf /src
 
 ###################
