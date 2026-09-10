@@ -5,7 +5,6 @@
 #include "prach_scheduler.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/ran/band_helper.h"
-#include "ocudu/ran/frame_types.h"
 #include "ocudu/ran/prach/prach_cyclic_shifts.h"
 #include "ocudu/ran/prach/prach_frequency_mapping.h"
 #include "ocudu/ran/prach/prach_preamble_information.h"
@@ -34,9 +33,6 @@ prach_scheduler::prach_scheduler(const cell_configuration& cfg_) :
       prach_configuration_get(band_helper::get_freq_range(cell_cfg.params.dl_carrier.band),
                               cell_cfg.paired_spectrum() ? duplex_mode::FDD : duplex_mode::TDD,
                               rach_cfg_common().rach_cfg_generic.prach_config_index);
-
-  // With SCS 15kHz and 30kHz, only normal CP is supported.
-  static constexpr unsigned nof_symbols_per_slot = NOF_OFDM_SYM_PER_SLOT_NORMAL_CP;
 
   prach_symbols_slots_duration prach_duration_info =
       get_prach_duration_info(prach_cfg, cell_cfg.params.ul_cfg_common.init_ul_bwp.generic_params.scs);
@@ -70,32 +66,13 @@ prach_scheduler::prach_scheduler(const cell_configuration& cfg_) :
                                            cell_cfg.params.ul_cfg_common.init_ul_bwp.generic_params.crbs.length())};
     const crb_interval crbs = prb_to_crb(cell_cfg.params.ul_cfg_common.init_ul_bwp.generic_params, prach_prbs);
 
-    if (td_mapper().has_long_preamble()) {
-      // If the PRACH preamble is longer than 1 slot, then allocate a grant for each slot that include the preamble.
-      for (unsigned prach_slot_idx = 0; prach_slot_idx != td_mapper().prach_burst_length_slots(); ++prach_slot_idx) {
-        // For the first slot, use the start_symbol_pusch_scs; in any other case, the preamble starts from the initial
-        // symbol. For the last slot, compute the final symbol; in any other case, the preamble ends at the last slot's
-        // symbol.
-        const ofdm_symbol_range prach_symbols{
-            prach_slot_idx == 0 ? prach_duration_info.start_symbol_pusch_scs : 0,
-            prach_slot_idx < td_mapper().prach_burst_length_slots() - 1
-                ? nof_symbols_per_slot
-                : (prach_duration_info.start_symbol_pusch_scs + prach_duration_info.nof_symbols) %
-                      nof_symbols_per_slot};
-        cached_prach.grant_list.emplace_back(
-            grant_info{cell_cfg.params.ul_cfg_common.init_ul_bwp.generic_params.scs, prach_symbols, crbs});
-      }
-    } else {
-      const ofdm_symbol_range prach_symbols{prach_duration_info.start_symbol_pusch_scs,
-                                            prach_duration_info.start_symbol_pusch_scs +
-                                                prach_duration_info.nof_symbols};
-      // If the burst of PRACH opportunities extends over 1 slot, then allocate a grant for each slot that include these
-      // opportunities (1 or 2 slots).
-      for (unsigned prach_slot_idx = 0; prach_slot_idx != td_mapper().prach_burst_length_slots(); ++prach_slot_idx) {
-        // For the short PRACH formats, both grants (if more than 1) occupy the same symbols within the slot.
-        cached_prach.grant_list.emplace_back(
-            grant_info{cell_cfg.params.ul_cfg_common.init_ul_bwp.generic_params.scs, prach_symbols, crbs});
-      }
+    // Allocate a grant for each slot of the burst of PRACH opportunities: for a long preamble, each slot the
+    // preamble spans; for a short preamble, each of the (1 or 2) slots the burst of opportunities extends over.
+    for (unsigned prach_slot_idx = 0; prach_slot_idx != td_mapper().prach_burst_length_slots(); ++prach_slot_idx) {
+      const ofdm_symbol_range prach_symbols =
+          get_prach_burst_slot_symbols(prach_duration_info, td_mapper().has_long_preamble(), prach_slot_idx);
+      cached_prach.grant_list.emplace_back(
+          grant_info{cell_cfg.params.ul_cfg_common.init_ul_bwp.generic_params.scs, prach_symbols, crbs});
     }
 
     // Pre-compute PRACH occasion parameters.

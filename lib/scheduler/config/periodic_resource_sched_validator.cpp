@@ -10,6 +10,11 @@
 #include "ocudu/ran/csi_rs/csi_rs_config_helpers.h"
 #include "ocudu/ran/csi_rs/csi_rs_pattern.h"
 #include "ocudu/ran/csi_rs/frequency_allocation_type.h"
+#include "ocudu/ran/prach/prach_configuration.h"
+#include "ocudu/ran/prach/prach_frequency_mapping.h"
+#include "ocudu/ran/prach/prach_preamble_information.h"
+#include "ocudu/ran/prach/prach_time_mapping.h"
+#include "ocudu/ran/prach/rach_config_common.h"
 #include "ocudu/ran/prs/prs.h"
 #include "ocudu/ran/resource_allocation/rb_interval.h"
 #include "ocudu/ran/srs/srs_configuration.h"
@@ -31,7 +36,7 @@ namespace {
 
 /// \brief Identifies the origin of a \c periodic_occasion.
 struct occasion_origin {
-  enum class signal_type : uint8_t { SSB, NZP_CSI_RS, CSI_IM, PRS, SRS } type;
+  enum class signal_type : uint8_t { SSB, NZP_CSI_RS, CSI_IM, PRS, SRS, PRACH } type;
   uint8_t primary_id;
   uint8_t secondary_id;
 };
@@ -113,6 +118,8 @@ std::string to_string(const occasion_origin& origin)
           "DL-PRS resource (PRS Resource Set Id={}, PRS Resource Id={})", origin.primary_id, origin.secondary_id);
     case occasion_origin::signal_type::SRS:
       return fmt::format("SRS resource (SRS-ResourceId={})", origin.primary_id);
+    case occasion_origin::signal_type::PRACH:
+      return fmt::format("PRACH occasion (Frequency Domain Index={})", origin.primary_id);
   }
   ocudu_assert(false, "Invalid occasion origin signal type");
   return {};
@@ -340,6 +347,76 @@ std::vector<periodic_occasion> get_srs_occasions(const srs_config& srs_cfg, cons
   return occasions;
 }
 
+/// \brief Builds the periodic occasions of the cell's PRACH occasions, as per TS 38.211, Section 6.3.3.2.
+///
+/// \remark The occasions are derived purely from the static PRACH configuration parameters, mirroring \c
+/// prach_scheduler. The occasion validity rules of TS 38.213, Section 8.1 (e.g. TDD or SS/PBCH block collisions) are
+/// not applied here, as invalid occasions are simply skipped at run time rather than transmitted, so they cannot
+/// collide with anything; only PRACH's static time/frequency position is checked against other UL signals.
+std::vector<periodic_occasion> get_prach_occasions(const ran_cell_config& ran)
+{
+  std::vector<periodic_occasion> occasions;
+
+  if (not ran.ul_cfg_common.init_ul_bwp.rach_cfg_common.has_value()) {
+    return occasions;
+  }
+
+  const rach_config_common& rach_cfg = *ran.ul_cfg_common.init_ul_bwp.rach_cfg_common;
+  const subcarrier_spacing  ul_scs   = ran.ul_cfg_common.init_ul_bwp.generic_params.scs;
+
+  const prach_configuration prach_cfg = prach_configuration_get(band_helper::get_freq_range(ran.dl_carrier.band),
+                                                                band_helper::get_duplex_mode(ran.dl_carrier.band),
+                                                                rach_cfg.rach_cfg_generic.prach_config_index);
+
+  const prach_helper::preamble_slot_mapping td_mapping{
+      ran.dl_carrier.band, ul_scs, rach_cfg.rach_cfg_generic.prach_config_index};
+
+  // The information we need are not related to whether it is the last PRACH occasion.
+  constexpr bool                   is_last_prach_occasion = false;
+  const prach_preamble_information info =
+      is_long_preamble(prach_cfg.format)
+          ? get_prach_preamble_long_info(prach_cfg.format)
+          : get_prach_preamble_short_info(prach_cfg.format, to_ra_subcarrier_spacing(ul_scs), is_last_prach_occasion);
+
+  const prach_symbols_slots_duration duration_info  = get_prach_duration_info(prach_cfg, ul_scs);
+  const unsigned                     prach_nof_prbs = prach_frequency_mapping_get(info.scs, ul_scs).nof_rb_ra;
+
+  const unsigned nof_slots_per_frame = get_nof_slots_per_subframe(ul_scs) * NOF_SUBFRAMES_PER_FRAME;
+  const unsigned nof_burst_slots     = td_mapping.prach_burst_length_slots();
+  const unsigned slot_period         = prach_cfg.x * nof_slots_per_frame;
+
+  for (unsigned id_fd_ra = 0; id_fd_ra != rach_cfg.rach_cfg_generic.msg1_fdm; ++id_fd_ra) {
+    const unsigned     prb_start = rach_cfg.rach_cfg_generic.msg1_frequency_start + id_fd_ra * prach_nof_prbs;
+    const crb_interval crbs      = {ran.ul_cfg_common.init_ul_bwp.generic_params.crbs.start() + prb_start,
+                                    ran.ul_cfg_common.init_ul_bwp.generic_params.crbs.start() + prb_start + prach_nof_prbs};
+
+    for (unsigned y : prach_cfg.y) {
+      for (unsigned slot_idx = 0; slot_idx != nof_slots_per_frame; ++slot_idx) {
+        if (not td_mapping.has_slot_index_prach_occasion(slot_idx)) {
+          continue;
+        }
+
+        for (unsigned burst_slot = 0; burst_slot != nof_burst_slots; ++burst_slot) {
+          const ofdm_symbol_range symbols =
+              get_prach_burst_slot_symbols(duration_info, td_mapping.has_long_preamble(), burst_slot);
+
+          periodic_occasion occ;
+          occ.origin      = {occasion_origin::signal_type::PRACH, static_cast<uint8_t>(id_fd_ra), 0};
+          occ.slot_period = slot_period;
+          occ.slot_offset = (y * nof_slots_per_frame + slot_idx + burst_slot) % slot_period;
+          occ.crbs        = crbs;
+          for (unsigned sym = symbols.start(); sym != symbols.stop(); ++sym) {
+            occ.re_masks[sym].set();
+          }
+          occasions.push_back(occ);
+        }
+      }
+    }
+  }
+
+  return occasions;
+}
+
 /// Appends \c src to \c dst.
 void append(std::vector<periodic_occasion>& dst, std::vector<periodic_occasion> src)
 {
@@ -376,7 +453,7 @@ error_type<std::string> ocudu::check_periodic_resource_collisions(const ran_cell
   append(dl_occasions, get_csi_im_occasions(serv_cell_cfg));
   append(dl_occasions, get_prs_occasions(ran.prs_cfg));
 
-  std::vector<periodic_occasion> ul_occasions;
+  std::vector<periodic_occasion> ul_occasions = get_prach_occasions(ran);
   if (serv_cell_cfg.ul_config.has_value() and serv_cell_cfg.ul_config->init_ul_bwp.srs_cfg.has_value()) {
     append(ul_occasions,
            get_srs_occasions(*serv_cell_cfg.ul_config->init_ul_bwp.srs_cfg,
