@@ -1070,22 +1070,6 @@ static check_outcome check_prs_resource_set(const prs_resource_set&             
                 "slot offset of the last repetition of PRS resource {} of resource set {}",
                 res_id,
                 set_id);
-
-    if (not tdd_cfg.has_value()) {
-      continue;
-    }
-
-    // In TDD, all the repetitions of the resource must fall in slots with enough DL symbols.
-    for (unsigned rep = 0; rep != repetition_factor; ++rep) {
-      const unsigned slot_offset = res_set.slot_offset + res.slot_offset + rep * time_gap;
-      const unsigned nof_dl_symbols =
-          get_active_tdd_dl_symbols(tdd_cfg.value(), slot_offset, cyclic_prefix::NORMAL).length();
-      CHECK_TRUE(res.symbol_offset + nof_symbols <= nof_dl_symbols,
-                 "PRS resource {} of resource set {} does not fit in the DL symbols of slot {} of the TDD pattern",
-                 res_id,
-                 set_id,
-                 slot_offset % nof_slots_per_tdd_period(tdd_cfg.value()));
-    }
   }
 
   // Two resources of the same set that share the slot offset, the symbol offset and the comb offset are mapped onto
