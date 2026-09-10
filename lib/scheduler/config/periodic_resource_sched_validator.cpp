@@ -12,9 +12,13 @@
 #include "ocudu/ran/csi_rs/frequency_allocation_type.h"
 #include "ocudu/ran/prs/prs.h"
 #include "ocudu/ran/resource_allocation/rb_interval.h"
+#include "ocudu/ran/srs/srs_configuration.h"
+#include "ocudu/ran/srs/srs_information.h"
+#include "ocudu/ran/srs/srs_resource_configuration.h"
 #include "ocudu/ran/ssb/ssb_mapping.h"
 #include "ocudu/scheduler/config/serving_cell_config_factory.h"
 #include "ocudu/scheduler/sched_consts.h"
+#include "ocudu/support/config/validator_helpers.h"
 #include "ocudu/support/enum_utils.h"
 #include "ocudu/support/math/math_utils.h"
 #include <bitset>
@@ -27,7 +31,7 @@ namespace {
 
 /// \brief Identifies the origin of a \c periodic_occasion.
 struct occasion_origin {
-  enum class signal_type : uint8_t { SSB, NZP_CSI_RS, CSI_IM, PRS } type;
+  enum class signal_type : uint8_t { SSB, NZP_CSI_RS, CSI_IM, PRS, SRS } type;
   uint8_t primary_id;
   uint8_t secondary_id;
 };
@@ -107,6 +111,8 @@ std::string to_string(const occasion_origin& origin)
     case occasion_origin::signal_type::PRS:
       return fmt::format(
           "DL-PRS resource (PRS Resource Set Id={}, PRS Resource Id={})", origin.primary_id, origin.secondary_id);
+    case occasion_origin::signal_type::SRS:
+      return fmt::format("SRS resource (SRS-ResourceId={})", origin.primary_id);
   }
   ocudu_assert(false, "Invalid occasion origin signal type");
   return {};
@@ -287,24 +293,62 @@ std::vector<periodic_occasion> get_prs_occasions(const prs_config& prs_cfg)
   return occasions;
 }
 
+/// \brief Builds the periodic occasions of the cell's periodic SRS resources, as per TS 38.211, Section 6.4.1.4.
+///
+/// \remark Aperiodic and semi-persistent SRS resources are deliberately excluded: unlike periodic SRS, they are
+/// triggered or activated dynamically by the network.
+std::vector<periodic_occasion> get_srs_occasions(const srs_config& srs_cfg, const crb_interval& ul_bwp_crbs)
+{
+  std::vector<periodic_occasion> occasions;
+
+  for (const srs_config::srs_resource& res : srs_cfg.srs_res_list) {
+    if (res.res_type != srs_resource_type::periodic or not res.periodicity_and_offset.has_value()) {
+      // Aperiodic and semi-persistent SRS resources do not recur, so they cannot be modelled as periodic occasions.
+      continue;
+    }
+
+    const srs_resource_configuration res_cfg      = to_srs_resource_configuration(res);
+    const unsigned                   nof_ports    = static_cast<unsigned>(res.nof_ports);
+    const unsigned                   symbol_start = NOF_OFDM_SYM_PER_SLOT_NORMAL_CP - res.res_mapping.start_pos - 1;
+
+    periodic_occasion occ;
+    occ.origin      = {occasion_origin::signal_type::SRS, static_cast<uint8_t>(res.id.cell_res_id), 0};
+    occ.slot_period = to_underlying(res.periodicity_and_offset->period);
+    occ.slot_offset = res.periodicity_and_offset->offset;
+
+    for (unsigned port = 0; port != nof_ports; ++port) {
+      const srs_information info = get_srs_information(res_cfg, port);
+
+      if (port == 0) {
+        // The occupied bandwidth and CRBs do not depend on the antenna port, as per TS 38.211, Section 6.4.1.4.3.
+        const unsigned bandwidth_rbs = info.sequence_length * info.comb_size / NOF_SUBCARRIERS_PER_RB;
+        const unsigned start_crb     = ul_bwp_crbs.start() + info.mapping_initial_subcarrier / NOF_SUBCARRIERS_PER_RB;
+        occ.crbs                     = {start_crb, start_crb + bandwidth_rbs};
+      }
+
+      const unsigned k_tc = info.mapping_initial_subcarrier % NOF_SUBCARRIERS_PER_RB;
+      for (unsigned sym = symbol_start, sym_end = symbol_start + res.res_mapping.nof_symb; sym != sym_end; ++sym) {
+        for (unsigned re = k_tc; re < NOF_SUBCARRIERS_PER_RB; re += info.comb_size) {
+          occ.re_masks[sym].set(re);
+        }
+      }
+    }
+
+    occasions.push_back(occ);
+  }
+
+  return occasions;
+}
+
 /// Appends \c src to \c dst.
 void append(std::vector<periodic_occasion>& dst, std::vector<periodic_occasion> src)
 {
   dst.insert(dst.end(), std::make_move_iterator(src.begin()), std::make_move_iterator(src.end()));
 }
 
-} // namespace
-
-error_type<std::string> ocudu::check_periodic_resource_collisions(const ran_cell_config& ran)
+/// Checks every pair of occasions in \c occasions for a collision, and returns an error describing the first one found.
+error_type<std::string> check_occasion_collisions(const std::vector<periodic_occasion>& occasions)
 {
-  const serving_cell_config serv_cell_cfg = config_helpers::make_default_ue_cell_config(ran).serv_cell_cfg;
-
-  std::vector<periodic_occasion> occasions = get_ssb_occasions(ran);
-  append(occasions, get_nzp_csi_rs_occasions(serv_cell_cfg));
-  append(occasions, get_csi_im_occasions(serv_cell_cfg));
-  append(occasions, get_prs_occasions(ran.prs_cfg));
-
-  // Check every pair of occasions for a collision.
   for (auto it = occasions.begin(); it != occasions.end(); ++it) {
     auto it2 = it;
     for (++it2; it2 != occasions.end(); ++it2) {
@@ -318,5 +362,29 @@ error_type<std::string> ocudu::check_periodic_resource_collisions(const ran_cell
       }
     }
   }
+  return default_success_t();
+}
+
+} // namespace
+
+error_type<std::string> ocudu::check_periodic_resource_collisions(const ran_cell_config& ran)
+{
+  const serving_cell_config serv_cell_cfg = config_helpers::make_default_ue_cell_config(ran).serv_cell_cfg;
+
+  std::vector<periodic_occasion> dl_occasions = get_ssb_occasions(ran);
+  append(dl_occasions, get_nzp_csi_rs_occasions(serv_cell_cfg));
+  append(dl_occasions, get_csi_im_occasions(serv_cell_cfg));
+  append(dl_occasions, get_prs_occasions(ran.prs_cfg));
+
+  std::vector<periodic_occasion> ul_occasions;
+  if (serv_cell_cfg.ul_config.has_value() and serv_cell_cfg.ul_config->init_ul_bwp.srs_cfg.has_value()) {
+    append(ul_occasions,
+           get_srs_occasions(*serv_cell_cfg.ul_config->init_ul_bwp.srs_cfg,
+                             ran.ul_cfg_common.init_ul_bwp.generic_params.crbs));
+  }
+
+  // DL and UL signals are checked independently.
+  HANDLE_ERROR(check_occasion_collisions(dl_occasions));
+  HANDLE_ERROR(check_occasion_collisions(ul_occasions));
   return default_success_t();
 }
