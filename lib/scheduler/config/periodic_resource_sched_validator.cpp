@@ -21,6 +21,7 @@
 #include "ocudu/ran/srs/srs_information.h"
 #include "ocudu/ran/srs/srs_resource_configuration.h"
 #include "ocudu/ran/ssb/ssb_mapping.h"
+#include "ocudu/ran/tdd/tdd_ul_dl_config.h"
 #include "ocudu/scheduler/config/serving_cell_config_factory.h"
 #include "ocudu/scheduler/sched_consts.h"
 #include "ocudu/support/config/validator_helpers.h"
@@ -36,9 +37,9 @@ namespace {
 
 /// \brief Identifies the origin of a \c periodic_occasion.
 struct occasion_origin {
-  enum class signal_type : uint8_t { SSB, NZP_CSI_RS, CSI_IM, PRS, SRS, PRACH } type;
-  uint8_t primary_id;
-  uint8_t secondary_id;
+  enum class signal_type : uint8_t { SSB, NZP_CSI_RS, CSI_IM, PRS, SRS, PRACH, TDD_NON_DL, TDD_NON_UL } type;
+  uint16_t primary_id;
+  uint8_t  secondary_id;
 };
 
 /// \brief A resource occupancy that recurs periodically in time.
@@ -120,6 +121,17 @@ std::string to_string(const occasion_origin& origin)
       return fmt::format("SRS resource (SRS-ResourceId={})", origin.primary_id);
     case occasion_origin::signal_type::PRACH:
       return fmt::format("PRACH occasion (Frequency Domain Index={})", origin.primary_id);
+    case occasion_origin::signal_type::TDD_NON_DL:
+      return origin.secondary_id == 0
+                 ? "TDD UL-DL pattern (no symbols are available for DL in that slot)"
+                 : fmt::format("TDD UL-DL pattern (only symbols 0-{} are available for DL in that slot)",
+                               origin.secondary_id - 1);
+    case occasion_origin::signal_type::TDD_NON_UL:
+      return origin.secondary_id == 0
+                 ? "TDD UL-DL pattern (no symbols are available for UL in that slot)"
+                 : fmt::format("TDD UL-DL pattern (only symbols {}-{} are available for UL in that slot)",
+                               NOF_OFDM_SYM_PER_SLOT_NORMAL_CP - origin.secondary_id,
+                               NOF_OFDM_SYM_PER_SLOT_NORMAL_CP - 1);
   }
   ocudu_assert(false, "Invalid occasion origin signal type");
   return {};
@@ -417,6 +429,49 @@ std::vector<periodic_occasion> get_prach_occasions(const ran_cell_config& ran)
   return occasions;
 }
 
+/// \brief Builds the periodic occasions that mark, for a given link direction, the OFDM symbols of each slot in the
+/// cell's TDD DL-UL pattern that are *not* available for that direction, as per TS 38.213, Section 11.1.
+///
+/// DL (UL) occasions are checked against these to ensure they never occupy a symbol that the TDD pattern reserves
+/// for the opposite direction or for the guard period.
+std::vector<periodic_occasion> get_tdd_restricted_occasions(const tdd_ul_dl_config_common& tdd_cfg, bool is_dl)
+{
+  std::vector<periodic_occasion> occasions;
+
+  const unsigned period_slots = nof_slots_per_tdd_period(tdd_cfg);
+  for (unsigned slot_idx = 0; slot_idx != period_slots; ++slot_idx) {
+    const ofdm_symbol_range active_symbols = is_dl
+                                                 ? get_active_tdd_dl_symbols(tdd_cfg, slot_idx, cyclic_prefix::NORMAL)
+                                                 : get_active_tdd_ul_symbols(tdd_cfg, slot_idx, cyclic_prefix::NORMAL);
+    if (active_symbols.length() == NOF_OFDM_SYM_PER_SLOT_NORMAL_CP) {
+      // The whole slot is available for this direction; nothing to restrict.
+      continue;
+    }
+
+    // DL (UL) active symbols always start at the beginning (end) of the slot, so the restricted region is the
+    // complementary, contiguous range of symbols.
+    const ofdm_symbol_range restricted_symbols =
+        is_dl ? ofdm_symbol_range{active_symbols.stop(), NOF_OFDM_SYM_PER_SLOT_NORMAL_CP}
+              : ofdm_symbol_range{0, active_symbols.start()};
+
+    periodic_occasion occ;
+    occ.origin = {is_dl ? occasion_origin::signal_type::TDD_NON_DL : occasion_origin::signal_type::TDD_NON_UL,
+                  static_cast<uint16_t>(slot_idx),
+                  static_cast<uint8_t>(active_symbols.length())};
+    occ.slot_period = period_slots;
+    occ.slot_offset = slot_idx;
+    // The restriction applies to the whole cell bandwidth.
+    occ.crbs = {0, MAX_NOF_PRBS};
+    for (unsigned sym = restricted_symbols.start(); sym != restricted_symbols.stop(); ++sym) {
+      occ.re_masks[sym].set();
+    }
+
+    occasions.push_back(occ);
+  }
+
+  return occasions;
+}
+
 /// Appends \c src to \c dst.
 void append(std::vector<periodic_occasion>& dst, std::vector<periodic_occasion> src)
 {
@@ -458,6 +513,12 @@ error_type<std::string> ocudu::check_periodic_resource_collisions(const ran_cell
     append(ul_occasions,
            get_srs_occasions(*serv_cell_cfg.ul_config->init_ul_bwp.srs_cfg,
                              ran.ul_cfg_common.init_ul_bwp.generic_params.crbs));
+  }
+
+  if (ran.tdd_cfg.has_value()) {
+    // In TDD, DL and UL occasions must also respect the cell's TDD DL-UL pattern.
+    append(dl_occasions, get_tdd_restricted_occasions(*ran.tdd_cfg, true));
+    append(ul_occasions, get_tdd_restricted_occasions(*ran.tdd_cfg, false));
   }
 
   // DL and UL signals are checked independently.
