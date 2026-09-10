@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/scheduler/config/periodic_resource_sched_validator.h"
+#include "ocudu/adt/bounded_bitset.h"
 #include "ocudu/adt/expected.h"
 #include "ocudu/adt/format.h"
 #include "ocudu/ran/band_helper.h"
@@ -17,6 +18,7 @@
 #include "ocudu/ran/prach/rach_config_common.h"
 #include "ocudu/ran/prs/prs.h"
 #include "ocudu/ran/resource_allocation/rb_interval.h"
+#include "ocudu/ran/resource_block.h"
 #include "ocudu/ran/srs/srs_configuration.h"
 #include "ocudu/ran/srs/srs_information.h"
 #include "ocudu/ran/srs/srs_resource_configuration.h"
@@ -50,11 +52,11 @@ struct periodic_occasion {
   unsigned slot_period;
   /// Slot, within \c slot_period, at which this occasion occurs.
   unsigned slot_offset;
-  /// CRBs occupied by this occasion.
-  crb_interval crbs;
+  /// \brief CRBs occupied by this occasion.
+  bounded_bitset<MAX_NOF_PRBS> crbs;
   /// \brief RE mask per OFDM symbol.
   ///
-  /// \remark Assumes the RE mask is the same for all CRBs.
+  /// \remark Assumes the RE mask is the same for every CRB set in \c crbs.
   std::array<std::bitset<NOF_SUBCARRIERS_PER_RB>, NOF_OFDM_SYM_PER_SLOT_NORMAL_CP> re_masks{};
 
   /// Checks whether this and \c other occasion can ever fall on the same slot.
@@ -66,7 +68,7 @@ struct periodic_occasion {
   /// Checks whether this and \c other occasion collide in the resource grid.
   bool collides_in_res(const periodic_occasion& other) const
   {
-    if (not crbs.overlaps(other.crbs)) {
+    if (not(crbs & other.crbs).any()) {
       return false;
     }
 
@@ -78,6 +80,14 @@ struct periodic_occasion {
     return false;
   }
 };
+
+/// \brief Returns a bitset marking every CRB in \c crbs as occupied.
+bounded_bitset<MAX_NOF_PRBS> to_crb_bitset(const crb_interval& crbs)
+{
+  bounded_bitset<MAX_NOF_PRBS> bitset(MAX_NOF_PRBS);
+  bitset.fill(crbs.start(), crbs.stop());
+  return bitset;
+}
 
 /// \brief Description of a collision between two periodic occasions.
 struct occasion_collision {
@@ -160,7 +170,7 @@ std::vector<periodic_occasion> get_ssb_occasions(const ran_cell_config& ran)
     occ.origin      = {occasion_origin::signal_type::SSB, ssb_idx, 0};
     occ.slot_period = ssb_period_slots;
     occ.slot_offset = burst_symbol / NOF_OFDM_SYM_PER_SLOT_NORMAL_CP;
-    occ.crbs        = ssb_crbs;
+    occ.crbs        = to_crb_bitset(ssb_crbs);
 
     // The 4 OFDM symbols of an SSB occasion never cross a slot boundary. The SSB fully occupies every RE of its
     // CRBs in those symbols.
@@ -208,13 +218,18 @@ std::vector<periodic_occasion> get_nzp_csi_rs_occasions(const serving_cell_confi
     };
     csi_rs::convert_freq_domain(pattern_cfg.freq_allocation_ref_idx, res_mapping.fd_alloc, row);
 
-    const csi_rs_pattern_port reserved = get_csi_rs_pattern(pattern_cfg).get_reserved_pattern();
+    const csi_rs_pattern      pattern  = get_csi_rs_pattern(pattern_cfg);
+    const csi_rs_pattern_port reserved = pattern.get_reserved_pattern();
 
     periodic_occasion occ;
     occ.origin      = {occasion_origin::signal_type::NZP_CSI_RS, static_cast<uint8_t>(res.res_id), 0};
     occ.slot_period = to_underlying(*res.csi_res_period);
     occ.slot_offset = *res.csi_res_offset;
-    occ.crbs        = res_mapping.freq_band_rbs;
+    occ.crbs        = bounded_bitset<MAX_NOF_PRBS>(MAX_NOF_PRBS);
+    // With a frequency density lower than one, not every CRB in the pattern's range actually carries the CSI-RS.
+    for (unsigned rb = pattern.rb_begin; rb < pattern.rb_end; rb += pattern.rb_stride) {
+      occ.crbs.set(rb);
+    }
     for (unsigned sym = 0; sym != NOF_OFDM_SYM_PER_SLOT_NORMAL_CP; ++sym) {
       if (not reserved.symbol_mask.test(sym)) {
         continue;
@@ -258,7 +273,7 @@ std::vector<periodic_occasion> get_csi_im_occasions(const serving_cell_config& s
     occ.origin      = {occasion_origin::signal_type::CSI_IM, static_cast<uint8_t>(res.res_id), 0};
     occ.slot_period = to_underlying(*res.csi_res_period);
     occ.slot_offset = *res.csi_res_offset;
-    occ.crbs        = res.freq_band_rbs;
+    occ.crbs        = to_crb_bitset(res.freq_band_rbs);
     for (unsigned sym = pattern.symbol_location, sym_end = sym + nof_symbols; sym != sym_end; ++sym) {
       for (unsigned sc = pattern.subcarrier_location, sc_end = sc + nof_subcarriers; sc != sc_end; ++sc) {
         occ.re_masks[sym].set(sc);
@@ -302,7 +317,7 @@ std::vector<periodic_occasion> get_prs_occasions(const prs_config& prs_cfg)
         occ.origin = {occasion_origin::signal_type::PRS, static_cast<uint8_t>(set_id), static_cast<uint8_t>(res_id)};
         occ.slot_period = res_set.periodicity_slots;
         occ.slot_offset = res_set.slot_offset + res.slot_offset + rep * time_gap;
-        occ.crbs        = crbs;
+        occ.crbs        = to_crb_bitset(crbs);
         occ.re_masks    = re_masks;
         occasions.push_back(occ);
       }
@@ -342,7 +357,7 @@ std::vector<periodic_occasion> get_srs_occasions(const srs_config& srs_cfg, cons
         // The occupied bandwidth and CRBs do not depend on the antenna port, as per TS 38.211, Section 6.4.1.4.3.
         const unsigned bandwidth_rbs = info.sequence_length * info.comb_size / NOF_SUBCARRIERS_PER_RB;
         const unsigned start_crb     = ul_bwp_crbs.start() + info.mapping_initial_subcarrier / NOF_SUBCARRIERS_PER_RB;
-        occ.crbs                     = {start_crb, start_crb + bandwidth_rbs};
+        occ.crbs                     = to_crb_bitset({start_crb, start_crb + bandwidth_rbs});
       }
 
       const unsigned k_tc = info.mapping_initial_subcarrier % NOF_SUBCARRIERS_PER_RB;
@@ -416,7 +431,7 @@ std::vector<periodic_occasion> get_prach_occasions(const ran_cell_config& ran)
           occ.origin      = {occasion_origin::signal_type::PRACH, static_cast<uint8_t>(id_fd_ra), 0};
           occ.slot_period = slot_period;
           occ.slot_offset = (y * nof_slots_per_frame + slot_idx + burst_slot) % slot_period;
-          occ.crbs        = crbs;
+          occ.crbs        = to_crb_bitset(crbs);
           for (unsigned sym = symbols.start(); sym != symbols.stop(); ++sym) {
             occ.re_masks[sym].set();
           }
@@ -461,7 +476,7 @@ std::vector<periodic_occasion> get_tdd_restricted_occasions(const tdd_ul_dl_conf
     occ.slot_period = period_slots;
     occ.slot_offset = slot_idx;
     // The restriction applies to the whole cell bandwidth.
-    occ.crbs = {0, MAX_NOF_PRBS};
+    occ.crbs = to_crb_bitset({0, MAX_NOF_PRBS});
     for (unsigned sym = restricted_symbols.start(); sym != restricted_symbols.stop(); ++sym) {
       occ.re_masks[sym].set();
     }
