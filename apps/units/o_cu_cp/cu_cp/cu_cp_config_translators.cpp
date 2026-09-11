@@ -187,20 +187,30 @@ static ocucp::rrc_meas_trigger_quant build_meas_trigger_offset(std::string_view 
 static ocucp::rrc_event_id
 create_event_id_for_distance_or_time_based_id(const cu_cp_unit_report_config& report_cfg_item)
 {
-  ocudu_assert(report_cfg_item.event_triggered_report_type, "Invalid event triggered report type");
-  ocudu_assert(report_cfg_item.time_to_trigger_ms, "Invalid time to trigger");
-  ocudu_assert(report_cfg_item.distance_thresh_from_ref1_km, "Invalid distance threshold from reference one");
-  ocudu_assert(report_cfg_item.distance_thresh_from_ref2_km, "Invalid distance threshold from reference two");
-  ocudu_assert(report_cfg_item.ref_location1, "Invalid reference location one");
-  ocudu_assert(report_cfg_item.ref_location2, "Invalid reference location two");
-  ocudu_assert(report_cfg_item.hysteresis_location_km, "Invalid hysteresis location");
-  ocudu_assert(report_cfg_item.t1_thres, "Invalid T1 threshold");
-  ocudu_assert(report_cfg_item.duration, "Invalid duration");
+  report_error_if_not(report_cfg_item.event_triggered_report_type, "Invalid event triggered report type");
 
   const bool is_distance = (report_cfg_item.event_triggered_report_type == ocucp::rrc_event_id::event_id_t::d1 ||
                             report_cfg_item.event_triggered_report_type == ocucp::rrc_event_id::event_id_t::d2);
   const bool is_d1       = (report_cfg_item.event_triggered_report_type == ocucp::rrc_event_id::event_id_t::d1);
   const bool is_time     = (report_cfg_item.event_triggered_report_type == ocucp::rrc_event_id::event_id_t::t1);
+
+  // Each event carries its own parameters and no others, so only those are required. TS 38.331: D1 and D2 take the
+  // distance thresholds and the location hysteresis, D1 alone the two reference locations, T1 the threshold and
+  // duration.
+  if (is_distance) {
+    report_error_if_not(report_cfg_item.time_to_trigger_ms, "Invalid time to trigger");
+    report_error_if_not(report_cfg_item.distance_thresh_from_ref1_km, "Invalid distance threshold from reference one");
+    report_error_if_not(report_cfg_item.distance_thresh_from_ref2_km, "Invalid distance threshold from reference two");
+    report_error_if_not(report_cfg_item.hysteresis_location_km, "Invalid hysteresis location");
+  }
+  if (is_d1) {
+    report_error_if_not(report_cfg_item.ref_location1, "Invalid reference location one");
+    report_error_if_not(report_cfg_item.ref_location2, "Invalid reference location two");
+  }
+  if (is_time) {
+    report_error_if_not(report_cfg_item.t1_thres, "Invalid T1 threshold");
+    report_error_if_not(report_cfg_item.duration, "Invalid duration");
+  }
 
   return ocucp::rrc_event_id{
       .id              = *report_cfg_item.event_triggered_report_type,
