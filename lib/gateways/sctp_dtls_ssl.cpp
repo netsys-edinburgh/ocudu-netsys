@@ -3,11 +3,11 @@
 #include "sctp_dtls_ssl.h"
 #include "openssl_error.h"
 #include "sctp_dtls.h"
+#include "sctp_network_dtls_interface.h"
 #include "ocudu/adt/byte_buffer.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/support/error_handling.h"
 #include <string>
-#include <utility>
 
 using namespace ocudu;
 
@@ -22,7 +22,7 @@ std::unique_ptr<dtls_ssl> ocudu::create_dtls_ssl(const dtls_ssl_config& cfg_, co
 }
 
 openssl_dtls_ssl::openssl_dtls_ssl(const dtls_ssl_config& cfg_, const dtls_ssl_dependencies& deps_) :
-  cfg(cfg_), ssl_ctx(deps_.ssl_ctx), logger(ocudulog::fetch_basic_logger("SCTP"))
+  cfg(cfg_), ssl_ctx(deps_.ssl_ctx), gw(deps_.gw), logger(ocudulog::fetch_basic_logger("SCTP"))
 {
 }
 
@@ -51,7 +51,7 @@ bool openssl_dtls_ssl::init(int socket)
   SSL_set_bio(ssl, bio, bio);
 
   BIO_dgram_sctp_notification_handler_fn cb = &openssl_dtls_ssl::dtls_notification_cb;
-  BIO_dgram_sctp_notification_cb(bio, cb, nullptr);
+  BIO_dgram_sctp_notification_cb(bio, cb, this);
 
   // Initiate handshake.
   int ret = -1;
@@ -152,7 +152,10 @@ int openssl_dtls_ssl::write(span<const uint8_t> pdu_span)
 
 void openssl_dtls_ssl::dtls_notification_cb(BIO* bio, void* context, void* buf)
 {
-  // TODO handle notifications.
+  // Get SSL context from notification.
+  auto*       ssl   = static_cast<openssl_dtls_ssl*>(context);
+  const auto* notif = static_cast<const union sctp_notification*>(buf);
+  ssl->gw.handle_dtls_notification(notif, ssl->cfg.assoc);
 }
 
 static std::string get_ssl_error_string(int err)

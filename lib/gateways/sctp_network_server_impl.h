@@ -5,6 +5,7 @@
 
 #include "sctp_dtls.h"
 #include "sctp_dtls_ssl.h"
+#include "sctp_network_dtls_interface.h"
 #include "sctp_network_gateway_common_impl.h"
 #include "ocudu/gateways/sctp_network_server.h"
 #include "ocudu/support/async/manual_event.h"
@@ -23,7 +24,9 @@ namespace ocudu {
 ///
 /// The io_broker thread only performs the raw sctp_recvmsg.
 //  All data and notification handling is deferred back to app_exec.
-class sctp_network_server_impl : public sctp_network_server, public sctp_network_gateway_common_impl
+class sctp_network_server_impl : public sctp_network_server,
+                                 public sctp_network_gateway_common_impl,
+                                 public sctp_network_gateway_dtls_interface
 {
   explicit sctp_network_server_impl(const sctp_network_gateway_config& sctp_cfg,
                                     io_broker&                         broker,
@@ -93,10 +96,12 @@ private:
   void defer_socket_shutdown(const char* cause, const std::optional<scoped_sync_token>& token = std::nullopt);
 
   void handle_data(int assoc_id, span<const uint8_t> payload);
-  void handle_notification(span<const uint8_t>           payload,
-                           const struct sctp_sndrcvinfo& sri,
-                           const sockaddr&               src_addr,
-                           socklen_t                     src_addr_len);
+  void handle_notification(span<const uint8_t> payload,
+                           sctp_assoc_t        assoc,
+                           const sockaddr&     src_addr,
+                           socklen_t           src_addr_len);
+
+  void handle_dtls_notification(const union sctp_notification* notif, int assoc) override;
   void handle_association_shutdown(int assoc_id, const char* cause);
   void handle_sctp_shutdown_comp(int assoc_id);
   void handle_sctp_comm_lost(int assoc_id);

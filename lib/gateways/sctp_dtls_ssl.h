@@ -7,6 +7,8 @@
 #include "ocudu/gateways/sctp_dtls_mode.h"
 #include "ocudu/ocudulog/logger.h"
 #include <memory>
+#include <netinet/in.h>
+#include <netinet/sctp.h>
 
 /// Optional includes that are only required if DTLS is enabled.
 #ifdef OCUDU_HAVE_OPENSSL_DTLS
@@ -18,12 +20,16 @@
 namespace ocudu {
 
 struct dtls_ssl_config {
-  dtls_mode mode;
+  dtls_mode    mode;
+  sctp_assoc_t assoc;
 };
 
 class dtls_context;
+class sctp_network_gateway_dtls_interface;
+
 struct dtls_ssl_dependencies {
-  dtls_context& ssl_ctx;
+  dtls_context&                        ssl_ctx;
+  sctp_network_gateway_dtls_interface& gw;
 };
 
 /// DTLS context interface used to abstract away OpenSSL specific details of
@@ -64,8 +70,9 @@ private:
   BIO*            bio = nullptr;
   SSL*            ssl = nullptr;
 
-  dtls_context&             ssl_ctx;
-  static constexpr uint32_t dtls_max_len = 9100;
+  dtls_context&                        ssl_ctx;
+  sctp_network_gateway_dtls_interface& gw;
+  static constexpr uint32_t            dtls_max_len = 9100;
 
   ocudulog::basic_logger& logger;
 };

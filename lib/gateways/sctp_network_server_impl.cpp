@@ -333,7 +333,8 @@ void sctp_network_server_impl::receive_impl(std::vector<uint8_t>   payload,
           return;
         }
         if (msg_flags & MSG_NOTIFICATION) {
-          handle_notification(*payload, sri, reinterpret_cast<const sockaddr&>(msg_src_addr), msg_src_addrlen);
+          handle_notification(
+              *payload, sri.sinfo_assoc_id, reinterpret_cast<const sockaddr&>(msg_src_addr), msg_src_addrlen);
         } else {
           handle_data(sri.sinfo_assoc_id, *payload);
         }
@@ -466,18 +467,18 @@ async_task<bool> sctp_network_server_impl::connect(std::vector<transport_layer_a
   });
 }
 
-void sctp_network_server_impl::handle_notification(span<const uint8_t>           payload,
-                                                   const struct sctp_sndrcvinfo& sri,
-                                                   const sockaddr&               src_addr,
-                                                   socklen_t                     src_addr_len)
+void sctp_network_server_impl::handle_notification(span<const uint8_t> payload,
+                                                   sctp_assoc_t        assoc,
+                                                   const sockaddr&     src_addr,
+                                                   socklen_t           src_addr_len)
 {
   if (not validate_and_log_sctp_notification(payload)) {
     // Handle error.
-    handle_association_shutdown(sri.sinfo_assoc_id, "The received message is invalid");
+    handle_association_shutdown(assoc, "The received message is invalid");
     return;
   }
-
   const auto* notif = reinterpret_cast<const union sctp_notification*>(payload.data());
+
   switch (notif->sn_header.sn_type) {
     case SCTP_ASSOC_CHANGE: {
       const struct sctp_assoc_change* n = &notif->sn_assoc_change;
@@ -506,6 +507,48 @@ void sctp_network_server_impl::handle_notification(span<const uint8_t>          
     }
     default:
       break;
+  }
+}
+
+void sctp_network_server_impl::handle_dtls_notification(const union sctp_notification* notif, int assoc_id)
+{
+  logger.debug("{} assoc={}: received SCTP notification from DTLS association. type={}",
+               node_cfg.if_name,
+               assoc_id,
+               static_cast<sctp_sn_type>(notif->sn_header.sn_type));
+
+  if (notif->sn_header.sn_length > sizeof(sctp_notification)) {
+    logger.error("{} assoc={}: received SCTP notification with larger length then allowed. type={} len={}",
+                 node_cfg.if_name,
+                 assoc_id,
+                 static_cast<sctp_sn_type>(notif->sn_header.sn_type),
+                 notif->sn_header.sn_length);
+    return;
+  }
+
+  // Copy notification from DTLS buffers to our own.
+  std::vector<uint8_t> payload;
+  payload.resize(notif->sn_header.sn_length);
+  memcpy(payload.data(), notif, payload.size());
+
+  // The task is rebuilt on every retry, so the payload must survive a failed dispatch: hold it behind a shared_ptr
+  // instead of moving it into the lambda. Costs one small allocation and never copies the payload bytes.
+  auto payload_holder = std::make_shared<const std::vector<uint8_t>>(std::move(payload));
+
+  while (not app_exec.defer([this, assoc_id, payload_holder, keepalive = keepalive_token]() {
+    if (not *keepalive) {
+      return;
+    }
+    auto it = associations.find(assoc_id);
+    if (it == associations.end()) {
+      logger.warning("{} assoc={}: not handling DTLS notification. Cause: Association does not exist.",
+                     node_cfg.if_name,
+                     assoc_id);
+      return;
+    }
+    handle_notification(*payload_holder, assoc_id, *it->second.addr.native().addr, it->second.addr.native().addrlen);
+  })) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 }
 
@@ -566,7 +609,7 @@ void sctp_network_server_impl::handle_sctp_comm_up(const struct sctp_assoc_chang
     addr.set_port(0); // Ignore port from peer.
     auto      mode_it = node_cfg.dtls_cfg->mode_map.find(addr);
     dtls_mode mode    = (mode_it != node_cfg.dtls_cfg->mode_map.end()) ? mode_it->second : node_cfg.dtls_cfg->mode;
-    assoc_ctxt.ssl    = create_dtls_ssl(dtls_ssl_config{mode}, {*dtls_ctxt});
+    assoc_ctxt.ssl    = create_dtls_ssl(dtls_ssl_config{mode, assoc_ctxt.assoc_id}, {*dtls_ctxt, *this});
     if (not assoc_ctxt.ssl->init(assoc_ctxt.fd)) {
       logger.error("{} assoc={}: Could not initialize DTLS context for new association", node_cfg.if_name, assoc_id);
       /// Remove association as if it was lost. Do it directly, as we are running in the app executor already.
