@@ -122,6 +122,12 @@ protected:
                                  : cell_cfg.params.pci;
     ASSERT_EQ(pdcch_ctx.n_id_pdcch_data, expected_n_id) << "Invalid n_{ID} (see TS38.211, 7.3.2.3)";
 
+    // The PDCCH is neither precoded nor beamformed.
+    ASSERT_TRUE(pdcch_ctx.precoding_and_beamforming.is_wideband());
+    ASSERT_EQ(pdcch_ctx.precoding_and_beamforming.prgs.size(), 1);
+    ASSERT_TRUE(pdcch_ctx.precoding_and_beamforming.prgs[0].beams.empty());
+    ASSERT_TRUE(std::holds_alternative<std::monostate>(pdcch_ctx.precoding_and_beamforming.prgs[0].pmi));
+
     auto ncce_candidates =
         get_ue_pdcch_candidates((next_slot - 1).slot_index(), u.rnti, cs_cfg, ss_cfg, pdcch_ctx.cces.aggr_lvl);
     ASSERT_TRUE(std::any_of(ncce_candidates.begin(), ncce_candidates.end(), [&pdcch_ctx](auto ncce) {

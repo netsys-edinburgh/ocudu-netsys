@@ -138,6 +138,8 @@ pdcch_ul_information* pdcch_resource_allocator_impl::alloc_ul_pdcch_helper(cell_
   pdcch.ctx.n_rnti_pdcch_data = get_scrambling_n_RNTI(rnti, cs_cfg.cfg(), ss_cfg);
   pdcch.ctx.n_id_pdcch_dmrs   = get_N_ID_dmrs(cell_cfg.params.pci, cs_cfg.cfg());
   pdcch.ctx.context.ss_id     = ss_cfg.get_id();
+  // [Implementation-defined] The PDCCH is neither precoded nor beamformed.
+  pdcch.ctx.precoding_and_beamforming = make_default_precoding();
   pdcch.ctx.context.dci_format =
       (ss_cfg.is_common_search_space() ||
        (std::get<search_space_configuration::ue_specific_dci_format>(ss_cfg.get_monitored_dci_formats()) ==
@@ -194,6 +196,8 @@ pdcch_dl_information* pdcch_resource_allocator_impl::alloc_dl_pdcch_helper(cell_
   pdcch.ctx.n_rnti_pdcch_data = get_scrambling_n_RNTI(rnti, cs_cfg.cfg(), ss_cfg);
   pdcch.ctx.n_id_pdcch_dmrs   = get_N_ID_dmrs(cell_cfg.params.pci, cs_cfg.cfg());
   pdcch.ctx.context.ss_id     = ss_cfg.get_id();
+  // [Implementation-defined] The PDCCH is neither precoded nor beamformed.
+  pdcch.ctx.precoding_and_beamforming = make_default_precoding();
   pdcch.ctx.context.dci_format =
       (ss_cfg.is_common_search_space() ||
        (std::get<search_space_configuration::ue_specific_dci_format>(ss_cfg.get_monitored_dci_formats()) ==
