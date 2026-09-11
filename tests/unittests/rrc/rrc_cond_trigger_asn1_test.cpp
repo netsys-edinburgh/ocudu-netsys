@@ -302,3 +302,91 @@ TEST(event_trigger_asn1, event_d1_matches_its_conditional_counterpart)
   EXPECT_EQ(report_ev.hysteresis_location_r17, cond_ev.hysteresis_location_r17);
   EXPECT_EQ(report_ev.time_to_trigger_r17.to_number(), cond_ev.time_to_trigger_r17.to_number());
 }
+
+/// The A-events of a measurement report fall into three shapes: a threshold (A1/A2/A4), an offset with a cell list
+/// (A3/A6), and two thresholds (A5). One of each covers every branch of the converter.
+TEST(event_trigger_asn1, event_a1_encodes_its_threshold)
+{
+  rrc_event_trigger_cfg cfg = make_event_trigger_cfg();
+
+  rrc_meas_trigger_quant thres;
+  thres.rsrp = 40;
+
+  cfg.event_id.id                                 = rrc_event_id::event_id_t::a1;
+  cfg.event_id.report_on_leave                    = true;
+  cfg.event_id.hysteresis                         = 4;
+  cfg.event_id.time_to_trigger                    = 80;
+  cfg.event_id.meas_trigger_quant_thres_or_offset = thres;
+
+  auto asn1_cfg = event_triggered_report_cfg_to_rrc_asn1(cfg);
+
+  ASSERT_EQ(asn1_cfg.event_id.type(), asn1::rrc_nr::event_trigger_cfg_s::event_id_c_::types::event_a1);
+  const auto& ev = asn1_cfg.event_id.event_a1();
+  EXPECT_EQ(ev.a1_thres.rsrp(), 40);
+  EXPECT_TRUE(ev.report_on_leave);
+  EXPECT_EQ(ev.hysteresis, 4);
+  EXPECT_EQ(ev.time_to_trigger.to_number(), 80u);
+}
+
+TEST(event_trigger_asn1, event_a3_encodes_its_offset_and_cell_list)
+{
+  rrc_event_trigger_cfg cfg = make_event_trigger_cfg();
+
+  rrc_meas_trigger_quant offset;
+  offset.rsrp = 6;
+
+  cfg.event_id.id                                 = rrc_event_id::event_id_t::a3;
+  cfg.event_id.hysteresis                         = 4;
+  cfg.event_id.time_to_trigger                    = 80;
+  cfg.event_id.meas_trigger_quant_thres_or_offset = offset;
+  cfg.event_id.use_allowed_cell_list              = true;
+
+  auto asn1_cfg = event_triggered_report_cfg_to_rrc_asn1(cfg);
+
+  ASSERT_EQ(asn1_cfg.event_id.type(), asn1::rrc_nr::event_trigger_cfg_s::event_id_c_::types::event_a3);
+  const auto& ev = asn1_cfg.event_id.event_a3();
+  EXPECT_EQ(ev.a3_offset.rsrp(), 6);
+  EXPECT_TRUE(ev.use_allowed_cell_list);
+}
+
+/// An absent use_allowed_cell_list encodes as false rather than leaving the field unset.
+TEST(event_trigger_asn1, event_a6_defaults_the_cell_list_to_false)
+{
+  rrc_event_trigger_cfg cfg = make_event_trigger_cfg();
+
+  rrc_meas_trigger_quant offset;
+  offset.rsrp = 6;
+
+  cfg.event_id.id                                 = rrc_event_id::event_id_t::a6;
+  cfg.event_id.time_to_trigger                    = 80;
+  cfg.event_id.meas_trigger_quant_thres_or_offset = offset;
+  cfg.event_id.use_allowed_cell_list              = std::nullopt;
+
+  auto asn1_cfg = event_triggered_report_cfg_to_rrc_asn1(cfg);
+
+  ASSERT_EQ(asn1_cfg.event_id.type(), asn1::rrc_nr::event_trigger_cfg_s::event_id_c_::types::event_a6);
+  EXPECT_FALSE(asn1_cfg.event_id.event_a6().use_allowed_cell_list);
+}
+
+TEST(event_trigger_asn1, event_a5_encodes_both_thresholds)
+{
+  rrc_event_trigger_cfg cfg = make_event_trigger_cfg();
+
+  rrc_meas_trigger_quant thres1;
+  thres1.rsrp = 40;
+  rrc_meas_trigger_quant thres2;
+  thres2.rsrq = 20;
+
+  cfg.event_id.id                                 = rrc_event_id::event_id_t::a5;
+  cfg.event_id.hysteresis                         = 4;
+  cfg.event_id.time_to_trigger                    = 80;
+  cfg.event_id.meas_trigger_quant_thres_or_offset = thres1;
+  cfg.event_id.meas_trigger_quant_thres_2         = thres2;
+
+  auto asn1_cfg = event_triggered_report_cfg_to_rrc_asn1(cfg);
+
+  ASSERT_EQ(asn1_cfg.event_id.type(), asn1::rrc_nr::event_trigger_cfg_s::event_id_c_::types::event_a5);
+  const auto& ev = asn1_cfg.event_id.event_a5();
+  EXPECT_EQ(ev.a5_thres1.rsrp(), 40);
+  EXPECT_EQ(ev.a5_thres2.rsrq(), 20);
+}
