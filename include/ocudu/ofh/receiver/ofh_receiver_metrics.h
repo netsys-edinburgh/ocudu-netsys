@@ -35,8 +35,10 @@ struct closed_rx_window_metrics {
 struct message_decoding_performance_metrics {
   rx_data_flow_perf_metrics data_processing_metrics;
   rx_data_flow_perf_metrics prach_processing_metrics;
-  unsigned                  nof_dropped_messages;
-  unsigned                  nof_skipped_messages;
+  /// Number of received messages with a sequence identifier from the past.
+  unsigned nof_past_seq_id_messages;
+  /// Number of sequence identifiers skipped by the received messages.
+  unsigned nof_future_seq_id_messages;
 };
 
 /// Open Fronthaul receiver metrics.

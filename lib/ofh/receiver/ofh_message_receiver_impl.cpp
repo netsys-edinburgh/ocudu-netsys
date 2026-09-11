@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
 #include "ofh_message_receiver_impl.h"
-#include "../support/logger_utils.h"
 #include "ofh_rx_window_checker.h"
 #include "ocudu/adt/format.h"
 #include "ocudu/instrumentation/traces/ofh_traces.h"
@@ -30,8 +29,7 @@ message_receiver_impl::message_receiver_impl(const message_receiver_config&  con
   data_flow_prach(std::move(dependencies.data_flow_prach)),
   metrics_collector(config.are_metrics_enabled,
                     data_flow_uplink->get_metrics_collector(),
-                    data_flow_prach->get_metrics_collector()),
-  enable_log_warnings_for_lates(config.enable_log_warnings_for_lates)
+                    data_flow_prach->get_metrics_collector())
 {
   ocudu_assert(vlan_decoder, "Invalid VLAN decoder");
   ocudu_assert(ecpri_decoder, "Invalid eCPRI decoder");
@@ -74,24 +72,24 @@ void message_receiver_impl::process_new_frame(ether::unique_rx_buffer buffer)
   const ecpri::iq_data_parameters& ecpri_iq_params = std::get<ecpri::iq_data_parameters>(ecpri_params.type_params);
   unsigned                         eaxc            = ecpri_iq_params.pc_id;
   int nof_skipped_seq_id = seq_id_checker->update_and_compare_seq_id(eaxc, (ecpri_iq_params.seq_id >> 8));
-  // Drop the message when it is from the past.
+  // A message is from the past. It is not dropped, as it may have been delivered out of order and still fall inside the
+  // reception window.
   if (OCUDU_UNLIKELY(nof_skipped_seq_id < 0)) {
-    metrics_collector.increase_dropped_messages();
+    metrics_collector.increase_past_seq_id_messages();
 
-    logger.info("Sector#{}: dropped received Open Fronthaul User-Plane packet for eAxC value '{}' as sequence "
-                "identifier field is from the past",
+    logger.info("Sector#{}: Open Fronthaul receiver detected User-Plane packet for eAxC value '{}' with an eCPRI "
+                "sequence identifier from the past",
                 sector_id,
                 eaxc);
-    return;
-  }
-  if (OCUDU_UNLIKELY(nof_skipped_seq_id > 0)) {
-    metrics_collector.update_skipped_messages(nof_skipped_seq_id);
+  } else if (OCUDU_UNLIKELY(nof_skipped_seq_id > 0)) {
+    metrics_collector.update_future_seq_id_messages(nof_skipped_seq_id);
 
-    log_conditional_warning(logger,
-                            enable_log_warnings_for_lates,
-                            "Sector#{}: potentially lost '{}' messages sent by the RU",
-                            sector_id,
-                            nof_skipped_seq_id);
+    // A jump in sequence identifiers can be a result of out of order delivery, meaning that the skipped identifiers are
+    // only potentially lost - they can be received later on.
+    logger.info("Sector#{}: potentially lost '{}' Open Fronthaul User-Plane packets sent by the RU for eAxC value '{}'",
+                sector_id,
+                nof_skipped_seq_id,
+                eaxc);
   }
 
   std::optional<slot_symbol_point> slot_point = uplane_peeker::peek_slot_symbol_point(ofh_pdu, nof_symbols, scs);

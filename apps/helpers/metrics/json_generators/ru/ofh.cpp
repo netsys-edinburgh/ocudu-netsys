@@ -79,8 +79,8 @@ static nlohmann::json generate_message_decoder(const ofh::message_decoding_perfo
   json["data"]  = generate_message_decoder_item(metrics.data_processing_metrics, metrics_period_ms);
 
   auto& ecpri_json                        = json["ecpri"];
-  ecpri_json["nof_future_seqid_messages"] = metrics.nof_skipped_messages;
-  ecpri_json["nof_past_seqid_messages"]   = metrics.nof_dropped_messages;
+  ecpri_json["nof_future_seqid_messages"] = metrics.nof_future_seq_id_messages;
+  ecpri_json["nof_past_seqid_messages"]   = metrics.nof_past_seq_id_messages;
 
   return json;
 }
