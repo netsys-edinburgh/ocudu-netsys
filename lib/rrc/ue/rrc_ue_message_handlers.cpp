@@ -489,6 +489,12 @@ async_task<bool> rrc_ue_impl::handle_security_mode_complete_expected(uint8_t tra
       CORO_EARLY_RETURN(false);
     }
 
+    // A UE may answer with any message carrying this transaction id, including one from the message class extension.
+    if (transaction.response().msg.type().value != ul_dcch_msg_type_c::types_opts::c1) {
+      logger.log_warning("Received an unexpected message in place of RRC Security Mode Complete");
+      CORO_EARLY_RETURN(false);
+    }
+
     if (transaction.response().msg.c1().type() == ul_dcch_msg_type_c::c1_c_::types_opts::security_mode_fail) {
       logger.log_warning("Received RRC Security Mode Failure");
       CORO_EARLY_RETURN(false);
