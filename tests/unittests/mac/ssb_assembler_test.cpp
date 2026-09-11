@@ -78,6 +78,8 @@ TEST_F(ssb_assembler_test, assembled_ssb_carries_the_beam_of_its_ssb_index)
     multi_ssb_assembler.assemble_ssb(pdu, info);
 
     ASSERT_EQ(pdu.ssb_index, ssb_index);
-    ASSERT_EQ(pdu.beam_id, beams[ssb_index]);
+    ASSERT_TRUE(pdu.precoding_and_beamforming.is_wideband());
+    ASSERT_EQ(pdu.precoding_and_beamforming.prgs.size(), 1);
+    ASSERT_EQ(pdu.precoding_and_beamforming.prgs[0].beams, precoding_beam_list{beams[ssb_index]});
   }
 }

@@ -6,10 +6,10 @@
 
 #include "ocudu/adt/byte_buffer.h"
 #include "ocudu/adt/static_vector.h"
-#include "ocudu/ran/beamforming/beam_identifier.h"
 #include "ocudu/ran/du_types.h"
 #include "ocudu/ran/pci.h"
 #include "ocudu/ran/pdcch/dci_packing.h"
+#include "ocudu/ran/precoding/precoding_and_beamforming_info.h"
 #include "ocudu/ran/slot_pdu_capacity_constants.h"
 #include "ocudu/ran/slot_point.h"
 #include "ocudu/ran/ssb/ssb_properties.h"
@@ -52,9 +52,9 @@ struct dl_ssb_pdu {
   uint8_t L_max;
   /// Subcarrier spacing of the SSB.
   subcarrier_spacing scs;
-  /// Beam that carries this SSB.
+  /// \brief Precoding and beamforming of this SSB.
   /// \note Not forwarded to the PHY yet: every SSB is transmitted on the same beam.
-  beam_identifier beam_id;
+  precoding_and_beamforming_info precoding_and_beamforming;
   /// Data for MIB generation.
   ssb_mib_data_pdu mib_data;
 };
