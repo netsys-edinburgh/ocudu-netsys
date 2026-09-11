@@ -242,58 +242,12 @@ create_event_id_for_distance_or_time_based_id(const cu_cp_unit_report_config& re
   };
 }
 
-/// Creates an event if for a conditional identifier and returns it.
-static ocucp::rrc_event_id create_event_id_for_conditional_trigger(const cu_cp_unit_report_config& report_cfg_item)
-{
-  ocudu_assert(report_cfg_item.event_triggered_report_type, "Invalid event triggered report type");
-  ocudu_assert(report_cfg_item.hysteresis_db, "Invalid hysteresis");
-  ocudu_assert(report_cfg_item.time_to_trigger_ms, "Invalid time to trigger");
-  ocudu_assert(report_cfg_item.meas_trigger_quantity, "Invalid MEAS trigger quantity");
-
-  const bool is_a3_or_a6 = (report_cfg_item.event_triggered_report_type == ocucp::rrc_event_id::event_id_t::a3 ||
-                            report_cfg_item.event_triggered_report_type == ocucp::rrc_event_id::event_id_t::a6);
-  const bool is_a5       = report_cfg_item.event_triggered_report_type == ocucp::rrc_event_id::event_id_t::a5;
-
-  // TS 38.331 EventTriggerConfig: a3-Offset/a6-Offset are only present for A3/A6; a1/a2/a4-Threshold and
-  // a5-Threshold1 are only present for A1/A2/A4/A5; a5-Threshold2 is only present for A5.
-  if (is_a3_or_a6) {
-    ocudu_assert(report_cfg_item.meas_trigger_quantity_offset_db, "Invalid MEAS trigger quantity offset");
-  } else {
-    ocudu_assert(report_cfg_item.meas_trigger_quantity_threshold_db, "Invalid MEAS trigger threshold");
-  }
-
-  if (is_a5) {
-    ocudu_assert(report_cfg_item.meas_trigger_quantity_threshold_2_db, "Invalid MEAS trigger threshold two");
-  }
-
-  return ocucp::rrc_event_id{
-      .id              = *report_cfg_item.event_triggered_report_type,
-      .report_on_leave = false,
-      // Hysteresis: convert dB to 0.5 dB ASN.1 units.
-      .hysteresis      = static_cast<uint8_t>(*report_cfg_item.hysteresis_db * 2),
-      .time_to_trigger = static_cast<uint16_t>(*report_cfg_item.time_to_trigger_ms),
-      .meas_trigger_quant_thres_or_offset =
-          is_a3_or_a6
-              ? std::make_optional<ocucp::rrc_meas_trigger_quant>(build_meas_trigger_offset(
-                    *report_cfg_item.meas_trigger_quantity, *report_cfg_item.meas_trigger_quantity_offset_db))
-              : std::make_optional<ocucp::rrc_meas_trigger_quant>(build_meas_trigger_threshold(
-                    *report_cfg_item.meas_trigger_quantity, *report_cfg_item.meas_trigger_quantity_threshold_db)),
-      .meas_trigger_quant_thres_2 =
-          is_a5 ? std::make_optional<ocucp::rrc_meas_trigger_quant>(build_meas_trigger_threshold(
-                      *report_cfg_item.meas_trigger_quantity, *report_cfg_item.meas_trigger_quantity_threshold_2_db))
-                : std::nullopt,
-      .use_allowed_cell_list     = std::nullopt,
-      .distance_thresh_from_ref1 = std::nullopt,
-      .distance_thresh_from_ref2 = std::nullopt,
-      .ref_location1             = std::nullopt,
-      .ref_location2             = std::nullopt,
-      .hysteresis_location       = std::nullopt,
-      .t1_thres                  = std::nullopt,
-      .duration                  = std::nullopt};
-}
-
-/// Creates an event trigger configuration and returns it.
-static ocucp::rrc_event_trigger_cfg create_event_trigger_cfg(const cu_cp_unit_report_config& report_cfg_item)
+/// \brief Creates the event of a signal-level trigger and returns it.
+///
+/// TS 38.331 gives useAllowedCellList to eventA3 through eventA6 alone, and to no event of CondTriggerConfig, so it
+/// is set only for a measurement report triggered by one of those four. Everything else the builder fills is the same.
+static ocucp::rrc_event_id create_event_id_for_signal_level(const cu_cp_unit_report_config& report_cfg_item,
+                                                            bool                            is_cond_trigger)
 {
   report_error_if_not(report_cfg_item.event_triggered_report_type, "Invalid event triggered report");
   report_error_if_not(report_cfg_item.hysteresis_db, "Invalid hysteresis");
@@ -320,44 +274,48 @@ static ocucp::rrc_event_trigger_cfg create_event_trigger_cfg(const cu_cp_unit_re
     report_error_if_not(report_cfg_item.meas_trigger_quantity_threshold_2_db, "Invalid MEAS trigger threshold two");
   }
 
+  return ocucp::rrc_event_id{
+      .id              = *report_cfg_item.event_triggered_report_type,
+      .report_on_leave = false,
+      // Hysteresis: convert dB to 0.5 dB ASN.1 units.
+      .hysteresis      = static_cast<uint8_t>(*report_cfg_item.hysteresis_db * 2),
+      .time_to_trigger = static_cast<uint16_t>(*report_cfg_item.time_to_trigger_ms),
+      .meas_trigger_quant_thres_or_offset =
+          is_a3_or_a6
+              ? std::make_optional<ocucp::rrc_meas_trigger_quant>(build_meas_trigger_offset(
+                    *report_cfg_item.meas_trigger_quantity, *report_cfg_item.meas_trigger_quantity_offset_db))
+              : std::make_optional<ocucp::rrc_meas_trigger_quant>(build_meas_trigger_threshold(
+                    *report_cfg_item.meas_trigger_quantity, *report_cfg_item.meas_trigger_quantity_threshold_db)),
+      .meas_trigger_quant_thres_2 =
+          is_a5 ? std::make_optional<ocucp::rrc_meas_trigger_quant>(build_meas_trigger_threshold(
+                      *report_cfg_item.meas_trigger_quantity, *report_cfg_item.meas_trigger_quantity_threshold_2_db))
+                : std::nullopt,
+      .use_allowed_cell_list = (!is_cond_trigger && is_a3_a4_a5_or_a6) ? std::make_optional<bool>(false) : std::nullopt,
+      .distance_thresh_from_ref1 = std::nullopt,
+      .distance_thresh_from_ref2 = std::nullopt,
+      .ref_location1             = std::nullopt,
+      .ref_location2             = std::nullopt,
+      .hysteresis_location       = std::nullopt,
+      .t1_thres                  = std::nullopt,
+      .duration                  = std::nullopt};
+}
+
+/// Creates an event trigger configuration carrying \c event_id and returns it.
+static ocucp::rrc_event_trigger_cfg create_event_trigger_cfg(const cu_cp_unit_report_config& report_cfg_item,
+                                                             const ocucp::rrc_event_id&      event_id)
+{
   return ocucp::rrc_event_trigger_cfg{
       .report_add_neigh_meas_present = true,
-      .event_id =
-          ocucp::rrc_event_id{
-              .id              = *report_cfg_item.event_triggered_report_type,
-              .report_on_leave = false,
-              // Hysteresis: convert dB to 0.5 dB ASN.1 units.
-              .hysteresis      = static_cast<uint8_t>(*report_cfg_item.hysteresis_db * 2),
-              .time_to_trigger = static_cast<uint16_t>(*report_cfg_item.time_to_trigger_ms),
-              .meas_trigger_quant_thres_or_offset =
-                  is_a3_or_a6
-                      ? std::make_optional<ocucp::rrc_meas_trigger_quant>(build_meas_trigger_offset(
-                            *report_cfg_item.meas_trigger_quantity, *report_cfg_item.meas_trigger_quantity_offset_db))
-                      : std::make_optional<ocucp::rrc_meas_trigger_quant>(
-                            build_meas_trigger_threshold(*report_cfg_item.meas_trigger_quantity,
-                                                         *report_cfg_item.meas_trigger_quantity_threshold_db)),
-              .meas_trigger_quant_thres_2 =
-                  is_a5 ? std::make_optional<ocucp::rrc_meas_trigger_quant>(
-                              build_meas_trigger_threshold(*report_cfg_item.meas_trigger_quantity,
-                                                           *report_cfg_item.meas_trigger_quantity_threshold_2_db))
-                        : std::nullopt,
-              .use_allowed_cell_list     = is_a3_a4_a5_or_a6 ? std::make_optional<bool>(false) : std::nullopt,
-              .distance_thresh_from_ref1 = std::nullopt,
-              .distance_thresh_from_ref2 = std::nullopt,
-              .ref_location1             = std::nullopt,
-              .ref_location2             = std::nullopt,
-              .hysteresis_location       = std::nullopt,
-              .t1_thres                  = std::nullopt,
-              .duration                  = std::nullopt},
-      .rs_type                     = ocucp::rrc_nr_rs_type::ssb,
-      .report_interv               = static_cast<uint16_t>(report_cfg_item.report_interval_ms),
-      .report_amount               = -1,
-      .report_quant_cell           = ocucp::rrc_meas_report_quant{.rsrp = true, .rsrq = true, .sinr = true},
-      .max_report_cells            = 4,
-      .report_quant_rs_idxes       = ocucp::rrc_meas_report_quant{.rsrp = true, .rsrq = true, .sinr = true},
-      .max_nrof_rs_idxes_to_report = std::nullopt,
-      .include_beam_meass          = true,
-      .t312                        = report_cfg_item.t312_ms};
+      .event_id                      = event_id,
+      .rs_type                       = ocucp::rrc_nr_rs_type::ssb,
+      .report_interv                 = static_cast<uint16_t>(report_cfg_item.report_interval_ms),
+      .report_amount                 = -1,
+      .report_quant_cell             = ocucp::rrc_meas_report_quant{.rsrp = true, .rsrq = true, .sinr = true},
+      .max_report_cells              = 4,
+      .report_quant_rs_idxes         = ocucp::rrc_meas_report_quant{.rsrp = true, .rsrq = true, .sinr = true},
+      .max_nrof_rs_idxes_to_report   = std::nullopt,
+      .include_beam_meass            = true,
+      .t312                          = report_cfg_item.t312_ms};
 }
 
 /// Generates the CU-CP trigger report configuration and returns it.
@@ -370,19 +328,20 @@ static ocucp::rrc_report_cfg_nr generate_cu_cp_trigger_report_config(const cu_cp
        *report_cfg_item.event_triggered_report_type == ocucp::rrc_event_id::event_id_t::t1 ||
        *report_cfg_item.event_triggered_report_type == ocucp::rrc_event_id::event_id_t::d2);
 
-  // Distance-based and time-based events are only valid for cond_trigger.
-  if (is_distance_or_time_based) {
-    return ocucp::rrc_cond_trigger_cfg{.cond_event_id = create_event_id_for_distance_or_time_based_id(report_cfg_item),
-                                       .rs_type       = ocucp::rrc_nr_rs_type::ssb};
-  }
+  const bool is_cond_trigger = report_cfg_item.report_type == "cond_trigger";
 
-  // Conditional-trigger: wrap in rrc_cond_trigger_cfg (no report interval/amount fields).
-  if (report_cfg_item.report_type == "cond_trigger") {
-    return ocucp::rrc_cond_trigger_cfg{.cond_event_id = create_event_id_for_conditional_trigger(report_cfg_item),
-                                       .rs_type       = ocucp::rrc_nr_rs_type::ssb};
-  }
+  // The event decides which parameters it carries, and the report type decides what it drives: a conditional
+  // reconfiguration or a measurement report. TS 38.331 sec. 5.5.4.15 gives event D1 the same definition in both, so
+  // it is built the same way for either.
+  const ocucp::rrc_event_id event_id = is_distance_or_time_based
+                                           ? create_event_id_for_distance_or_time_based_id(report_cfg_item)
+                                           : create_event_id_for_signal_level(report_cfg_item, is_cond_trigger);
 
-  return create_event_trigger_cfg(report_cfg_item);
+  // A conditional trigger carries no report interval or amount.
+  if (is_cond_trigger) {
+    return ocucp::rrc_cond_trigger_cfg{.cond_event_id = event_id, .rs_type = ocucp::rrc_nr_rs_type::ssb};
+  }
+  return create_event_trigger_cfg(report_cfg_item, event_id);
 }
 
 /// Generates the admission configuration and returns it.

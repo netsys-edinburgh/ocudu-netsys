@@ -29,10 +29,12 @@ static bool validate_event_trigger_params(const cu_cp_unit_report_config& cfg)
 
   const ocucp::rrc_event_id::event_id_t ev = *cfg.event_triggered_report_type;
 
-  // D/T distance- and time-based events are only valid for cond_trigger report type.
+  // D/T distance- and time-based events carry no measurement quantity, so they share the checks below. TS 38.331
+  // EventTriggerConfig offers eventD1 as well as condEventD1, so D1 also configures a measurement report; T1 and D2
+  // appear under CondTriggerConfig alone.
   if (ev == ocucp::rrc_event_id::event_id_t::d1 || ev == ocucp::rrc_event_id::event_id_t::t1 ||
       ev == ocucp::rrc_event_id::event_id_t::d2) {
-    if (cfg.report_type != "cond_trigger") {
+    if (cfg.report_type != "cond_trigger" && ev != ocucp::rrc_event_id::event_id_t::d1) {
       fmt::print("report_cfg_id={}: event '{}' is only valid for report_type=cond_trigger\n",
                  cfg.report_cfg_id,
                  to_string(ev));
