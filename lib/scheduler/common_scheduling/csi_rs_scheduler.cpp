@@ -32,6 +32,8 @@ static csi_rs_info build_csi_rs_info(const bwp_configuration& bwp_cfg, const zp_
   csi_rs.scrambling_id        = 0;
   csi_rs.power_ctrl_offset    = 0;
   csi_rs.power_ctrl_offset_ss = 0;
+  // Nothing is transmitted in a ZP CSI-RS, so the precoding and beamforming is left at its default.
+  csi_rs.precoding_and_beamforming = make_default_precoding();
 
   return csi_rs;
 }
@@ -49,6 +51,8 @@ static csi_rs_info build_csi_rs_info(const bwp_configuration& bwp_cfg, const nzp
   csi_rs.power_ctrl_offset = nzp_csi_rs_res.pwr_ctrl_offset;
   csi_rs.power_ctrl_offset_ss =
       nzp_csi_rs_res.pwr_ctrl_offset_ss_db.has_value() ? *nzp_csi_rs_res.pwr_ctrl_offset_ss_db : 0;
+  // [Implementation-defined] The CSI-RS is neither precoded nor beamformed.
+  csi_rs.precoding_and_beamforming = make_default_precoding();
 
   return csi_rs;
 }

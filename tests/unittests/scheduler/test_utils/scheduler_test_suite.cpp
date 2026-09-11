@@ -620,6 +620,16 @@ void ocudu::test_ul_consistency(const cell_configuration& cell_cfg, slot_point s
   test_ul_resource_grid_collisions(cell_cfg, result);
 }
 
+/// \brief Tests the validity of the precoding and beamforming of the CSI-RS. Checks include:
+/// - a PRG is always given, so that the consumer never has to guess how the transmission is mapped onto the antennas.
+static void test_csi_rs_consistency(span<const csi_rs_info> csi_rs_list)
+{
+  for (const csi_rs_info& csi_rs : csi_rs_list) {
+    ASSERT_FALSE(csi_rs.precoding_and_beamforming.prgs.empty())
+        << "The precoding and beamforming of the CSI-RS was not filled";
+  }
+}
+
 void ocudu::test_dl_consistency(const cell_configuration& cell_cfg, slot_point sl_tx, const dl_sched_result& result)
 {
   test_pdsch_sib_consistency(cell_cfg, result.bc.sibs);
@@ -628,6 +638,7 @@ void ocudu::test_dl_consistency(const cell_configuration& cell_cfg, slot_point s
   test_pdsch_cross_consistency(cell_cfg, sl_tx, result);
   test_pdcch_common_consistency(cell_cfg, sl_tx, result.dl_pdcchs);
   test_ul_pdcch_consistency(cell_cfg, sl_tx, result.ul_pdcchs);
+  test_csi_rs_consistency(result.csi_rs);
   test_dl_resource_grid_collisions(cell_cfg, result);
 }
 
