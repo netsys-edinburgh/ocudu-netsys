@@ -218,3 +218,87 @@ TEST(cond_trigger_asn1, cond_event_d2_encodes_correctly)
   EXPECT_EQ(ev.hysteresis_location_r18, 20);
   EXPECT_EQ(ev.time_to_trigger_r18.to_number(), 160u);
 }
+
+// ============================================================================
+// Event D1 as a measurement report trigger. TS 38.331 offers eventD1 under
+// EventTriggerConfig as well as CondTriggerConfig.
+// ============================================================================
+
+/// Builds a report configuration with every field set: rrc_event_trigger_cfg has no default member initialisers and
+/// the converter reads the reporting fields whatever the event is.
+static rrc_event_trigger_cfg make_event_trigger_cfg()
+{
+  return rrc_event_trigger_cfg{.report_add_neigh_meas_present = true,
+                               .event_id                      = {},
+                               .rs_type                       = rrc_nr_rs_type::ssb,
+                               .report_interv                 = 1024,
+                               .report_amount                 = -1,
+                               .report_quant_cell     = rrc_meas_report_quant{.rsrp = true, .rsrq = true, .sinr = true},
+                               .max_report_cells      = 4,
+                               .report_quant_rs_idxes = std::nullopt,
+                               .max_nrof_rs_idxes_to_report = std::nullopt,
+                               .include_beam_meass          = true,
+                               .t312                        = std::nullopt};
+}
+
+/// event_d1 encodes the same distance fields as its conditional counterpart, plus report_on_leave.
+TEST(event_trigger_asn1, event_d1_encodes_correctly)
+{
+  rrc_event_trigger_cfg cfg = make_event_trigger_cfg();
+
+  cfg.event_id.id                        = rrc_event_id::event_id_t::d1;
+  cfg.event_id.report_on_leave           = true;
+  cfg.event_id.distance_thresh_from_ref1 = 5000; // 5000 m / 50 = 100 ASN1 steps
+  cfg.event_id.distance_thresh_from_ref2 = 3000; // 3000 m / 50 = 60  ASN1 steps
+  cfg.event_id.ref_location1             = reference_location{48.135, 11.582};
+  cfg.event_id.ref_location2             = reference_location{48.200, 11.650};
+  cfg.event_id.hysteresis_location       = 100; // 100 m / 10 = 10 ASN1 steps
+  cfg.event_id.time_to_trigger           = 100;
+
+  auto asn1_cfg = event_triggered_report_cfg_to_rrc_asn1(cfg);
+
+  ASSERT_EQ(asn1_cfg.event_id.type(), asn1::rrc_nr::event_trigger_cfg_s::event_id_c_::types::event_d1_r17);
+  const auto& ev = asn1_cfg.event_id.event_d1_r17();
+  EXPECT_EQ(ev.distance_thresh_from_ref1_r17, 100);
+  EXPECT_EQ(ev.distance_thresh_from_ref2_r17, 60);
+  EXPECT_EQ(ev.ref_location1_r17.length(), 6u);
+  EXPECT_EQ(ev.ref_location2_r17.length(), 6u);
+  EXPECT_TRUE(ev.report_on_leave_r17);
+  EXPECT_EQ(ev.hysteresis_location_r17, 10);
+  EXPECT_EQ(ev.time_to_trigger_r17.to_number(), 100u);
+}
+
+/// The same event encodes identically whether it triggers a report or a conditional handover, so a configuration can
+/// be moved between the two without changing what the UE is asked to measure.
+TEST(event_trigger_asn1, event_d1_matches_its_conditional_counterpart)
+{
+  rrc_event_id event_id;
+  event_id.id                        = rrc_event_id::event_id_t::d1;
+  event_id.distance_thresh_from_ref1 = 5000;
+  event_id.distance_thresh_from_ref2 = 3000;
+  event_id.ref_location1             = reference_location{48.135, 11.582};
+  event_id.ref_location2             = reference_location{48.200, 11.650};
+  event_id.hysteresis_location       = 100;
+  event_id.time_to_trigger           = 100;
+
+  rrc_event_trigger_cfg report_cfg = make_event_trigger_cfg();
+  report_cfg.event_id              = event_id;
+
+  rrc_cond_trigger_cfg cond_cfg;
+  cond_cfg.rs_type       = rrc_nr_rs_type::ssb;
+  cond_cfg.cond_event_id = event_id;
+
+  // The converters return by value, so the results are held: a reference returned by a member function of a temporary
+  // does not extend its lifetime.
+  const auto  asn1_report_cfg = event_triggered_report_cfg_to_rrc_asn1(report_cfg);
+  const auto  asn1_cond_cfg   = cond_trigger_cfg_to_rrc_asn1(cond_cfg);
+  const auto& report_ev       = asn1_report_cfg.event_id.event_d1_r17();
+  const auto& cond_ev         = asn1_cond_cfg.cond_event_id.cond_event_d1_r17();
+
+  EXPECT_EQ(report_ev.distance_thresh_from_ref1_r17, cond_ev.distance_thresh_from_ref1_r17);
+  EXPECT_EQ(report_ev.distance_thresh_from_ref2_r17, cond_ev.distance_thresh_from_ref2_r17);
+  EXPECT_EQ(report_ev.ref_location1_r17.to_string(), cond_ev.ref_location1_r17.to_string());
+  EXPECT_EQ(report_ev.ref_location2_r17.to_string(), cond_ev.ref_location2_r17.to_string());
+  EXPECT_EQ(report_ev.hysteresis_location_r17, cond_ev.hysteresis_location_r17);
+  EXPECT_EQ(report_ev.time_to_trigger_r17.to_number(), cond_ev.time_to_trigger_r17.to_number());
+}
