@@ -202,6 +202,10 @@ variables:
         fi
 
         if [ "${GRYPE_SKIP}" != "true" ]; then
+          # syft (above) already cached a full copy of the image under /tmp/stereoscope-*; grype
+          # caches its own on top instead of reusing it, so back-to-back they need ~2x the image
+          # size in temp space. Drop syft's copy first so large images don't run out of disk here.
+          rm -rf /tmp/stereoscope-*
           echo "=== Running grype CVE scan on ${IMAGE_NAME_VERSION} ==="
           grype registry:${IMAGE_NAME_VERSION} --fail-on critical --ignore-states wont-fix,not-fixed -o json > grype-report.json
           echo "=== Vulnerability summary ==="
