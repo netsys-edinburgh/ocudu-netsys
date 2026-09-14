@@ -72,6 +72,19 @@ csi_report_configuration ocudu::create_csi_report_configuration(const csi_meas_c
       } else {
         report_fatal_error("Codebook panel type not supported");
       }
+    } else if (const auto* type2 = std::get_if<codebook_config::type2>(&csi_rep_cfg.codebook_cfg->codebook_type)) {
+      const auto* typeii = std::get_if<codebook_config::type2::typeii>(&type2->sub_type);
+      report_fatal_error_if_not(typeii != nullptr, "Type II port selection codebook is not supported");
+
+      csi_rep.pmi_codebook = pmi_codebook_typeII{typeii->n1_n2_codebook_subset_restriction_type,
+                                                 type2->nof_beams,
+                                                 type2->phase_alphabet_size,
+                                                 type2->subband_amplitude};
+
+      // The Type II RI restriction only covers the ranks that the codebook supports, which is narrower than the field
+      // shared by all the codebooks.
+      csi_rep.ri_restriction =
+          typeii->typeii_ri_restriction.slice<ri_restriction_type::max_size()>(0, typeii->typeii_ri_restriction.size());
     } else {
       report_fatal_error("Codebook type not supported");
     }

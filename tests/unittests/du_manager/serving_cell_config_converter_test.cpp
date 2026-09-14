@@ -1229,10 +1229,10 @@ TEST(serving_cell_config_converter_test, test_custom_csi_meas_cfg_conversion)
   // '03'H.
   sub_type.typeii_ri_restriction.from_uint64(0x03);
   codebook_config::type2 type2{};
-  type2.sub_type                                                                  = sub_type;
-  type2.phase_alphabet_size                                                       = 4;
-  type2.subband_amplitude                                                         = true;
-  type2.nof_beams                                                                 = 2;
+  type2.sub_type            = sub_type;
+  type2.phase_alphabet_size = pmi_codebook_typeII_phase_size::qpsk;
+  type2.subband_amplitude   = true;
+  type2.nof_beams           = 2;
   dest_csi_meas_cfg.csi_report_cfg_list.back().codebook_cfg.value().codebook_type = type2;
 
   dest_csi_meas_cfg.csi_report_cfg_list.back().is_group_based_beam_reporting_enabled = true;
