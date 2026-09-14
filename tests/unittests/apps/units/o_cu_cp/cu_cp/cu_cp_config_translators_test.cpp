@@ -263,3 +263,33 @@ TEST(cu_cp_config_translators_test, a5_event_triggered_report_carries_two_thresh
   EXPECT_EQ(event.meas_trigger_quant_thres_2->rsrp.value(), 66); // -90 dB + 156
   ASSERT_TRUE(event.use_allowed_cell_list.has_value());
 }
+
+/// TS 38.331 sec. 6.3.2 gives CondTriggerConfig condEventA4, which takes a threshold rather than an offset.
+TEST(cu_cp_config_translators_test, a4_conditional_trigger_carries_a_threshold)
+{
+  const ocucp::rrc_report_cfg_nr report_cfg =
+      translate(make_signal_level_report_config(ocucp::rrc_event_id::event_id_t::a4, "cond_trigger"));
+
+  ASSERT_TRUE(std::holds_alternative<ocucp::rrc_cond_trigger_cfg>(report_cfg));
+  const auto& event = std::get<ocucp::rrc_cond_trigger_cfg>(report_cfg).cond_event_id;
+  EXPECT_EQ(event.id, ocucp::rrc_event_id::event_id_t::a4);
+  ASSERT_TRUE(event.meas_trigger_quant_thres_or_offset->rsrp.has_value());
+  EXPECT_EQ(event.meas_trigger_quant_thres_or_offset->rsrp.value(), 56); // -100 dB + 156
+  EXPECT_FALSE(event.use_allowed_cell_list.has_value());
+}
+
+/// condEventA5 is the only conditional event taking two thresholds.
+TEST(cu_cp_config_translators_test, a5_conditional_trigger_carries_two_thresholds)
+{
+  const ocucp::rrc_report_cfg_nr report_cfg =
+      translate(make_signal_level_report_config(ocucp::rrc_event_id::event_id_t::a5, "cond_trigger"));
+
+  ASSERT_TRUE(std::holds_alternative<ocucp::rrc_cond_trigger_cfg>(report_cfg));
+  const auto& event = std::get<ocucp::rrc_cond_trigger_cfg>(report_cfg).cond_event_id;
+  EXPECT_EQ(event.id, ocucp::rrc_event_id::event_id_t::a5);
+  ASSERT_TRUE(event.meas_trigger_quant_thres_or_offset->rsrp.has_value());
+  EXPECT_EQ(event.meas_trigger_quant_thres_or_offset->rsrp.value(), 56);
+  ASSERT_TRUE(event.meas_trigger_quant_thres_2.has_value());
+  EXPECT_EQ(event.meas_trigger_quant_thres_2->rsrp.value(), 66); // -90 dB + 156
+  EXPECT_FALSE(event.use_allowed_cell_list.has_value());
+}
