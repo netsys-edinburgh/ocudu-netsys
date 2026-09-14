@@ -402,6 +402,11 @@ static void fill_csi_resources(odu::du_cell_config& out_cell, const du_high_unit
   }
   du_csi.pwr_ctrl_offset = static_cast<int8_t>(cell_cfg.csi_cfg.pwr_ctrl_offset);
 
+  // The Type-II codebook is only configured for the UEs that report support for it.
+  if (csi_cfg.type2_codebook_enabled) {
+    du_csi.type2_codebook.emplace();
+  }
+
   // [Implementation-defined] The default CSI symbols are in symbols 4 and 8, the DM-RS for PDSCH might collide in
   // symbol index 8 when the number of DM-RS additional positions is 3.
   if (uint_to_dmrs_additional_positions(cell_cfg.pdsch_cfg.dmrs_add_pos) == dmrs_additional_positions::pos3) {

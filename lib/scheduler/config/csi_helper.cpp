@@ -619,8 +619,7 @@ static std::vector<csi_resource_config> make_csi_resource_configs()
   return res_cfgs;
 }
 
-/// Creates the Type-II codebook configuration for the given cell parameters.
-static codebook_config::type2 make_type2_codebook_config(const csi_meas_config_builder_params& params)
+codebook_config::type2 csi_helper::make_type2_codebook_config(const csi_meas_config_builder_params& params)
 {
   using typeii = codebook_config::type2::typeii;
 
@@ -667,8 +666,7 @@ static codebook_config::type2 make_type2_codebook_config(const csi_meas_config_b
   return type2;
 }
 
-/// Creates the Type-I single-panel codebook configuration for the given cell parameters.
-static codebook_config::type1 make_type1_codebook_config(const csi_meas_config_builder_params& params)
+codebook_config::type1 csi_helper::make_type1_codebook_config(const csi_meas_config_builder_params& params)
 {
   codebook_config::type1               type1{};
   codebook_config::type1::single_panel single_panel{};

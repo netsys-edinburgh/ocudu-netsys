@@ -96,6 +96,16 @@ struct csi_meas_config_builder_params {
   du_csi_params csi_params;
 };
 
+/// \brief Creates the Type-I single-panel codebook configuration for the given cell parameters.
+///
+/// Every UE supports this codebook, hence it does not depend on the UE capabilities.
+codebook_config::type1 make_type1_codebook_config(const csi_meas_config_builder_params& params);
+
+/// \brief Creates the Type-II codebook configuration for the given cell parameters.
+///
+/// \remark The cell parameters must enable the Type-II codebook, i.e. \c du_csi_params::type2_codebook must be set.
+codebook_config::type2 make_type2_codebook_config(const csi_meas_config_builder_params& params);
+
 /// \brief Compute default CSI-RS signalling period to use, while constrained by TS38.214, 5.1.6.1.1.
 csi_resource_periodicity get_max_csi_rs_period(subcarrier_spacing pdsch_scs);
 

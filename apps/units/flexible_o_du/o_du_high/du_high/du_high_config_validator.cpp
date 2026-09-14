@@ -411,10 +411,6 @@ static bool validate_csi_cell_unit_config(const du_high_unit_csi_config&        
       fmt::print("Type-II CSI reporting requires aperiodic CSI reporting, as the PMI is carried in CSI Part 2.\n");
       return false;
     }
-
-    // TODO: remove this check once the Type-II CSI report handling is in place.
-    fmt::print("Type-II CSI reporting is not supported yet.\n");
-    return false;
   }
 
   return true;

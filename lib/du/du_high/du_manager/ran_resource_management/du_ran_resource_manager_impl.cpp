@@ -7,6 +7,8 @@
 #include "ocudu/mac/config/mac_cell_group_config_factory.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/ran/csi_report/csi_report_config_helpers.h"
+#include "ocudu/scheduler/config/csi_helper.h"
+#include "ocudu/scheduler/config/ran_cell_config_helper.h"
 #include "ocudu/scheduler/config/serving_cell_config_factory.h"
 #include "ocudu/scheduler/rrm/srs_resource_manager_factory.h"
 #include "ocudu/scheduler/scheduler_configurator.h"
@@ -157,6 +159,70 @@ static void update_tar_config(cell_group_config&           cell_grp_cfg,
     tar.sr_enabled = false;
   }
   cell_grp_cfg.mcg_cfg.tar_cfg.emplace(tar);
+}
+
+/// \brief Selects the CSI codebook of a UE from the cell configuration and the UE capabilities.
+///
+/// A cell that enables the Type-II codebook offers it to the UEs that report support for it in the band of the cell,
+/// given by field \e type2 of \e codebookParameters in Information Element \e MIMO-ParametersPerBand. The remaining
+/// UEs are configured with the Type-I single-panel codebook, which every UE supports.
+static void update_csi_codebook_config(cell_group_config&           cell_grp_cfg,
+                                       span<const du_cell_config>   cell_cfg_list,
+                                       const ue_capability_summary& ue_caps,
+                                       du_ue_index_t                ue_index,
+                                       ocudulog::basic_logger&      logger)
+{
+  if (not cell_grp_cfg.cells.contains(SERVING_PCELL_IDX)) {
+    return;
+  }
+
+  serving_cell_config&  serv_cell_cfg = cell_grp_cfg.cells.at(SERVING_PCELL_IDX).serv_cell_cfg;
+  const du_cell_config& cell_cfg      = cell_cfg_list[serv_cell_cfg.cell_index];
+  if (not serv_cell_cfg.csi_meas_cfg.has_value() or not cell_cfg.ran.init_bwp.csi.has_value()) {
+    return;
+  }
+
+  // The cell decides whether the Type-II codebook is offered.
+  const std::optional<du_type2_codebook_params>& cell_type2 = cell_cfg.ran.init_bwp.csi->type2_codebook;
+  if (not cell_type2.has_value()) {
+    // The cell configures the Type-I codebook for every UE, so the capabilities do not change the outcome.
+    return;
+  }
+
+  // The UE capabilities decide whether the offered codebook can be used.
+  const char* unsupported_reason = nullptr;
+  const auto  band_it            = ue_caps.bands.find(cell_cfg.ran.dl_carrier.band);
+  if (band_it == ue_caps.bands.end() or not band_it->second.type2_codebook.has_value()) {
+    unsupported_reason = "UE does not support the Type-II codebook";
+  } else {
+    const ue_type2_codebook_params& ue_type2 = band_it->second.type2_codebook.value();
+    if (ue_type2.max_nof_beams < cell_type2->nof_beams) {
+      unsupported_reason = "UE supports fewer beams than the cell configures";
+    } else if (ue_type2.max_nof_tx_ports_per_resource < cell_cfg.ran.dl_carrier.nof_ant) {
+      unsupported_reason = "UE supports fewer CSI-RS ports than the cell configures";
+    }
+  }
+
+  csi_helper::csi_meas_config_builder_params csi_params =
+      config_helpers::make_csi_meas_config_builder_params(cell_cfg.ran);
+
+  for (csi_report_config& report_cfg : serv_cell_cfg.csi_meas_cfg->csi_report_cfg_list) {
+    if (not report_cfg.codebook_cfg.has_value()) {
+      continue;
+    }
+
+    if (unsupported_reason == nullptr) {
+      report_cfg.codebook_cfg->codebook_type = csi_helper::make_type2_codebook_config(csi_params);
+    } else {
+      report_cfg.codebook_cfg->codebook_type = csi_helper::make_type1_codebook_config(csi_params);
+    }
+  }
+
+  if (unsupported_reason != nullptr) {
+    // Logged because the cell offers the Type-II codebook and the operator otherwise has no way to tell why this UE
+    // ended up with the Type-I one.
+    logger.info("ue={}: Configuring the Type-I codebook. Cause: {}", ue_index, unsupported_reason);
+  }
 }
 
 unsigned du_ran_resource_manager_impl::get_max_nof_established_ue_contexts(du_cell_index_t cell_index) const
@@ -321,6 +387,7 @@ du_ran_resource_manager_impl::update_context(du_ue_index_t                      
       pucch_res_mng.update_resources(ue_mcg.cell_group.cells.at(SERVING_PCELL_IDX), *u.ue_cap_manager.summary());
     }
     update_tar_config(ue_mcg.cell_group, cell_cfg_list, *u.ue_cap_manager.summary(), ue_index, logger);
+    update_csi_codebook_config(ue_mcg.cell_group, cell_cfg_list, *u.ue_cap_manager.summary(), ue_index, logger);
   }
 
   // > Update UE SRBs and DRBs.
