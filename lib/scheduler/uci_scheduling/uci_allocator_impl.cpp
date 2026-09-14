@@ -11,6 +11,7 @@
 #include "ocudu/ran/csi_report/csi_report_on_pucch_helpers.h"
 #include "ocudu/ran/csi_report/csi_report_on_pusch_helpers.h"
 #include "ocudu/ran/csi_report/csi_report_size.h"
+#include "ocudu/ran/pusch/pusch_uci_beta_offset.h"
 #include "ocudu/scheduler/resource_grid_util.h"
 
 using namespace ocudu;
@@ -67,15 +68,26 @@ add_csi_to_uci_on_pusch(uci_info::csi_info& uci_csi, const ue_cell_configuration
     const auto& beta_offsets = std::get<uci_on_pusch::beta_offsets_semi_static>(uci_cfg.beta_offsets_cfg.value());
 
     // The values of \c beta_offsets are set according to Section 9.3, TS 38.213.
-    if (uci_csi.csi_part1_nof_bits <= 11) {
+    if (uci_csi.csi_part1_nof_bits <= MAX_NOF_CSI_BITS_BETA_OFFSET_IDX_1) {
       uci_csi.beta_offset_csi_1 = beta_offsets.beta_offset_csi_p1_idx_1.value();
     } else {
       uci_csi.beta_offset_csi_1 = beta_offsets.beta_offset_csi_p1_idx_2.value();
     }
 
     if (csi_size.part2_min_size.value() > 0U) {
-      ocudu_assert(csi_size.part2_max_size.value() <= 11U, "CSI Part 2 on UCI-PUSCH is only supported up to 11 bits");
-      uci_csi.beta_offset_csi_2.emplace(beta_offsets.beta_offset_csi_p2_idx_1.value());
+      // As per Section 9.3, TS 38.213, the beta offset index depends on whether the CSI Part 2 payload exceeds
+      // \c MAX_NOF_CSI_BITS_BETA_OFFSET_IDX_1 bits. The payload size is only known once CSI Part 1 is decoded,
+      // hence the CSI report configuration must not allow payload sizes on both sides of the threshold.
+      ocudu_assert((csi_size.part2_max_size.value() <= MAX_NOF_CSI_BITS_BETA_OFFSET_IDX_1) or
+                       (csi_size.part2_min_size.value() > MAX_NOF_CSI_BITS_BETA_OFFSET_IDX_1),
+                   "The CSI Part 2 size range (i.e., [{}, {}] bits) spans the beta offset threshold (i.e., {} bits)",
+                   csi_size.part2_min_size.value(),
+                   csi_size.part2_max_size.value(),
+                   MAX_NOF_CSI_BITS_BETA_OFFSET_IDX_1);
+
+      uci_csi.beta_offset_csi_2.emplace(csi_size.part2_max_size.value() <= MAX_NOF_CSI_BITS_BETA_OFFSET_IDX_1
+                                            ? beta_offsets.beta_offset_csi_p2_idx_1.value()
+                                            : beta_offsets.beta_offset_csi_p2_idx_2.value());
     }
 
   } else {
@@ -91,7 +103,7 @@ add_csi_to_uci_on_pusch(uci_info::csi_info& uci_csi, const ue_cell_configuration
     const auto& beta_offsets = std::get<uci_on_pusch::beta_offsets_semi_static>(uci_cfg.beta_offsets_cfg.value());
 
     // The values of \c beta_offsets are set according to Section 9.3, TS 38.213.
-    if (uci_csi.csi_part1_nof_bits <= 11) {
+    if (uci_csi.csi_part1_nof_bits <= MAX_NOF_CSI_BITS_BETA_OFFSET_IDX_1) {
       uci_csi.beta_offset_csi_1 = beta_offsets.beta_offset_csi_p1_idx_1.value();
     } else {
       uci_csi.beta_offset_csi_1 = beta_offsets.beta_offset_csi_p1_idx_2.value();
