@@ -16,6 +16,16 @@
 
 using namespace ocudu;
 
+/// TS 38.331 sec. 6.3.2 counts the distance thresholds of events D1 and D2 in 50 m steps, from step 0 under
+/// CondTriggerConfig and from step 1 under EventTriggerConfig.
+static constexpr double MIN_COND_DISTANCE_THRESH_KM  = 0.0;
+static constexpr double MIN_EVENT_DISTANCE_THRESH_KM = 0.05;
+/// The last step is 65525 for D1 and 65535 for D2.
+static constexpr double MAX_D1_DISTANCE_THRESH_KM = 3276.25;
+static constexpr double MAX_D2_DISTANCE_THRESH_KM = 3276.75;
+/// TS 38.331 sec. 6.3.2 counts hysteresisLocation in 10 m steps, up to step 32768.
+static constexpr double MAX_HYSTERESIS_LOCATION_KM = 327.68;
+
 /// Validates field presence and physical range for event-triggered measurement parameters.
 /// Used by both event_triggered and cond_trigger report types.
 /// Returns true on success, prints a diagnostic and returns false on error.
@@ -28,6 +38,16 @@ static bool validate_event_trigger_params(const cu_cp_unit_report_config& cfg)
   }
 
   const ocucp::rrc_event_id::event_id_t ev = *cfg.event_triggered_report_type;
+
+  // TS 38.331 sec. 6.3.2 gives CondTriggerConfig condEventA3, condEventA4, condEventA5, condEventD1, condEventD2 and
+  // condEventT1 alone, so no other event can drive a conditional reconfiguration.
+  if (cfg.report_type == "cond_trigger" &&
+      (ev == ocucp::rrc_event_id::event_id_t::a1 || ev == ocucp::rrc_event_id::event_id_t::a2 ||
+       ev == ocucp::rrc_event_id::event_id_t::a6)) {
+    fmt::print(
+        "report_cfg_id={}: event '{}' is not valid for report_type=cond_trigger\n", cfg.report_cfg_id, to_string(ev));
+    return false;
+  }
 
   // D/T distance- and time-based events carry no measurement quantity, so they share the checks below. TS 38.331
   // EventTriggerConfig offers eventD1 as well as condEventD1, so D1 also configures a measurement report; T1 and D2
@@ -57,12 +77,32 @@ static bool validate_event_trigger_params(const cu_cp_unit_report_config& cfg)
         fmt::print("report_cfg_id={}: {} event requires time_to_trigger_ms\n", cfg.report_cfg_id, to_string(ev));
         return false;
       }
-      // D1-only: range check (ASN.1 uses 50 m steps, upper bound 65535 -> 3276.75 km) and ref locations.
+      // TS 38.331 sec. 6.3.2 counts the distance thresholds in 50 m steps. A conditional trigger encodes them from
+      // step 0, a measurement report from step 1, and the last step is 65525 for D1 and 65535 for D2.
+      const double min_distance_km =
+          cfg.report_type == "cond_trigger" ? MIN_COND_DISTANCE_THRESH_KM : MIN_EVENT_DISTANCE_THRESH_KM;
+      const double max_distance_km =
+          ev == ocucp::rrc_event_id::event_id_t::d1 ? MAX_D1_DISTANCE_THRESH_KM : MAX_D2_DISTANCE_THRESH_KM;
+      if (*cfg.distance_thresh_from_ref1_km < min_distance_km || *cfg.distance_thresh_from_ref1_km > max_distance_km ||
+          *cfg.distance_thresh_from_ref2_km < min_distance_km || *cfg.distance_thresh_from_ref2_km > max_distance_km) {
+        fmt::print("report_cfg_id={}: {} distance thresholds must be in [{}..{}] km\n",
+                   cfg.report_cfg_id,
+                   to_string(ev),
+                   min_distance_km,
+                   max_distance_km);
+        return false;
+      }
+
+      if (*cfg.hysteresis_location_km > MAX_HYSTERESIS_LOCATION_KM) {
+        fmt::print("report_cfg_id={}: {} hysteresis_location_km must be at most {} km\n",
+                   cfg.report_cfg_id,
+                   to_string(ev),
+                   MAX_HYSTERESIS_LOCATION_KM);
+        return false;
+      }
+
+      // D1-only: the two reference locations.
       if (ev == ocucp::rrc_event_id::event_id_t::d1) {
-        if (*cfg.distance_thresh_from_ref1_km > 3276.75 || *cfg.distance_thresh_from_ref2_km > 3276.75) {
-          fmt::print("report_cfg_id={}: D1 distance thresholds must be in [0..3276.75] km\n", cfg.report_cfg_id);
-          return false;
-        }
         if (!cfg.ref_location1.has_value() || !cfg.ref_location2.has_value()) {
           fmt::print("report_cfg_id={}: D1 event requires ref_location1 and ref_location2\n", cfg.report_cfg_id);
           return false;
