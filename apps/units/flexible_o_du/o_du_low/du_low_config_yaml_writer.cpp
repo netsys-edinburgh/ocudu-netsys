@@ -25,6 +25,8 @@ static void fill_du_low_log_section(YAML::Node node, const du_low_unit_logger_co
   node["phy_rx_symbols_pusch_on_ko"] = config.phy_rx_symbol_printer.triggers.pusch_on_ko;
   node["phy_rx_symbols_pusch_threshold_sinr_dB"] =
       fmt::format("{}", config.phy_rx_symbol_printer.triggers.pusch_threshold_sinr_dB);
+  node["phy_rx_symbols_pusch_threshold_iter"] =
+      fmt::format("{}", config.phy_rx_symbol_printer.triggers.pusch_threshold_iter);
 }
 
 static void fill_du_low_tracer_layers_section(YAML::Node node, const du_low_unit_tracer_config& config)

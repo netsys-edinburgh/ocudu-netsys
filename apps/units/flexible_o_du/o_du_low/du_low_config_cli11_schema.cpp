@@ -57,6 +57,11 @@ static void configure_cli11_log_args(CLI::App& app, du_low_unit_logger_config& l
          "Set to a SINR threshold in dB to dump the uplink resource grid IQ symbols when the PUSCH SINR is below this "
          "value. Only works if \"phy_rx_symbols_filename\" is set.")
       ->capture_default_str();
+  app.add_option("--phy_rx_symbols_pusch_threshold_iter",
+                 log_params.phy_rx_symbol_printer.triggers.pusch_threshold_iter,
+                 "Minimum number of PUSCH decoder iterations to dump the uplink resource grid IQ symbols. Only works "
+                 "if \"phy_rx_symbols_filename\" is set.")
+      ->capture_default_str();
 
   add_option(app,
              "--hex_max_size",

@@ -95,6 +95,12 @@ struct du_low_unit_rx_symbol_trigger_config {
   /// Saves the uplink resource grid in the file when a PUSCH SINR for a slot is below the given threshold. Set to
   /// minus infinity for disabling this trigger.
   float pusch_threshold_sinr_dB = -std::numeric_limits<float>::infinity();
+  /// \brief UL resource grid print trigger: save the uplink grid when the number of decoder iterations is above the
+  /// threshold.
+  ///
+  /// Saves the uplink resource grid in the file when a PUSCH transmission in a slot required more decoder iterations
+  /// than the given threshold. Set to infinity for disabling this trigger.
+  float pusch_threshold_iter = std::numeric_limits<float>::infinity();
 };
 
 /// DU low receive symbols printer configuration.

@@ -4,6 +4,10 @@
 
 #pragma once
 
+#include "ocudu/adt/interval.h"
+#include <limits>
+#include <string>
+
 namespace ocudu {
 
 /// RX symbol print triggers.
@@ -23,6 +27,12 @@ struct rx_symbol_trigger_configuration {
   /// Saves the uplink resource grid in the file when a PUSCH SINR for a slot is below the given threshold. Set to
   /// minus infinity for disabling this trigger.
   float pusch_threshold_sinr_dB = -std::numeric_limits<float>::infinity();
+  /// \brief UL resource grid print trigger: save the uplink grid when the number of decoder iterations is above the
+  /// threshold.
+  ///
+  /// Saves the uplink resource grid in the file when a PUSCH transmission in a slot required more decoder iterations
+  /// than the given threshold. Set to infinity for disabling this trigger.
+  float pusch_threshold_iter = std::numeric_limits<float>::infinity();
 };
 
 struct rx_symbol_printer_configuration {

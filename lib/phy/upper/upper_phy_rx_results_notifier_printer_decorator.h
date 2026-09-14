@@ -47,6 +47,8 @@ public:
     std::optional<float> sinr    = result.csi.get_sinr_dB();
     trigger                      = trigger || (!std::isnan(triggers.pusch_threshold_sinr_dB) && sinr.has_value() &&
                           (sinr.value() < triggers.pusch_threshold_sinr_dB));
+    float iter_avg               = result.decoder_result.ldpc_decoder_stats.get_mean();
+    trigger = trigger || (!std::isnan(triggers.pusch_threshold_iter) && (iter_avg > triggers.pusch_threshold_iter));
 
     if (trigger) {
       backend->on_grid_trigger(sector, result.slot);

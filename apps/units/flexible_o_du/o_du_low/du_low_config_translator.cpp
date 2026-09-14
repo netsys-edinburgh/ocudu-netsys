@@ -47,6 +47,8 @@ static odu::du_low_config generate_du_low_config(const du_low_unit_config&      
       du_low.loggers.phy_rx_symbol_printer.triggers.pusch_on_ko;
   upper_phy_factory_config.rx_symbol_printer.triggers.pusch_threshold_sinr_dB =
       du_low.loggers.phy_rx_symbol_printer.triggers.pusch_threshold_sinr_dB;
+  upper_phy_factory_config.rx_symbol_printer.triggers.pusch_threshold_iter =
+      du_low.loggers.phy_rx_symbol_printer.triggers.pusch_threshold_iter;
   upper_phy_factory_config.ldpc_encoder_type          = "auto";
   upper_phy_factory_config.ldpc_decoder_type          = "auto";
   upper_phy_factory_config.ldpc_rate_dematcher_type   = "auto";
