@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
-#include "lib/scheduler/trace/trace_to_log.h"
 #include "ocudu/ocudulog/ocudulog.h"
+#include "ocudu/scheduler/trace/trace_to_log.h"
 #include "ocudu/support/error_handling.h"
 #include "CLI/CLI11.hpp"
 #include <cstdlib>

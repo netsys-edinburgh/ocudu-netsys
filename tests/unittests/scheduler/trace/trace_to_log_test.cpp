@@ -5,12 +5,12 @@
 #include "fbs/cell_event_generated.h"
 #include "lib/scheduler/logging/scheduler_result_logger.h"
 #include "lib/scheduler/trace/event_converter.h"
-#include "lib/scheduler/trace/trace_to_log.h"
 #include "roundtrip/full_sched_result.h"
 #include "tests/test_doubles/scheduler/trace/test_messages.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/ocudulog/sink.h"
 #include "ocudu/scheduler/result/sched_result.h"
+#include "ocudu/scheduler/trace/trace_to_log.h"
 #include <algorithm>
 #include <gtest/gtest.h>
 #include <sstream>
