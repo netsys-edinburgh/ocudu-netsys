@@ -9,6 +9,7 @@
 #include "ocudu/ran/csi_rs/csi_report_config.h"
 #include "ocudu/ran/pci.h"
 #include "ocudu/ran/pdsch/pdsch_mcs.h"
+#include "ocudu/ran/precoding/precoding_codebook_properties.h"
 #include "ocudu/ran/ssb/ssb_properties.h"
 #include "ocudu/ran/tdd/tdd_ul_dl_config.h"
 #include <array>
@@ -16,6 +17,16 @@
 #include <vector>
 
 namespace ocudu {
+
+/// \brief Configurable Type-II codebook parameters in a given DU cell.
+///
+/// The Type-II codebook is described in TS38.214 Section 5.2.2.2.3.
+struct du_type2_codebook_params {
+  /// Number of beams \f$L\f$ used for the linear combination, given by \e numberOfBeams. Values: {2, 3, 4}.
+  unsigned nof_beams = 2;
+  /// Phase alphabet size \f$N_{PSK}\f$, given by \e phaseAlphabetSize.
+  pmi_codebook_typeII_phase_size phase_alphabet_size = pmi_codebook_typeII_phase_size::qpsk;
+};
 
 /// Configurable CSI parameters in a given DU cell.
 struct du_csi_params {
@@ -56,6 +67,11 @@ struct du_csi_params {
   bool enable_aperiodic_report = false;
   /// Power offset of PDSCH RE to NZP CSI-RS RE. Value in dB {-8,...,15}.
   int8_t pwr_ctrl_offset = 0;
+  /// \brief Type-II codebook parameters. If empty, the Type-I single-panel codebook is configured.
+  ///
+  /// The Type-II codebook requires four or more CSI-RS ports and aperiodic CSI reporting, as its PMI is carried in
+  /// CSI Part 2.
+  std::optional<du_type2_codebook_params> type2_codebook;
 };
 
 namespace csi_helper {

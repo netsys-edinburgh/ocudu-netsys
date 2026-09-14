@@ -5,6 +5,7 @@
 #include "ocudu/scheduler/config/csi_helper.h"
 #include "ocudu/adt/format.h"
 #include "ocudu/ran/csi_rs/csi_meas_config.h"
+#include "ocudu/ran/precoding/precoding_codebook_type2_helpers.h"
 #include "ocudu/ran/slot_point.h"
 #include "ocudu/scheduler/config/pucch_resource_builder_params.h"
 #include "ocudu/support/enum_utils.h"
@@ -618,6 +619,103 @@ static std::vector<csi_resource_config> make_csi_resource_configs()
   return res_cfgs;
 }
 
+/// Creates the Type-II codebook configuration for the given cell parameters.
+static codebook_config::type2 make_type2_codebook_config(const csi_meas_config_builder_params& params)
+{
+  using typeii = codebook_config::type2::typeii;
+
+  const du_type2_codebook_params& type2_params = params.csi_params.type2_codebook.value();
+
+  // As per TS38.214 Section 5.2.2.2.3, the Type-II codebook is only defined for four or more CSI-RS ports.
+  ocudu_assert(params.nof_ports >= 4, "The Type-II codebook requires at least four ports, given {}", params.nof_ports);
+
+  // The Type-II PMI is reported in CSI Part 2, which is only multiplexed in PUSCH.
+  ocudu_assert(params.csi_params.enable_aperiodic_report,
+               "The Type-II codebook requires aperiodic CSI reporting, as the PMI is carried in CSI Part 2");
+
+  typeii sub_type{};
+  if (params.nof_ports == 4) {
+    // As per TS38.214 Section 5.2.2.2.3, four CSI-RS ports only support two beams.
+    ocudu_assert(type2_params.nof_beams == 2,
+                 "Four antenna ports only support two Type-II beams, given {}",
+                 type2_params.nof_beams);
+
+    sub_type.n1_n2_codebook_subset_restriction_type = typeii::n1_n2_codebook_subset_restriction_type_t::two_one;
+    sub_type.n1_n2_codebook_subset_restriction_value.resize(16);
+  } else if (params.nof_ports == 8) {
+    sub_type.n1_n2_codebook_subset_restriction_type = typeii::n1_n2_codebook_subset_restriction_type_t::four_one;
+    sub_type.n1_n2_codebook_subset_restriction_value.resize(32);
+  } else {
+    report_error("Unsupported number of antenna ports {} for the Type-II codebook", params.nof_ports);
+  }
+
+  // Enable all beam combinations.
+  sub_type.n1_n2_codebook_subset_restriction_value.fill(0, sub_type.n1_n2_codebook_subset_restriction_value.size());
+
+  // Limit the number of DL layers that can be requested by the UE via the Rank Indicator (RI). As per TS38.214
+  // Section 5.2.2.2.3, the Type-II codebook supports at most two layers.
+  sub_type.typeii_ri_restriction.resize(max_nof_typeII_layers);
+  sub_type.typeii_ri_restriction.fill(0, std::min<unsigned>(params.max_nof_layers, max_nof_typeII_layers));
+
+  codebook_config::type2 type2{};
+  type2.sub_type            = sub_type;
+  type2.nof_beams           = type2_params.nof_beams;
+  type2.phase_alphabet_size = type2_params.phase_alphabet_size;
+  // Subband amplitude reporting is not supported.
+  type2.subband_amplitude = false;
+
+  return type2;
+}
+
+/// Creates the Type-I single-panel codebook configuration for the given cell parameters.
+static codebook_config::type1 make_type1_codebook_config(const csi_meas_config_builder_params& params)
+{
+  codebook_config::type1               type1{};
+  codebook_config::type1::single_panel single_panel{};
+  if (params.nof_ports == 2) {
+    codebook_config::type1::single_panel::two_antenna_ports_two_tx_codebook_subset_restriction bitmap(6);
+    bitmap.fill(0, 6, true);
+    single_panel.nof_antenna_ports = bitmap;
+  } else if (params.nof_ports == 4) {
+    codebook_config::type1::single_panel::more_than_two_antenna_ports port_cfg{};
+    port_cfg.n1_n2_restriction_type =
+        codebook_config::type1::single_panel::more_than_two_antenna_ports::n1_n2_restriction_type_t::two_one;
+    // Enable all beam combinations.
+    port_cfg.n1_n2_restriction_value.resize(8);
+    port_cfg.n1_n2_restriction_value.fill(0, 8, true);
+    // Enable all i2 options.
+    port_cfg.typei_single_panel_codebook_subset_restriction_i2.resize(16);
+    port_cfg.typei_single_panel_codebook_subset_restriction_i2.fill(0, 16, true);
+    single_panel.nof_antenna_ports = port_cfg;
+  } else if (params.nof_ports == 8) {
+    codebook_config::type1::single_panel::more_than_two_antenna_ports port_cfg{};
+    port_cfg.n1_n2_restriction_type =
+        codebook_config::type1::single_panel::more_than_two_antenna_ports::n1_n2_restriction_type_t::four_one;
+    // Enable all beam combinations.
+    port_cfg.n1_n2_restriction_value.resize(16);
+    port_cfg.n1_n2_restriction_value.fill(0, 16, true);
+    // Enable all i2 options.
+    port_cfg.typei_single_panel_codebook_subset_restriction_i2.resize(16);
+    port_cfg.typei_single_panel_codebook_subset_restriction_i2.fill(0, 16, true);
+    single_panel.nof_antenna_ports = port_cfg;
+  } else {
+    report_error("Unsupported number of antenna ports {}", params.nof_ports);
+  }
+
+  // Maximum number of layers must be in line with available number of ports.
+  ocudu_assert(params.max_nof_layers <= params.nof_ports,
+               "Maximum number of layers cannot be greater than number of ports");
+
+  // Limit the number of DL layers that can be requested by the UE via the Rank Indicator (RI).
+  // As per TS 38.214, section 5.2.2.2.1, this can be done by setting the RI restriction bitmap to 0b11...11,
+  // where the number of 1s is set to be equal to the number of desired layers.
+  single_panel.typei_single_panel_ri_restriction.resize(8);
+  single_panel.typei_single_panel_ri_restriction.from_uint64((1U << params.max_nof_layers) - 1U);
+  type1.sub_type      = single_panel;
+  type1.codebook_mode = pmi_codebook_typeI_mode::one;
+  return type1;
+}
+
 static std::vector<csi_report_config>
 make_csi_report_configs(const csi_meas_config_builder_params&                     params,
                         const std::vector<pusch_time_domain_resource_allocation>& pusch_td_alloc_list)
@@ -671,50 +769,11 @@ make_csi_report_configs(const csi_meas_config_builder_params&                   
 
   if (params.nof_ports > 1) {
     reps[0].codebook_cfg.emplace();
-    codebook_config::type1               type1{};
-    codebook_config::type1::single_panel single_panel{};
-    if (params.nof_ports == 2) {
-      codebook_config::type1::single_panel::two_antenna_ports_two_tx_codebook_subset_restriction bitmap(6);
-      bitmap.fill(0, 6, true);
-      single_panel.nof_antenna_ports = bitmap;
-    } else if (params.nof_ports == 4) {
-      codebook_config::type1::single_panel::more_than_two_antenna_ports port_cfg{};
-      port_cfg.n1_n2_restriction_type =
-          codebook_config::type1::single_panel::more_than_two_antenna_ports::n1_n2_restriction_type_t::two_one;
-      // Enable all beam combinations.
-      port_cfg.n1_n2_restriction_value.resize(8);
-      port_cfg.n1_n2_restriction_value.fill(0, 8, true);
-      // Enable all i2 options.
-      port_cfg.typei_single_panel_codebook_subset_restriction_i2.resize(16);
-      port_cfg.typei_single_panel_codebook_subset_restriction_i2.fill(0, 16, true);
-      single_panel.nof_antenna_ports = port_cfg;
-    } else if (params.nof_ports == 8) {
-      codebook_config::type1::single_panel::more_than_two_antenna_ports port_cfg{};
-      port_cfg.n1_n2_restriction_type =
-          codebook_config::type1::single_panel::more_than_two_antenna_ports::n1_n2_restriction_type_t::four_one;
-      // Enable all beam combinations.
-      port_cfg.n1_n2_restriction_value.resize(16);
-      port_cfg.n1_n2_restriction_value.fill(0, 16, true);
-      // Enable all i2 options.
-      port_cfg.typei_single_panel_codebook_subset_restriction_i2.resize(16);
-      port_cfg.typei_single_panel_codebook_subset_restriction_i2.fill(0, 16, true);
-      single_panel.nof_antenna_ports = port_cfg;
+    if (params.csi_params.type2_codebook.has_value()) {
+      reps[0].codebook_cfg->codebook_type = make_type2_codebook_config(params);
     } else {
-      report_error("Unsupported number of antenna ports {}", params.nof_ports);
+      reps[0].codebook_cfg->codebook_type = make_type1_codebook_config(params);
     }
-
-    // Maximum number of layers must be in line with available number of ports.
-    ocudu_assert(params.max_nof_layers <= params.nof_ports,
-                 "Maximum number of layers cannot be greater than number of ports");
-
-    // Limit the number of DL layers that can be requested by the UE via the Rank Indicator (RI).
-    // As per TS 38.214, section 5.2.2.2.1, this can be done by setting the RI restriction bitmap to 0b11...11,
-    // where the number of 1s is set to be equal to the number of desired layers.
-    single_panel.typei_single_panel_ri_restriction.resize(8);
-    single_panel.typei_single_panel_ri_restriction.from_uint64((1U << params.max_nof_layers) - 1U);
-    type1.sub_type                      = single_panel;
-    type1.codebook_mode                 = pmi_codebook_typeI_mode::one;
-    reps[0].codebook_cfg->codebook_type = type1;
   }
 
   reps[0].is_group_based_beam_reporting_enabled = false;

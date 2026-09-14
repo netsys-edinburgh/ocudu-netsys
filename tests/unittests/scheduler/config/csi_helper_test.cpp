@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/adt/format.h"
+#include "ocudu/ran/csi_report/csi_report_config_helpers.h"
 #include "ocudu/ran/tdd/tdd_ul_dl_config_formatters.h"
 #include "ocudu/scheduler/config/bwp_configuration.h"
 #include "ocudu/scheduler/config/csi_helper.h"
@@ -210,4 +211,93 @@ TEST(csi_helper_test, ssb_slot_offsets_are_all_avoided)
     EXPECT_NE((params.csi_params.tracking_csi_slot_offset + 1) % ssb_period_slots, ssb_slot)
         << "tracking_csi_slot_offset+1 collides with SSB slot " << ssb_slot;
   }
+}
+
+/// Builds CSI parameters that request a Type-II codebook for the given number of ports.
+static csi_helper::csi_meas_config_builder_params make_type2_csi_params(unsigned nof_ports, unsigned nof_beams)
+{
+  csi_helper::csi_meas_config_builder_params params = make_csi_params_for_ports(nof_ports);
+
+  // The Type-II PMI is carried in CSI Part 2, which is only multiplexed in PUSCH.
+  params.csi_params.csi_report_slot_offset.reset();
+  params.csi_params.enable_aperiodic_report = true;
+
+  du_type2_codebook_params& type2 = params.csi_params.type2_codebook.emplace();
+  type2.nof_beams                 = nof_beams;
+  type2.phase_alphabet_size       = pmi_codebook_typeII_phase_size::psk8;
+
+  return params;
+}
+
+/// Returns the codebook configuration of the first CSI report that carries one.
+static codebook_config get_codebook_config(const csi_meas_config& cfg)
+{
+  const auto rep = std::find_if(cfg.csi_report_cfg_list.begin(),
+                                cfg.csi_report_cfg_list.end(),
+                                [](const csi_report_config& r) { return r.codebook_cfg.has_value(); });
+  report_error_if_not(rep != cfg.csi_report_cfg_list.end(), "No CSI report with a codebook config was generated");
+  return rep->codebook_cfg.value();
+}
+
+TEST(csi_helper_test, csi_report_config_with_eight_ports_uses_type2_codebook)
+{
+  const csi_meas_config cfg      = csi_helper::make_csi_meas_config(make_type2_csi_params(8, 4), {});
+  const codebook_config codebook = get_codebook_config(cfg);
+
+  ASSERT_TRUE(std::holds_alternative<codebook_config::type2>(codebook.codebook_type));
+  const auto& type2 = std::get<codebook_config::type2>(codebook.codebook_type);
+
+  EXPECT_EQ(type2.nof_beams, 4);
+  EXPECT_EQ(type2.phase_alphabet_size, pmi_codebook_typeII_phase_size::psk8);
+  EXPECT_FALSE(type2.subband_amplitude);
+
+  ASSERT_TRUE(std::holds_alternative<codebook_config::type2::typeii>(type2.sub_type));
+  const auto& typeii = std::get<codebook_config::type2::typeii>(type2.sub_type);
+
+  EXPECT_EQ(typeii.n1_n2_codebook_subset_restriction_type,
+            codebook_config::type2::typeii::n1_n2_codebook_subset_restriction_type_t::four_one);
+  // The eight port restriction bitmap is 32 bits wide and enables every beam combination.
+  EXPECT_EQ(typeii.n1_n2_codebook_subset_restriction_value.size(), 32);
+  EXPECT_EQ(typeii.n1_n2_codebook_subset_restriction_value.count(), 32);
+
+  // As per TS38.214 Section 5.2.2.2.3, the Type-II codebook supports at most two layers.
+  EXPECT_EQ(typeii.typeii_ri_restriction.size(), 2);
+  EXPECT_EQ(typeii.typeii_ri_restriction.count(), 2);
+}
+
+TEST(csi_helper_test, csi_report_config_with_four_ports_uses_two_one_type2_codebook)
+{
+  const csi_meas_config cfg      = csi_helper::make_csi_meas_config(make_type2_csi_params(4, 2), {});
+  const codebook_config codebook = get_codebook_config(cfg);
+
+  ASSERT_TRUE(std::holds_alternative<codebook_config::type2>(codebook.codebook_type));
+  const auto& typeii =
+      std::get<codebook_config::type2::typeii>(std::get<codebook_config::type2>(codebook.codebook_type).sub_type);
+
+  EXPECT_EQ(typeii.n1_n2_codebook_subset_restriction_type,
+            codebook_config::type2::typeii::n1_n2_codebook_subset_restriction_type_t::two_one);
+  // The four port restriction bitmap is 16 bits wide.
+  EXPECT_EQ(typeii.n1_n2_codebook_subset_restriction_value.size(), 16);
+  EXPECT_EQ(typeii.n1_n2_codebook_subset_restriction_value.count(), 16);
+}
+
+TEST(csi_helper_test, generated_type2_codebook_derives_a_valid_report_configuration)
+{
+  const csi_meas_config cfg = csi_helper::make_csi_meas_config(make_type2_csi_params(8, 4), {});
+
+  // The generated configuration must be usable by the CSI report unpacking.
+  const csi_report_configuration report_cfg = create_csi_report_configuration(cfg);
+
+  ASSERT_TRUE(std::holds_alternative<pmi_codebook_typeII>(report_cfg.pmi_codebook));
+  EXPECT_EQ(std::get<pmi_codebook_typeII>(report_cfg.pmi_codebook).nof_beams, 4);
+  EXPECT_EQ(get_precoding_codebook_antenna_ports(report_cfg.pmi_codebook), 8);
+  EXPECT_TRUE(is_valid(report_cfg));
+}
+
+TEST(csi_helper_test, type1_codebook_is_generated_when_type2_is_disabled)
+{
+  const csi_meas_config cfg      = csi_helper::make_csi_meas_config(make_csi_params_for_ports(8), {});
+  const codebook_config codebook = get_codebook_config(cfg);
+
+  ASSERT_TRUE(std::holds_alternative<codebook_config::type1>(codebook.codebook_type));
 }
