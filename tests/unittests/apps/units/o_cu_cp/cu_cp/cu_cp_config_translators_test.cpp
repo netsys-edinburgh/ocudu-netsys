@@ -293,3 +293,25 @@ TEST(cu_cp_config_translators_test, a5_conditional_trigger_carries_two_threshold
   EXPECT_EQ(event.meas_trigger_quant_thres_2->rsrp.value(), 66); // -90 dB + 156
   EXPECT_FALSE(event.use_allowed_cell_list.has_value());
 }
+
+/// A regression test to verify that the CU-CP application config correctly parses rrc_reject_wait_time_s.
+TEST(cu_cp_config_translators_test, rrc_reject_wait_time_s_is_propagated_to_cu_cp_configuration)
+{
+  cu_cp_unit_config cfg;
+  cfg.rrc_config.rrc_reject_wait_time_s = 16;
+
+  const ocucp::cu_cp_configuration out_cfg = generate_cu_cp_config(cfg);
+
+  ASSERT_TRUE(out_cfg.rrc.rrc_reject_wait_time.has_value())
+      << "rrc_reject_wait_time_s from the application config was not propagated to the CU-CP configuration";
+  EXPECT_EQ(out_cfg.rrc.rrc_reject_wait_time.value(), std::chrono::seconds{16});
+}
+
+TEST(cu_cp_config_translators_test, unset_rrc_reject_wait_time_s_leaves_no_wait_time)
+{
+  cu_cp_unit_config cfg; // rrc_config.rrc_reject_wait_time_s is std::nullopt by default.
+
+  const ocucp::cu_cp_configuration out_cfg = generate_cu_cp_config(cfg);
+
+  EXPECT_FALSE(out_cfg.rrc.rrc_reject_wait_time.has_value());
+}

@@ -456,7 +456,10 @@ static ocucp::cu_cp_configuration::rrc_params generate_rrc_conf(const cu_cp_unit
       .force_reestablishment_fallback = rrc_cfg.force_reestablishment_fallback,
       .force_resume_fallback          = rrc_cfg.force_resume_fallback,
       .rrc_procedure_guard_time_ms    = std::chrono::milliseconds{rrc_cfg.rrc_procedure_guard_time_ms},
-      .rrc_version                    = ocucp::RRC_VERSION};
+      .rrc_version                    = ocucp::RRC_VERSION,
+      .rrc_reject_wait_time           = rrc_cfg.rrc_reject_wait_time_s.has_value()
+                                            ? std::optional<std::chrono::seconds>(*rrc_cfg.rrc_reject_wait_time_s)
+                                            : std::nullopt};
 }
 
 /// Generates the bearers configuration and returns it.

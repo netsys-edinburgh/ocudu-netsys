@@ -11,6 +11,7 @@ add_executable(cu_cp_config_translators_test cu_cp_config_translators_test.cpp)
 target_include_directories(cu_cp_config_translators_test PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(cu_cp_config_translators_test
         ocudu_cu_cp_app_unit
+        ocudu_cu_cp
         ocudu_app_services
         ocudu_yaml_util
         ocudu_gtest_main
