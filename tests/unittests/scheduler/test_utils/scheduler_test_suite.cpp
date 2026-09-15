@@ -630,6 +630,29 @@ static void test_csi_rs_consistency(span<const csi_rs_info> csi_rs_list)
   }
 }
 
+/// \brief Tests the validity of the precoding and beamforming of the PDSCH. Checks include:
+/// - a PRG is always given, so that the consumer never has to guess how the transmission is mapped onto the antennas.
+static void test_pdsch_precoding_consistency(const dl_sched_result& result)
+{
+  auto assert_filled = [](const pdsch_information& pdsch, const char* type) {
+    ASSERT_FALSE(pdsch.precoding_and_beamforming.prgs.empty())
+        << fmt::format("The precoding and beamforming of the {} PDSCH was not filled", type);
+  };
+
+  for (const sib_information& sib : result.bc.sibs) {
+    assert_filled(sib.pdsch_cfg, "SI");
+  }
+  for (const rar_information& rar : result.rar_grants) {
+    assert_filled(rar.pdsch_cfg, "RAR");
+  }
+  for (const dl_paging_allocation& pg : result.paging_grants) {
+    assert_filled(pg.pdsch_cfg, "paging");
+  }
+  for (const dl_msg_alloc& ue_grant : result.ue_grants) {
+    assert_filled(ue_grant.pdsch_cfg, "UE");
+  }
+}
+
 void ocudu::test_dl_consistency(const cell_configuration& cell_cfg, slot_point sl_tx, const dl_sched_result& result)
 {
   test_pdsch_sib_consistency(cell_cfg, result.bc.sibs);
@@ -639,6 +662,7 @@ void ocudu::test_dl_consistency(const cell_configuration& cell_cfg, slot_point s
   test_pdcch_common_consistency(cell_cfg, sl_tx, result.dl_pdcchs);
   test_ul_pdcch_consistency(cell_cfg, sl_tx, result.ul_pdcchs);
   test_csi_rs_consistency(result.csi_rs);
+  test_pdsch_precoding_consistency(result);
   test_dl_resource_grid_collisions(cell_cfg, result);
 }
 

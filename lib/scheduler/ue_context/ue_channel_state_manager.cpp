@@ -18,6 +18,7 @@ ue_channel_state_manager::ue_channel_state_manager(const scheduler_ue_expert_con
   srs_prohibit_window(expert_cfg.srs_prohibit_time.value_or(srs_periodicity::sl40))
 {
   // Set initial precoding value when no CSI has yet been received.
+  // The panel configs must match the codebookConfig signalled in the CSI-ReportConfig, see csi_helper.cpp.
   if (nof_dl_ports == 2) {
     recommended_prg_info.resize(2, precoding_matrix_indicator{pmi_two_antenna_port{.pmi = 0}});
   } else if (nof_dl_ports == 4) {
