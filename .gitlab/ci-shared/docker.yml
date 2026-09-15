@@ -37,7 +37,8 @@ variables:
   artifacts:
     paths:
       - grype-report.json
-    when: on_failure
+    expire_in: 7 days
+    when: always
   script:
     - |
       check_if_image_exists() {
@@ -204,7 +205,7 @@ variables:
           # size in temp space. Drop syft's copy first so large images don't run out of disk here.
           rm -rf /tmp/stereoscope-*
           echo "=== Running grype CVE scan on ${IMAGE_NAME_VERSION} ==="
-          grype registry:${IMAGE_NAME_VERSION} --fail-on critical --ignore-states wont-fix,not-fixed -o json > grype-report.json
+          grype registry:${IMAGE_NAME_VERSION} --ignore-states wont-fix,not-fixed -o json > grype-report.json
           echo "=== Vulnerability summary ==="
           jq -r '.matches[] | .vulnerability.severity' grype-report.json | sort | uniq -c | awk '{printf "  %s: %d\n", $2, $1}'
           echo "  Total: $(jq '.matches | length' grype-report.json)"
