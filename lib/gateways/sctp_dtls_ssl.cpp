@@ -3,7 +3,7 @@
 #include "sctp_dtls_ssl.h"
 #include "openssl_error.h"
 #include "sctp_dtls.h"
-#include "sctp_network_dtls_interface.h"
+#include "sctp_network_gateway_dtls_interface.h"
 #include "ocudu/adt/byte_buffer.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/support/error_handling.h"

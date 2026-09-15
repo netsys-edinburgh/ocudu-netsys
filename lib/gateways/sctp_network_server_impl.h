@@ -5,8 +5,8 @@
 
 #include "sctp_dtls.h"
 #include "sctp_dtls_ssl.h"
-#include "sctp_network_dtls_interface.h"
 #include "sctp_network_gateway_common_impl.h"
+#include "sctp_network_gateway_dtls_interface.h"
 #include "ocudu/gateways/sctp_network_server.h"
 #include "ocudu/support/async/manual_event.h"
 #include "ocudu/support/synchronization/sync_event.h"
