@@ -705,7 +705,7 @@ ue_fallback_scheduler::alloc_grant(ue&                                   u,
   // Allocate PDCCH resources.
   cell_slot_resource_allocator& pdcch_alloc = res_alloc[slot_offset];
   pdcch_dl_information*         pdcch =
-      pdcch_sch.alloc_dl_pdcch_common(pdcch_alloc, u.crnti, ss_cfg.get_id(), aggregation_level::n4);
+      pdcch_sch.alloc_dl_pdcch_common(pdcch_alloc, u.crnti, ss_cfg.get_id(), aggregation_level::n4, std::nullopt);
   if (pdcch == nullptr) {
     logger.debug("rnti={}: Postponed PDU scheduling for slot={}. Cause: No space in PDCCH.", u.crnti, pdcch_alloc.slot);
     // If there is no PDCCH space on this slot for this UE, then this slot should be avoided by the other UEs too.
@@ -1276,7 +1276,7 @@ ue_fallback_scheduler::schedule_ul_srb(ue&                                      
 
   // Allocate PDCCH position.
   pdcch_ul_information* pdcch =
-      pdcch_sch.alloc_ul_pdcch_common(pdcch_alloc, u.crnti, ss_cfg.get_id(), aggregation_level::n4);
+      pdcch_sch.alloc_ul_pdcch_common(pdcch_alloc, u.crnti, ss_cfg.get_id(), aggregation_level::n4, std::nullopt);
   if (pdcch == nullptr) {
     logger.info("ue={} rnti={}: Failed to allocate PUSCH. Cause: No space in PDCCH.", u.ue_index, u.crnti);
     return ul_srb_sched_outcome::stop_ul_scheduling;

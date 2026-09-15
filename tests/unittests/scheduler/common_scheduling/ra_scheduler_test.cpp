@@ -670,6 +670,136 @@ TEST_F(ra_scheduler_backoff_duration_test, duration_is_mapped_to_table_index)
   EXPECT_EQ(*backoff_rar->backoff_indicator, 6U);
 }
 
+/// Beam that the RA scheduler is expected to map the SS/PBCH block of the test cell onto.
+constexpr beam_identifier test_ssb_beam = static_cast<beam_identifier>(3);
+
+/// Beam that a transmission is mapped onto, or \c beam_identifier::invalid if it is not beamformed.
+static beam_identifier beam_of(const precoding_and_beamforming_info& info)
+{
+  const beam_identifier* beam = std::get_if<beam_identifier>(&info);
+  return beam != nullptr ? *beam : beam_identifier::invalid;
+}
+
+/// \brief Test suite for the beam that the RA procedure maps its downlink transmissions onto.
+///
+/// The cell transmits a single SS/PBCH block on \c test_ssb_beam, so that every PRACH occasion is associated with it
+/// and every RA transmission is expected to be carried by that beam.
+class ra_scheduler_beam_test : public ra_scheduler_setup, public ::testing::Test
+{
+public:
+  ra_scheduler_beam_test() : ra_scheduler_setup(make_beam_req(), /*sched_csi=*/false, /*sched_sib1=*/false) {}
+
+  static sched_cell_configuration_request_message make_beam_req()
+  {
+    cell_config_builder_params builder_params = create(duplex_mode::FDD, frequency_range::FR1);
+    builder_params.min_k1                     = 2;
+    builder_params.min_k2                     = 2;
+    auto  req     = sched_config_helper::make_default_sched_cell_configuration_request(builder_params);
+    auto& ssb_cfg = req.ran.ssb_cfg;
+    // A beam other than the first one, so that the assertions discriminate against a hardcoded default.
+    ssb_cfg.ssb_beams.reset();
+    ssb_cfg.ssb_beams.set_beam(0, test_ssb_beam);
+    return req;
+  }
+};
+
+/// Verifies that the RAR PDSCH and its PDCCH are carried by the beam of the SS/PBCH block that the UE reached the
+/// cell on.
+TEST_F(ra_scheduler_beam_test, rar_pdsch_and_pdcch_use_the_beam_of_the_ssb)
+{
+  handle_rach_indication(create_rach_indication(1));
+
+  const rar_information* rar   = nullptr;
+  bool                   found = run_slot_until([&]() {
+    if (res_grid[0].result.dl.rar_grants.empty()) {
+      return false;
+    }
+    rar = &res_grid[0].result.dl.rar_grants.front();
+    return true;
+  });
+
+  ASSERT_TRUE(found) << "No RAR was scheduled";
+  ASSERT_EQ(beam_of(rar->pdsch_cfg.precoding_and_beamforming), test_ssb_beam);
+  ASSERT_EQ(res_grid[0].result.dl.dl_pdcchs.size(), 1);
+  ASSERT_EQ(beam_of(res_grid[0].result.dl.dl_pdcchs.front().ctx.precoding_and_beamforming), test_ssb_beam);
+}
+
+/// Verifies that the PDCCH scheduling a Msg3 retransmission is carried by the beam of the SS/PBCH block, so that the
+/// UE can receive its retransmission grant.
+TEST_F(ra_scheduler_beam_test, msg3_retx_pdcch_uses_the_beam_of_the_ssb)
+{
+  handle_rach_indication(create_rach_indication(1));
+
+  // Drive the Msg3 to a NACK, which triggers a retransmission scheduled over an uplink DCI.
+  for (unsigned i = 0, max_slots = 1000; i != max_slots and tracker.nof_msg3_retxs() == 0; ++i) {
+    run_slot();
+    handle_crc_for_pending_puschs(false);
+    if (not res_grid[0].result.dl.ul_pdcchs.empty()) {
+      ASSERT_EQ(beam_of(res_grid[0].result.dl.ul_pdcchs.front().ctx.precoding_and_beamforming), test_ssb_beam);
+    }
+  }
+
+  ASSERT_GE(tracker.nof_msg3_retxs(), 1) << "No Msg3 retransmission was scheduled";
+}
+
+/// \brief Test suite for the beam selection across several SS/PBCH blocks.
+///
+/// The cell transmits two SS/PBCH blocks, each on its own beam. The association of TS 38.213, Section 8.1 alternates
+/// them over consecutive PRACH occasions, so RARs answering different occasions are expected to use different beams.
+class ra_scheduler_multi_beam_test : public ra_scheduler_setup, public ::testing::Test
+{
+public:
+  static constexpr beam_identifier first_beam  = static_cast<beam_identifier>(1);
+  static constexpr beam_identifier second_beam = static_cast<beam_identifier>(2);
+
+  ra_scheduler_multi_beam_test() : ra_scheduler_setup(make_multi_beam_req(), /*sched_csi=*/false, /*sched_sib1=*/false)
+  {
+  }
+
+  static sched_cell_configuration_request_message make_multi_beam_req()
+  {
+    cell_config_builder_params builder_params = create(duplex_mode::FDD, frequency_range::FR1);
+    builder_params.min_k1                     = 2;
+    builder_params.min_k2                     = 2;
+    auto  req     = sched_config_helper::make_default_sched_cell_configuration_request(builder_params);
+    auto& ssb_cfg = req.ran.ssb_cfg;
+    ssb_cfg.ssb_beams.reset();
+    ssb_cfg.ssb_beams.set_beam(0, first_beam);
+    ssb_cfg.ssb_beams.set_beam(1, second_beam);
+    return req;
+  }
+};
+
+/// Verifies that RARs answering different PRACH occasions are carried by the beams of the different SS/PBCH blocks
+/// those occasions are associated with.
+///
+/// The assertion is on the set of beams observed rather than on the beam of a given occasion: the association order
+/// is the subject of \c ssb_to_ro_mapping_test, and recomputing it here would pass even against a constant beam.
+TEST_F(ra_scheduler_multi_beam_test, rars_of_different_occasions_use_different_beams)
+{
+  // Each attempt drains less than one system frame, so that the next indication lands on the PRACH occasion right
+  // after the previous one. Draining a whole number of frames would keep hitting the same point of the association
+  // period and observe a single SS/PBCH block.
+  static constexpr unsigned nof_slots_drained = 8;
+
+  std::set<unsigned> observed_beams;
+  for (unsigned attempt = 0; attempt != 6 and observed_beams.size() < 2; ++attempt) {
+    handle_rach_indication(create_rach_indication(1));
+
+    for (unsigned i = 0; i != nof_slots_drained and observed_beams.size() < 2; ++i) {
+      run_slot();
+      for (const rar_information& rar : res_grid[0].result.dl.rar_grants) {
+        const beam_identifier beam = beam_of(rar.pdsch_cfg.precoding_and_beamforming);
+        ASSERT_NE(beam, beam_identifier::invalid);
+        observed_beams.emplace(to_underlying(beam));
+      }
+    }
+  }
+
+  ASSERT_EQ(observed_beams, (std::set<unsigned>{to_underlying(first_beam), to_underlying(second_beam)}))
+      << "The RARs must be carried by the beams of the SS/PBCH blocks their occasions map onto";
+}
+
 struct two_step_test_params {
   /// MsgA PUSCH TD offset.
   uint8_t                                td_offset;
@@ -703,7 +833,10 @@ public:
     builder_params.min_k1               = 2;
     builder_params.min_k2               = 2;
     builder_params.tdd_ul_dl_cfg_common = params.tdd_cfg;
-    auto  req  = sched_config_helper::make_default_sched_cell_configuration_request(builder_params);
+    auto req = sched_config_helper::make_default_sched_cell_configuration_request(builder_params);
+    // A beam other than the first one, so that the assertions discriminate against a hardcoded default.
+    req.ran.ssb_cfg.ssb_beams.reset();
+    req.ran.ssb_cfg.ssb_beams.set_beam(0, test_ssb_beam);
     auto& rach = *req.ran.ul_cfg_common.init_ul_bwp.rach_cfg_common;
     // Reserve preamble IDs [60, 64) for 2-step CB RACH.
     rach.nof_cb_preambles_per_ssb = MSGA_PREAMBLE_OFFSET;
@@ -847,6 +980,24 @@ TEST_P(ra_scheduler_two_step_rach_test, when_msga_crc_ok_then_msgb_with_success_
   // Test: No Msg3 scheduled.
   ASSERT_FALSE(run_slot_until([this]() { return tracker.nof_msg3_newtxs() > 0; }));
   ASSERT_EQ(tracker.nof_msg3_newtxs(), 0) << "SuccessRAR must not allocate a Msg3 PUSCH";
+}
+
+/// Verifies that the MsgB PDSCH and its PDCCH are carried by the beam of the SS/PBCH block that the UE reached the
+/// cell on, the way the 4-step RAR is.
+TEST_P(ra_scheduler_two_step_rach_test, msgb_pdsch_and_pdcch_use_the_beam_of_the_ssb)
+{
+  const rnti_t tc_rnti = to_rnti(to_underlying(rnti_t::MIN_CRNTI));
+  send_msga_rach({make_msga_preamble(0, tc_rnti)});
+
+  ASSERT_TRUE(run_slot_until([this]() { return not res_grid[0].result.ul.puschs.empty(); }));
+  send_msga_crc(0, true);
+
+  ASSERT_TRUE(run_slot_until([this]() { return not res_grid[0].result.dl.rar_grants.empty(); }));
+
+  ASSERT_EQ(beam_of(res_grid[0].result.dl.rar_grants.front().pdsch_cfg.precoding_and_beamforming), test_ssb_beam);
+
+  ASSERT_EQ(res_grid[0].result.dl.dl_pdcchs.size(), 1);
+  ASSERT_EQ(beam_of(res_grid[0].result.dl.dl_pdcchs.front().ctx.precoding_and_beamforming), test_ssb_beam);
 }
 
 /// When MsgA PUSCH decoding fails (CRC=KO), the scheduler must respond with a FallbackRAR and allocate a

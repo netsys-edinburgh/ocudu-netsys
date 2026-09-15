@@ -412,8 +412,8 @@ bool paging_scheduler::allocate_paging(cell_resource_allocator&         res_grid
   }
 
   // > Allocate DCI_1_0 for Paging on PDCCH.
-  pdcch_dl_information* pdcch =
-      pdcch_sch.alloc_dl_pdcch_common(pdcch_alloc, rnti_t::P_RNTI, ss_id, expert_cfg.pg.paging_dci_aggr_lev);
+  pdcch_dl_information* pdcch = pdcch_sch.alloc_dl_pdcch_common(
+      pdcch_alloc, rnti_t::P_RNTI, ss_id, expert_cfg.pg.paging_dci_aggr_lev, std::nullopt);
   if (pdcch == nullptr) {
     logger.warning("Skipping Paging opportunity for id={}. Cause: Could not allocate PDCCH in slot={}",
                    ue_paging_ids.front(),

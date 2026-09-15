@@ -27,10 +27,11 @@ public:
     // do nothing.
   }
 
-  pdcch_dl_information* alloc_dl_pdcch_common(cell_slot_resource_allocator& slot_alloc,
-                                              rnti_t                        rnti,
-                                              search_space_id               ss_id,
-                                              aggregation_level             aggr_lvl) override
+  pdcch_dl_information* alloc_dl_pdcch_common(cell_slot_resource_allocator&  slot_alloc,
+                                              rnti_t                         rnti,
+                                              search_space_id                ss_id,
+                                              aggregation_level              aggr_lvl,
+                                              std::optional<beam_identifier> beam) override
   {
     report_fatal_error_if_not(
         (fmt::underlying(ss_id)) ==
@@ -48,6 +49,8 @@ public:
     slot_alloc.result.dl.dl_pdcchs.back().ctx.cces          = {static_cast<uint8_t>(get_ncce(slot_alloc.slot)),
                                                                ocudu::aggregation_level::n4};
     slot_alloc.result.dl.dl_pdcchs.back().ctx.context.ss_id = ss_id;
+    slot_alloc.result.dl.dl_pdcchs.back().ctx.precoding_and_beamforming =
+        beam.has_value() ? make_single_beam_precoding(*beam) : make_default_precoding();
     return &slot_alloc.result.dl.dl_pdcchs.back();
   }
 
@@ -71,11 +74,14 @@ public:
     return nullptr;
   }
 
-  pdcch_ul_information* alloc_ul_pdcch_common(cell_slot_resource_allocator& slot_alloc,
-                                              rnti_t                        rnti,
-                                              search_space_id               ss_id,
-                                              aggregation_level             aggr_lvl) override
+  pdcch_ul_information* alloc_ul_pdcch_common(cell_slot_resource_allocator&  slot_alloc,
+                                              rnti_t                         rnti,
+                                              search_space_id                ss_id,
+                                              aggregation_level              aggr_lvl,
+                                              std::optional<beam_identifier> beam) override
   {
+    next_ue_ul_pdcch_alloc.ctx.precoding_and_beamforming =
+        beam.has_value() ? make_single_beam_precoding(*beam) : make_default_precoding();
     return &next_ue_ul_pdcch_alloc;
   }
 

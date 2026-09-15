@@ -345,8 +345,8 @@ void si_scheduler::allocate_short_message(cell_slot_resource_allocator& slot_all
   const auto ss_id = cell_cfg.params.dl_cfg_common.init_dl_bwp.pdcch_common.paging_search_space_id.value();
 
   // > Allocate DCI_1_0 for Paging on PDCCH.
-  pdcch_dl_information* pdcch =
-      pdcch_sch.alloc_dl_pdcch_common(slot_alloc, rnti_t::P_RNTI, ss_id, cell_cfg.expert_cfg.pg.paging_dci_aggr_lev);
+  pdcch_dl_information* pdcch = pdcch_sch.alloc_dl_pdcch_common(
+      slot_alloc, rnti_t::P_RNTI, ss_id, cell_cfg.expert_cfg.pg.paging_dci_aggr_lev, std::nullopt);
   if (pdcch == nullptr) {
     logger.warning("Could not allocate SI change notification Short Message in PDCCH");
     return;

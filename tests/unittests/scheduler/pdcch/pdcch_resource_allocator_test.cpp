@@ -305,8 +305,8 @@ TEST_F(common_pdcch_allocator_tester, single_pdcch_sib1_allocation)
   // Since we schedule SIB1 on (n0 + 1)th slot we need to run once more.
   run_slot();
 
-  pdcch_dl_information* pdcch =
-      pdcch_sch.alloc_dl_pdcch_common(res_grid[0], rnti_t::SI_RNTI, to_search_space_id(0), aggregation_level::n4);
+  pdcch_dl_information* pdcch = pdcch_sch.alloc_dl_pdcch_common(
+      res_grid[0], rnti_t::SI_RNTI, to_search_space_id(0), aggregation_level::n4, std::nullopt);
 
   ASSERT_TRUE(res_grid[0].result.dl.ul_pdcchs.empty());
   ASSERT_EQ(res_grid[0].result.dl.dl_pdcchs.size(), 1);
@@ -326,7 +326,7 @@ TEST_F(common_pdcch_allocator_tester, single_pdcch_rar_allocation)
 {
   rnti_t                ra_rnti = to_rnti(test_rng::uniform_int<unsigned>(1, 9));
   pdcch_dl_information* pdcch =
-      pdcch_sch.alloc_dl_pdcch_common(res_grid[0], ra_rnti, to_search_space_id(1), aggregation_level::n4);
+      pdcch_sch.alloc_dl_pdcch_common(res_grid[0], ra_rnti, to_search_space_id(1), aggregation_level::n4, std::nullopt);
 
   ASSERT_TRUE(res_grid[0].result.dl.ul_pdcchs.empty());
   ASSERT_EQ(res_grid[0].result.dl.dl_pdcchs.size(), 1);
@@ -346,10 +346,10 @@ TEST_F(common_pdcch_allocator_tester, when_no_pdcch_space_for_rar_then_allocatio
 {
   rnti_t                ra_rnti1 = to_rnti(test_rng::uniform_int<unsigned>(1, 9));
   rnti_t                ra_rnti2 = to_rnti(test_rng::uniform_int<unsigned>(1, 9));
-  pdcch_dl_information* pdcch1 =
-      pdcch_sch.alloc_dl_pdcch_common(res_grid[0], ra_rnti1, to_search_space_id(1), aggregation_level::n4);
-  pdcch_dl_information* pdcch2 =
-      pdcch_sch.alloc_dl_pdcch_common(res_grid[0], ra_rnti2, to_search_space_id(1), aggregation_level::n4);
+  pdcch_dl_information* pdcch1   = pdcch_sch.alloc_dl_pdcch_common(
+      res_grid[0], ra_rnti1, to_search_space_id(1), aggregation_level::n4, std::nullopt);
+  pdcch_dl_information* pdcch2 = pdcch_sch.alloc_dl_pdcch_common(
+      res_grid[0], ra_rnti2, to_search_space_id(1), aggregation_level::n4, std::nullopt);
 
   ASSERT_EQ(1, res_grid[0].result.dl.dl_pdcchs.size());
   ASSERT_EQ(pdcch1, &res_grid[0].result.dl.dl_pdcchs[0]);
@@ -528,8 +528,8 @@ TEST(pdcch_resource_allocator_test, monitoring_period)
           res_grid.slot_indication(sl_tx);
           pdcch_sch.slot_indication(sl_tx);
 
-          pdcch_dl_information* pdcch =
-              pdcch_sch.alloc_dl_pdcch_common(res_grid[0], ra_rnti, to_search_space_id(1), aggregation_level::n4);
+          pdcch_dl_information* pdcch = pdcch_sch.alloc_dl_pdcch_common(
+              res_grid[0], ra_rnti, to_search_space_id(1), aggregation_level::n4, std::nullopt);
 
           if (expected_result[i]) {
             // Inside PDCCH monitoring window.
@@ -658,13 +658,13 @@ protected:
         }
         // Since we schedule SIB1 on (n0 + 1)th slot we need to run once more.
         run_slot();
-        pdcch_dl_information* sib_pdcch =
-            pdcch_sch.alloc_dl_pdcch_common(res_grid[0], rnti_t::SI_RNTI, to_search_space_id(0), alloc.aggr_lvl);
+        pdcch_dl_information* sib_pdcch = pdcch_sch.alloc_dl_pdcch_common(
+            res_grid[0], rnti_t::SI_RNTI, to_search_space_id(0), alloc.aggr_lvl, std::nullopt);
         return sib_pdcch != nullptr ? &sib_pdcch->ctx : nullptr;
       } break;
       case alloc_type::ra_rnti: {
-        pdcch_dl_information* rar_pdcch =
-            pdcch_sch.alloc_dl_pdcch_common(res_grid[0], alloc.rnti, to_search_space_id(1), alloc.aggr_lvl);
+        pdcch_dl_information* rar_pdcch = pdcch_sch.alloc_dl_pdcch_common(
+            res_grid[0], alloc.rnti, to_search_space_id(1), alloc.aggr_lvl, std::nullopt);
         return rar_pdcch != nullptr ? &rar_pdcch->ctx : nullptr;
 
       } break;

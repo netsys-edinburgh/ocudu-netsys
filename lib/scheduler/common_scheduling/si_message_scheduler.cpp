@@ -307,8 +307,8 @@ bool si_message_scheduler::allocate_si_message(unsigned si_message, cell_slot_re
   }
 
   // > Allocate DCI_1_0 for SI message on PDCCH.
-  pdcch_dl_information* pdcch =
-      pdcch_sch.alloc_dl_pdcch_common(res_grid, rnti_t::SI_RNTI, ss_id, expert_cfg.si_message_dci_aggr_lev);
+  pdcch_dl_information* pdcch = pdcch_sch.alloc_dl_pdcch_common(
+      res_grid, rnti_t::SI_RNTI, ss_id, expert_cfg.si_message_dci_aggr_lev, std::nullopt);
   if (pdcch == nullptr) {
     logger.info("Skipping SI message scheduling. Cause: Not enough PDCCH space for SI Message {}", si_message);
     return false;

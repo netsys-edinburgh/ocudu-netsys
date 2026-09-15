@@ -184,7 +184,8 @@ bool sib1_scheduler::allocate_sib1(cell_slot_resource_allocator& res_grid, unsig
       pdcch_sched.alloc_dl_pdcch_common(res_grid,
                                         rnti_t::SI_RNTI,
                                         cell_cfg.params.dl_cfg_common.init_dl_bwp.pdcch_common.sib1_search_space_id,
-                                        expert_cfg.sib1_dci_aggr_lev);
+                                        expert_cfg.sib1_dci_aggr_lev,
+                                        std::nullopt);
   if (pdcch == nullptr) {
     logger.warning("Could not allocated SIB1's DCI in PDCCH for SSB index {}", ssb_idx);
     return false;
