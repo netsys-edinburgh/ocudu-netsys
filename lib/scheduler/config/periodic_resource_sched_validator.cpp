@@ -409,8 +409,9 @@ std::vector<periodic_occasion> get_prach_occasions(const ran_cell_config& ran)
   const unsigned                     prach_nof_prbs = prach_frequency_mapping_get(info.scs, ul_scs).nof_rb_ra;
 
   const unsigned nof_slots_per_frame = get_nof_slots_per_subframe(ul_scs) * NOF_SUBFRAMES_PER_FRAME;
-  const unsigned nof_burst_slots     = td_mapping.prach_burst_length_slots();
-  const unsigned slot_period         = prach_cfg.x * nof_slots_per_frame;
+  // Only long preambles flag just the starting slot of the burst; short ones already flag every slot with occasions.
+  const unsigned nof_burst_slots = td_mapping.has_long_preamble() ? td_mapping.prach_burst_length_slots() : 1;
+  const unsigned slot_period     = prach_cfg.x * nof_slots_per_frame;
 
   for (unsigned id_fd_ra = 0; id_fd_ra != rach_cfg.rach_cfg_generic.msg1_fdm; ++id_fd_ra) {
     const unsigned     prb_start = rach_cfg.rach_cfg_generic.msg1_frequency_start + id_fd_ra * prach_nof_prbs;

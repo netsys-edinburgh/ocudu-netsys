@@ -122,12 +122,24 @@ TEST(periodic_resource_sched_validator_test, prs_resource_outside_tdd_active_dl_
   ASSERT_FALSE(check_periodic_resource_collisions(ran).has_value());
 }
 
-TEST(periodic_resource_sched_validator_test, prs_resource_within_tdd_active_dl_symbols_does_not_collide_with_tdd_pattern)
+TEST(periodic_resource_sched_validator_test,
+     prs_resource_within_tdd_active_dl_symbols_does_not_collide_with_tdd_pattern)
 {
   const cell_config_builder_params params = make_tdd_cell_cfg_params();
   ran_cell_config                  ran = sched_config_helper::make_default_sched_cell_configuration_request(params).ran;
 
   // Symbols [0, 2) of the special slot (slot 2) are available for DL.
   ran.prs_cfg.resource_sets.push_back(make_prs_resource_set(0, 24, 10, 2, 0, 0));
+  ASSERT_TRUE(check_periodic_resource_collisions(ran).has_value());
+}
+
+TEST(periodic_resource_sched_validator_test, short_preamble_prach_burst_does_not_collide_with_itself)
+{
+  const cell_config_builder_params params = make_tdd_cell_cfg_params();
+  ran_cell_config                  ran = sched_config_helper::make_default_sched_cell_configuration_request(params).ran;
+
+  // PRACH configuration index 77 uses a short preamble whose burst spans 2 slots at SCS 30kHz. Both slots are already
+  // flagged as PRACH occasions, and they fall in UL slots of the TDD pattern, so nothing collides.
+  ran.ul_cfg_common.init_ul_bwp.rach_cfg_common->rach_cfg_generic.prach_config_index = 77;
   ASSERT_TRUE(check_periodic_resource_collisions(ran).has_value());
 }
