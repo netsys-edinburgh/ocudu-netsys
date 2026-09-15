@@ -399,6 +399,16 @@ public:
 
   unsigned get_count() const { return count; }
 
+  /// Clears any possible state and resizes.
+  void reset(unsigned max_ports_, unsigned max_symb_, unsigned max_prb_)
+  {
+    max_ports = max_ports_;
+    max_symb  = max_symb_;
+    max_prb   = max_prb_;
+    entries.clear();
+    count = 0;
+  }
+
   /// Clears any possible state.
   void reset()
   {

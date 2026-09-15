@@ -148,7 +148,7 @@ public:
   /// \brief  Gets a view of the coefficients associated with a given antenna index.
   /// \return A view of the coefficients for the contribution of each beam to the given antenna.
   /// \remark An assertion is triggered if the antenna index exceeds the maximum.
-  span<const cf_t> get_antenna_coefficients(unsigned i_antenna)
+  span<const cf_t> get_antenna_coefficients(unsigned i_antenna) const
   {
     ocudu_assert(i_antenna < get_nof_antennas(),
                  "The antenna index (i.e., {}) exceeds the maximum (i.e., {}).",

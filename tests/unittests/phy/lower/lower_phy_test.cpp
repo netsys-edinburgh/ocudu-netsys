@@ -34,7 +34,7 @@ auto to_tuple(const downlink_processor_configuration& config)
                   config.rate,
                   config.bandwidth_prb,
                   config.center_frequency_Hz,
-                  config.nof_tx_ports,
+                  config.tx_ant_topology,
                   config.nof_slot_tti_in_advance);
 }
 
@@ -181,7 +181,7 @@ static std::ostream& operator<<(std::ostream& os, const downlink_processor_confi
              config.rate,
              config.bandwidth_prb,
              config.center_frequency_Hz * 1e-6,
-             config.nof_tx_ports,
+             to_string(config.tx_ant_topology),
              config.nof_slot_tti_in_advance);
   return os;
 }
@@ -260,7 +260,6 @@ protected:
     bandwidth_rb                 = std::get<4>(params);
     dl_freq_hz                   = dl_freq_hz_dist(rgen);
     ul_freq_hz                   = ul_freq_hz_dist(rgen);
-    nof_tx_ports                 = nof_tx_ports_dist(rgen);
     nof_rx_ports                 = nof_rx_ports_dist(rgen);
 
     // Create the PRACH buffer pool.
@@ -274,7 +273,7 @@ protected:
     config.bandwidth_rb                      = bandwidth_rb;
     config.dl_freq_hz                        = dl_freq_hz;
     config.ul_freq_hz                        = ul_freq_hz;
-    config.nof_tx_ports                      = nof_tx_ports;
+    config.tx_ant_topology                   = tx_ant_topology;
     config.nof_rx_ports                      = nof_rx_ports;
     config.dft_window_offset                 = dft_window_offset;
     config.max_processing_delay_slots        = max_processing_delay_slots;
@@ -372,6 +371,8 @@ protected:
     return time_alignment_offset.to_samples(srate.to_Hz()) - time_alignment_calibration;
   }
 
+  static constexpr antenna_topology tx_ant_topology = antenna_topology::eight_ports;
+
   subcarrier_spacing scs;
   cyclic_prefix      cp;
   float              dft_window_offset;
@@ -382,7 +383,6 @@ protected:
   unsigned           bandwidth_rb;
   double             dl_freq_hz;
   double             ul_freq_hz;
-  unsigned           nof_tx_ports;
   unsigned           nof_rx_ports;
 
   std::unique_ptr<prach_buffer_pool>      prach_pool;
@@ -406,7 +406,6 @@ protected:
   static std::uniform_int_distribution<int>      time_alignment_calibration_dist;
   static std::uniform_real_distribution<double>  dl_freq_hz_dist;
   static std::uniform_real_distribution<double>  ul_freq_hz_dist;
-  static std::uniform_int_distribution<unsigned> nof_tx_ports_dist;
   static std::uniform_int_distribution<unsigned> nof_rx_ports_dist;
   static std::uniform_int_distribution<unsigned> slot_dist;
   static std::uniform_int_distribution<unsigned> sector_id_dist;
@@ -418,7 +417,6 @@ std::uniform_int_distribution<unsigned> LowerPhyFixture::max_processing_delay_sl
 std::uniform_int_distribution<int>      LowerPhyFixture::time_alignment_calibration_dist(-100, 100);
 std::uniform_real_distribution<double>  LowerPhyFixture::dl_freq_hz_dist(800e6, 6000e6);
 std::uniform_real_distribution<double>  LowerPhyFixture::ul_freq_hz_dist(800e6, 6000e6);
-std::uniform_int_distribution<unsigned> LowerPhyFixture::nof_tx_ports_dist(1, 4);
 std::uniform_int_distribution<unsigned> LowerPhyFixture::nof_rx_ports_dist(1, 4);
 std::uniform_int_distribution<unsigned> LowerPhyFixture::slot_dist(0, 10240 - 1);
 std::uniform_int_distribution<unsigned> LowerPhyFixture::sector_id_dist(0, 1024);
@@ -432,7 +430,7 @@ TEST_P(LowerPhyFixture, Factory)
                                                      .rate                    = srate,
                                                      .bandwidth_prb           = bandwidth_rb,
                                                      .center_frequency_Hz     = dl_freq_hz,
-                                                     .nof_tx_ports            = nof_tx_ports,
+                                                     .tx_ant_topology         = tx_ant_topology,
                                                      .nof_slot_tti_in_advance = max_processing_delay_slots};
   ASSERT_EQ(dl_proc_config, downlink_proc_spy->get_config());
 

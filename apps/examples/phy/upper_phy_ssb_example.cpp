@@ -366,9 +366,9 @@ std::unique_ptr<upper_phy_ssb_example> ocudu::upper_phy_ssb_example::create(cons
 
     for (unsigned sector_id = 0; sector_id != nof_sectors; ++sector_id) {
       for (unsigned slot_id = 0; slot_id != nof_slots; ++slot_id) {
-        dl_grids.push_back(rg_factory->create(config.max_nof_ports, MAX_NSYMB_PER_SLOT, nof_subcs));
+        dl_grids.push_back(rg_factory->create(config.nof_tx_beams, MAX_NSYMB_PER_SLOT, nof_subcs));
         ASSERT_FACTORY(dl_grids.back());
-        ul_grids.push_back(rg_factory->create(config.max_nof_ports, MAX_NSYMB_PER_SLOT, nof_subcs));
+        ul_grids.push_back(rg_factory->create(config.nof_rx_ports, MAX_NSYMB_PER_SLOT, nof_subcs));
         ASSERT_FACTORY(ul_grids.back());
       }
     }
@@ -403,5 +403,5 @@ std::unique_ptr<upper_phy_ssb_example> ocudu::upper_phy_ssb_example::create(cons
                                                 config.enable_prach_processing,
                                                 config.data_modulation,
                                                 nof_subcs,
-                                                config.max_nof_ports);
+                                                config.nof_rx_ports);
 }
