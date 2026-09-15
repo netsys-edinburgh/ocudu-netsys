@@ -16,6 +16,7 @@ Usage:
 
 Seeds are written to:
     tests/fuzz/rrc/corpus/rrc_ue/
+    tests/fuzz/rrc/corpus/rrc_cu_cp/
 """
 
 import argparse
@@ -92,6 +93,41 @@ RRC_SEEDS = {
 }
 
 # ---------------------------------------------------------------------------
+# rrc_cu_cp corpus seeds
+# ---------------------------------------------------------------------------
+# The full-stack harness uses a control byte of its own: bit 0 selects the
+# logical channel and bit 1 the UE state. It has no integrity_verified bit,
+# because PDCP derives that from the MAC-I, and no SRB bit, because SRB2 only
+# exists after security activation.
+# ---------------------------------------------------------------------------
+
+CU_CP_DCCH = 0b0000_0001
+CU_CP_CONNECTED = 0b0000_0010
+
+RRC_CU_CP_SEEDS = {
+    # RRCSetupRequest on UL-CCCH: the pre-authentication entry point.
+    "ccch_setup_request": seed(0, "1dec89d05766"),
+
+    # Corrupted UL-CCCH message (triggers the unpack failure path).
+    "ccch_invalid": seed(0, "9dec89de5766"),
+
+    # RRCResumeRequest on UL-CCCH, which the CU-CP routes by its resume identity.
+    "ccch_resume_request": seed(0, "20202066f020"),
+
+    # RRCSetupComplete on SRB1 against a UE awaiting it.
+    "dcch_setup_complete": seed(CU_CP_DCCH, RRC_SETUP_COMPLETE),
+
+    # UL-DCCH against a connected UE, before security activation.
+    "dcch_ul_info_transfer": seed(CU_CP_DCCH | CU_CP_CONNECTED, "0000"),
+
+    # Truncated payload (triggers the early-exit path).
+    "dcch_truncated": seed(CU_CP_DCCH | CU_CP_CONNECTED, "2a"),
+
+    # Corrupt / non-RRC payload (triggers the unpack failure path).
+    "dcch_invalid": seed(CU_CP_DCCH | CU_CP_CONNECTED, "deadbeef"),
+}
+
+# ---------------------------------------------------------------------------
 # Write seeds to disk
 # ---------------------------------------------------------------------------
 
@@ -115,13 +151,18 @@ def write_zip(seeds: dict, zip_path: pathlib.Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--zip", metavar="PATH", type=pathlib.Path,
-                        help="also write seeds to a zip file (for OSS-Fuzz)")
+                        help="also write rrc_ue seeds to a zip file (for OSS-Fuzz)")
+    parser.add_argument("--zip-cu-cp", metavar="PATH", type=pathlib.Path,
+                        help="also write rrc_cu_cp seeds to a zip file (for OSS-Fuzz)")
     args = parser.parse_args()
 
     print("Generating RRC fuzz corpus seeds...")
     write_seeds(RRC_SEEDS, "rrc_ue")
+    write_seeds(RRC_CU_CP_SEEDS, "rrc_cu_cp")
     if args.zip:
         write_zip(RRC_SEEDS, args.zip)
+    if args.zip_cu_cp:
+        write_zip(RRC_CU_CP_SEEDS, args.zip_cu_cp)
     print("Done.")
 
 

@@ -18,6 +18,7 @@
 #                                     ngap_pdu_decoder_fuzzer
 #                                     ngap_cu_cp_fuzzer
 #                                     rrc_ue_fuzzer
+#                                     rrc_cu_cp_fuzzer
 #
 # Exit status
 # -----------
@@ -38,6 +39,7 @@ declare -A ALL_TARGETS=(
     ["ngap_pdu_decoder_fuzzer"]="ngap"
     ["ngap_cu_cp_fuzzer"]="ngap_cu_cp"
     ["rrc_ue_fuzzer"]="rrc_ue"
+    ["rrc_cu_cp_fuzzer"]="rrc_cu_cp"
 )
 
 # Optionally restrict which targets run.

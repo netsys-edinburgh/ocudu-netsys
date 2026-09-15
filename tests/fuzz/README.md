@@ -132,9 +132,10 @@ cp $OUT/ngap_pdu_decoder_fuzzer_seed_corpus.zip \
 # OFH: one zip per target
 python3 tests/fuzz/ofh/gen_corpus.py --zip-dir $OUT/
 
-# RRC
+# RRC: one zip per target
 python3 tests/fuzz/rrc/gen_corpus.py \
-    --zip $OUT/rrc_ue_fuzzer_seed_corpus.zip
+    --zip $OUT/rrc_ue_fuzzer_seed_corpus.zip \
+    --zip-cu-cp $OUT/rrc_cu_cp_fuzzer_seed_corpus.zip
 ```
 
 ---
@@ -145,12 +146,14 @@ python3 tests/fuzz/rrc/gen_corpus.py \
 
 ```bash
 # Default: findings/ inside the repository root
-mkdir -p findings/uplane findings/ecpri findings/vlan findings/ngap findings/ngap_cu_cp findings/rrc_ue
+mkdir -p findings/uplane findings/ecpri findings/vlan findings/ngap findings/ngap_cu_cp findings/rrc_ue \
+         findings/rrc_cu_cp
 
 # Alternative: any absolute path
 export FUZZ_OUTPUT_DIR=/tmp/fuzz_findings
 mkdir -p $FUZZ_OUTPUT_DIR/uplane $FUZZ_OUTPUT_DIR/ecpri $FUZZ_OUTPUT_DIR/vlan \
-         $FUZZ_OUTPUT_DIR/ngap $FUZZ_OUTPUT_DIR/ngap_cu_cp $FUZZ_OUTPUT_DIR/rrc_ue
+         $FUZZ_OUTPUT_DIR/ngap $FUZZ_OUTPUT_DIR/ngap_cu_cp $FUZZ_OUTPUT_DIR/rrc_ue \
+         $FUZZ_OUTPUT_DIR/rrc_cu_cp
 ```
 
 `FUZZ_OUTPUT_DIR` is picked up automatically by `run_fuzzers.sh`.  For manual
@@ -259,6 +262,45 @@ each state come from `tests/unittests/rrc/rrc_ue_test_helpers.h`.
 Logs are routed to `/dev/null` at debug level rather than switched off: `log_rrc_message()` and the
 `to_json()` call in `rrc_ue_impl::store_ue_capabilities()` walk the decoded, attacker-controlled
 ASN.1 structures, which makes them part of the surface under test.
+
+### Full-stack RRC / CU-CP fuzzer
+
+```bash
+AFL_FAST_CAL=1 afl-fuzz \
+    -i tests/fuzz/rrc/corpus/rrc_cu_cp \
+    -o findings/rrc_cu_cp \
+    -- ./build_fuzz/tests/fuzz/rrc/rrc_cu_cp_fuzzer @@
+```
+
+Injects RRC messages through a complete CU-CP with an AMF stub and a DU stub attached, so that the
+F1AP, PDCP and CU-CP layers around RRC are exercised on every input. The F1AP wrapper and the PDCP
+header are scaffolding the harness builds; only the RRC container is mutated. Fuzzing the F1AP
+wrapper itself belongs in a target under `tests/fuzz/f1ap`.
+
+A UE is created and released for every input, so a crash reproduces from its input file alone. The
+UE pool is capped at 8, which turns a UE that fails to be released into an immediate failure to
+create the next one rather than a slow leak.
+
+#### Input format
+
+The first byte is a control byte; the remaining bytes are the RRC PDU. It carries neither the
+`integrity_verified` bit nor an SRB selector that `rrc_ue_fuzzer` has: PDCP derives the first from
+the MAC-I, and SRB2 only exists after security activation.
+
+| Bit | Meaning |
+|---|---|
+| 0 | Logical channel: 0 = UL-CCCH, 1 = UL-DCCH on SRB1 |
+| 1 | UE state: 0 = awaiting `RRCSetupComplete`, 1 = connected |
+| 2-7 | Unused |
+
+#### Choosing between the two RRC targets
+
+| | `rrc_ue_fuzzer` | `rrc_cu_cp_fuzzer` |
+|---|---|---|
+| Layers under test | RRC UE only | F1AP, CU-CP, PDCP, RRC |
+| Post-security states | Yes, via the `integrity_verified` bit | No, see above |
+| Throughput (ASan, Debug) | ~1000 exec/s | ~450-900 exec/s |
+| Cross-layer bugs | Out of reach | In reach |
 
 ### Running in parallel (recommended)
 
