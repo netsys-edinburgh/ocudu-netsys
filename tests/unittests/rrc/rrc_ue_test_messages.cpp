@@ -219,6 +219,27 @@ byte_buffer ocudu::ocucp::generate_valid_rrc_reestablishment_request_pdu(pci_t  
   return pdu;
 }
 
+byte_buffer ocudu::ocucp::generate_rrc_resume_request_pdu(std::string                  resume_id,
+                                                          std::string                  resume_mac_i,
+                                                          asn1::rrc_nr::resume_cause_e cause)
+{
+  byte_buffer   pdu;
+  asn1::bit_ref bref{pdu};
+
+  asn1::rrc_nr::ul_ccch_msg_s ul_ccch_msg{};
+  auto&                       ccch_c1        = ul_ccch_msg.msg.set_c1();
+  auto&                       rrc_resume_req = ccch_c1.set_rrc_resume_request();
+  rrc_resume_req.rrc_resume_request.resume_id.from_string(resume_id);
+  rrc_resume_req.rrc_resume_request.resume_mac_i.from_string(resume_mac_i);
+  rrc_resume_req.rrc_resume_request.resume_cause = cause;
+  rrc_resume_req.rrc_resume_request.spare.from_number(0);
+
+  const asn1::OCUDUASN_CODE ret = ul_ccch_msg.pack(bref);
+  ocudu_assert(ret == asn1::OCUDUASN_SUCCESS, "Failed to pack RRC PDU.");
+
+  return pdu;
+}
+
 byte_buffer ocudu::ocucp::generate_rrc_reestablishment_complete_pdu()
 {
   byte_buffer   pdu;

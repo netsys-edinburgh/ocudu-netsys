@@ -275,6 +275,12 @@ protected:
         c_rnti);
   }
 
+  void receive_resume_request()
+  {
+    // Inject RRC Resume Request into UE object.
+    rrc_ue->get_ul_pdu_handler().handle_ul_ccch_pdu(generate_rrc_resume_request_pdu(), to_rnti(0x1234));
+  }
+
   void receive_reestablishment_complete()
   {
     pdcp_ctx->handle_ul_dcch_pdu(srb_id_t::srb1, byte_buffer::create(rrc_reest_complete_pdu).value());

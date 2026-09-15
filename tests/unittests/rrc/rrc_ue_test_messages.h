@@ -34,6 +34,12 @@ byte_buffer generate_valid_rrc_reestablishment_request_pdu(
     std::string                 short_mac_i = "0111011100001000",
     asn1::rrc_nr::reest_cause_e cause       = asn1::rrc_nr::reest_cause_opts::options::other_fail);
 
+/// \brief Generate RRC Container with RRC Resume Request.
+byte_buffer
+generate_rrc_resume_request_pdu(std::string                  resume_id    = "000000000000000000000001",
+                                std::string                  resume_mac_i = "0111011100001000",
+                                asn1::rrc_nr::resume_cause_e cause = asn1::rrc_nr::resume_cause_opts::options::mo_sig);
+
 /// \brief Generate RRC Container with RRC Reestablishment Complete.
 byte_buffer generate_rrc_reestablishment_complete_pdu();
 
