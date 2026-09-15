@@ -41,14 +41,9 @@ variables:
   script:
     - |
       check_if_image_exists() {
-        IMAGE_NAME_TO_CHECK=$1
-        echo "docker manifest inspect $IMAGE_NAME_TO_CHECK"
-        if \
-          docker manifest inspect $IMAGE_NAME_TO_CHECK;
-        then
-          echo "Image ${IMAGE_NAME_TO_CHECK} already exists. Aborting"
-          exit 0
-        fi
+        IMAGE_NAME_TO_CHECK="$1"
+        echo "docker manifest inspect ${IMAGE_NAME_TO_CHECK}"
+        docker manifest inspect "${IMAGE_NAME_TO_CHECK}"
       }
 
     # Validate parameters
@@ -90,24 +85,24 @@ variables:
       [ -z "${REGISTRY_AUTH_PASSWORD}" ] && echo "REGISTRY_AUTH_PASSWORD is mandatory" && exit 1
       echo "${REGISTRY_AUTH_PASSWORD}" | docker login "${REGISTRY_AUTH_SERVER}" -u "${REGISTRY_AUTH_USERNAME}" --password-stdin
 
-    # check if exists
-    - |
-      if [[ "${OVERWRITE}" != "true" ]]; then
-        check_if_image_exists $IMAGE_NAME_VERSION
-      fi
-
     # Prepare build
     - |
-      OUTPUT="type=image,name=${IMAGE_NAME_VERSION}"
+      if [ "${MODE}" = "publish" ] && [ "${MULTI_ARCH_BUILD}" = "true" ]; then
+        # Multi arch build, join to manifest later.
+        IMAGE_NAME_VERSION="${IMAGE_NAME_VERSION}-${PLATFORM}"
+      fi
 
-      # Publish
-      if [ ${MODE} = "publish" ]; then
-        if [[ ${MULTI_ARCH_BUILD} == "true" ]]; then
-          # Multi arch build, join to manifest later.
-          IMAGE_NAME_VERSION="${IMAGE_NAME_VERSION}-${PLATFORM}"
-          OUTPUT="type=image,name=${IMAGE_NAME_VERSION}"
-        fi
+      OUTPUT="type=image,name=${IMAGE_NAME_VERSION}"
+      if [ "${MODE}" = "publish" ]; then
         OUTPUT="${OUTPUT},push=true"
+      fi
+
+    # Check if the image must be built
+    - |
+      SKIP_IMAGE_BUILD="false"
+      if [ "${OVERWRITE}" != "true" ] && check_if_image_exists "${IMAGE_NAME_VERSION}"; then
+        echo "Image ${IMAGE_NAME_VERSION} already exists. Skipping build and continuing with post-build steps"
+        SKIP_IMAGE_BUILD="true"
       fi
 
     # Use and generate build cache
@@ -121,15 +116,17 @@ variables:
       TARGET_OPT=""
       [ -n "${DOCKER_TARGET}" ] && TARGET_OPT="--opt target=${DOCKER_TARGET}"
     - |
-      sh -c "buildctl-daemonless.sh build \
-        --progress=plain \
-        --opt platform=${PLATFORM_OS}/${PLATFORM} \
-        --frontend=dockerfile.v0 \
-        --local context="${CONTEXT}" \
-        --local dockerfile=${DOCKERFILE} \
-        ${BUILD_ARGS} \
-        ${TARGET_OPT} \
-        --output ${OUTPUT}"
+      if [ "${SKIP_IMAGE_BUILD}" != "true" ]; then
+        sh -c "buildctl-daemonless.sh build \
+          --progress=plain \
+          --opt platform=${PLATFORM_OS}/${PLATFORM} \
+          --frontend=dockerfile.v0 \
+          --local context="${CONTEXT}" \
+          --local dockerfile=${DOCKERFILE} \
+          ${BUILD_ARGS} \
+          ${TARGET_OPT} \
+          --output ${OUTPUT}"
+      fi
 
     # Attestation functions
     - |
