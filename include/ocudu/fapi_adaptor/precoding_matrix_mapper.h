@@ -37,6 +37,8 @@ struct precoding_matrix_mapper_codebook_offset_configuration {
   std::vector<unsigned> pdcch_codebook_offsets;
   /// Codebook offsets for CSI-RS. Each entry represents a layer.
   std::vector<unsigned> csi_rs_codebook_offsets;
+  /// Codebook offsets for DL-PRS. Each entry represents a layer.
+  std::vector<unsigned> prs_codebook_offsets;
 };
 
 /// \brief Precoding matrix mapper.
@@ -77,6 +79,8 @@ private:
   std::vector<unsigned> pdcch_codebook_offsets;
   /// Codebook offsets for CSI-RS. Each entry represents a layer.
   std::vector<unsigned> csi_rs_codebook_offsets;
+  /// Codebook offsets for DL-PRS. Each entry represents a layer.
+  std::vector<unsigned> prs_codebook_offsets;
 };
 
 } // namespace fapi_adaptor

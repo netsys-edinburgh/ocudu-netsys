@@ -26,6 +26,7 @@ add_library(ocudu_ran
         pdsch/pdsch_dmrs_symbol_mask.cpp
         pdsch/pdsch_mcs.cpp
         pdsch/pdsch_antenna_port_mapping.cpp
+        prs/prs.cpp
         prach/prach_configuration.cpp
         prach/prach_cyclic_shifts.cpp
         prach/prach_frequency_mapping.cpp

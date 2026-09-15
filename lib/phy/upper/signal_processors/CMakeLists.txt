@@ -46,6 +46,7 @@ add_library(ocudu_prs_generator STATIC
     prs/factories.cpp
     prs/prs_generator_impl.cpp
 )
+target_link_libraries(ocudu_prs_generator ocudu_ran)
 
 add_library(ocudu_ptrs_generator STATIC
     ptrs/ptrs_pdsch_generator_factory.cpp

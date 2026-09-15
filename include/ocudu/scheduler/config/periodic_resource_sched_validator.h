@@ -9,8 +9,8 @@
 
 namespace ocudu {
 
-/// \brief Checks that the cell's static resources (SSB, CSI-RS, DL-PRS, etc.) do not collide with each other in
+/// \brief Checks that the cell's periodic resources (SSB, CSI-RS, DL-PRS, etc.) do not collide with each other in
 /// time and frequency.
-error_type<std::string> check_static_resource_collisions(const ran_cell_config& ran);
+error_type<std::string> check_periodic_resource_collisions(const ran_cell_config& ran);
 
 } // namespace ocudu

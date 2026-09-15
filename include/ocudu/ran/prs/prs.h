@@ -9,8 +9,6 @@
 
 #include "ocudu/adt/bounded_bitset.h"
 #include "ocudu/ran/prs/prs_constants.h"
-#include "ocudu/support/ocudu_assert.h"
-#include <array>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -70,41 +68,14 @@ struct prs_muting_option2 {
 /// \brief Determines whether the combination of time domain duration and comb size is valid.
 ///
 /// The valid combinations are given in TS38.211 Section 7.4.1.7.3.
-inline bool prs_valid_num_symbols_and_comb_size(prs_num_symbols nsymb, prs_comb_size comb_sz)
-{
-  uint8_t nsymb_u8   = static_cast<uint8_t>(nsymb);
-  uint8_t comb_sz_u8 = static_cast<uint8_t>(comb_sz);
-  return (nsymb_u8 >= comb_sz_u8) && (nsymb_u8 % comb_sz_u8 == 0);
-}
+bool prs_valid_num_symbols_and_comb_size(prs_num_symbols nsymb, prs_comb_size comb_sz);
 
 /// \brief Frequency offset \f$k^{\prime}\f$ of a downlink PRS resource, as a function of the symbol index within the
 /// resource, \f$l - l_{start}^{PRS}\f$.
 ///
 /// \remark See TS 38.211, Table 7.4.1.7.3-1. The pattern is periodic with period \c comb_sz, so it is defined here
 /// only for one period and indexed modulo it.
-inline unsigned get_prs_freq_offset(prs_comb_size comb_sz, unsigned l_minus_lstart)
-{
-  switch (comb_sz) {
-    case prs_comb_size::two: {
-      static constexpr std::array<uint8_t, 2> offsets = {0, 1};
-      return offsets[l_minus_lstart % offsets.size()];
-    }
-    case prs_comb_size::four: {
-      static constexpr std::array<uint8_t, 4> offsets = {0, 2, 1, 3};
-      return offsets[l_minus_lstart % offsets.size()];
-    }
-    case prs_comb_size::six: {
-      static constexpr std::array<uint8_t, 6> offsets = {0, 3, 1, 4, 2, 5};
-      return offsets[l_minus_lstart % offsets.size()];
-    }
-    case prs_comb_size::twelve: {
-      static constexpr std::array<uint8_t, 12> offsets = {0, 6, 3, 9, 1, 7, 4, 10, 2, 8, 5, 11};
-      return offsets[l_minus_lstart % offsets.size()];
-    }
-  }
-  ocudu_assert(false, "Invalid PRS comb size");
-  return 0;
-}
+unsigned get_prs_freq_offset(prs_comb_size comb_sz, unsigned l_minus_lstart);
 
 /// \brief Configuration of a single DL-PRS resource within a PRS resource set.
 ///

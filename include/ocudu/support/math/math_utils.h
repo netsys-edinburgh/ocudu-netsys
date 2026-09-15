@@ -8,10 +8,10 @@
 
 #include "ocudu/support/math/pow2_utils.h"
 #include "ocudu/support/ocudu_assert.h"
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <numeric>
-#include <tuple>
 
 namespace ocudu {
 
@@ -106,7 +106,7 @@ Integer lcm(It begin, It end)
 /// \param[in] a First operand.
 /// \param[in] b Second operand.
 /// \return A tuple {g, x, y}, where g = gcd(a, b) and x, y are Bezout coefficients such that a*x + b*y = g.
-inline std::tuple<int64_t, int64_t, int64_t> extended_gcd(int64_t a, int64_t b)
+inline std::array<int64_t, 3> extended_gcd(int64_t a, int64_t b)
 {
   int64_t old_r = a;
   int64_t r     = b;

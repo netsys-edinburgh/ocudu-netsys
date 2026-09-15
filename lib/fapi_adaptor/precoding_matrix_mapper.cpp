@@ -20,12 +20,14 @@ precoding_matrix_mapper::precoding_matrix_mapper(unsigned sector_id_,
   ssb_codebook_offsets(config.ssb_codebook_offsets),
   pdsch_codebook_offsets(config.pdsch_codebook_offsets),
   pdcch_codebook_offsets(config.pdcch_codebook_offsets),
-  csi_rs_codebook_offsets(config.csi_rs_codebook_offsets)
+  csi_rs_codebook_offsets(config.csi_rs_codebook_offsets),
+  prs_codebook_offsets(config.prs_codebook_offsets)
 {
   ocudu_assert(!ssb_codebook_offsets.empty(), "Invalid offset configuration");
   ocudu_assert(!pdsch_codebook_offsets.empty(), "Invalid offset configuration");
   ocudu_assert(!pdcch_codebook_offsets.empty(), "Invalid offset configuration");
   ocudu_assert(!csi_rs_codebook_offsets.empty(), "Invalid offset configuration");
+  ocudu_assert(!prs_codebook_offsets.empty(), "Invalid offset configuration");
 }
 
 unsigned precoding_matrix_mapper::map(const mac_csi_rs_precoding_info& precoding_info) const
@@ -41,9 +43,8 @@ unsigned precoding_matrix_mapper::map(const mac_ssb_precoding_info& precoding_in
 unsigned precoding_matrix_mapper::map(const mac_prs_precoding_info& precoding_info) const
 {
   // [Implementation-defined] The DL-PRS is transmitted on a single antenna port, as per TS 38.211, Section 7.2, so it
-  // carries one layer and no MIMO precoding applies. The codebook has no DL-PRS entry, so the one-layer/one-port SSB
-  // entry is reused.
-  return ssb_codebook_offsets[0] + get_ssb_precoding_matrix_index();
+  // carries one layer and no MIMO precoding applies.
+  return prs_codebook_offsets[0] + get_prs_precoding_matrix_index();
 }
 
 unsigned precoding_matrix_mapper::map(const mac_pdcch_precoding_info& precoding_info) const

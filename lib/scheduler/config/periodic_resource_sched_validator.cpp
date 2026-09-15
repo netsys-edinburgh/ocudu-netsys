@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
-#include "ocudu/scheduler/config/static_sched_validator.h"
+#include "ocudu/scheduler/config/periodic_resource_sched_validator.h"
 #include "ocudu/adt/expected.h"
 #include "ocudu/adt/format.h"
 #include "ocudu/ran/band_helper.h"
@@ -295,7 +295,7 @@ void append(std::vector<periodic_occasion>& dst, std::vector<periodic_occasion> 
 
 } // namespace
 
-error_type<std::string> ocudu::check_static_resource_collisions(const ran_cell_config& ran)
+error_type<std::string> ocudu::check_periodic_resource_collisions(const ran_cell_config& ran)
 {
   const serving_cell_config serv_cell_cfg = config_helpers::make_default_ue_cell_config(ran).serv_cell_cfg;
 

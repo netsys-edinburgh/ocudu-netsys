@@ -17,10 +17,10 @@ static unsigned get_max_num_codebooks(unsigned nof_ports)
 {
   static const slotted_array<unsigned, 9> max_num_codebooks = [] {
     slotted_array<unsigned, 9> result;
-    result.insert(1, 6);
-    result.insert(2, 11);
-    result.insert(4, 261);
-    result.insert(8, 901);
+    result.insert(1, 7);
+    result.insert(2, 12);
+    result.insert(4, 262);
+    result.insert(8, 902);
     return result;
   }();
 
@@ -43,6 +43,16 @@ static unsigned generate_pdcch(unsigned offset, unsigned nof_ports, precoding_ma
 {
   precoding_weight_matrix precoding = make_one_layer_one_port(nof_ports, 0);
   unsigned                pm_index  = offset + get_pdcch_precoding_matrix_index();
+  repo_builder.add(pm_index, precoding);
+
+  return ++offset;
+}
+
+/// Generates DL-PRS codebooks and precoding matrices for the given number of ports.
+static unsigned generate_prs(unsigned offset, unsigned nof_ports, precoding_matrix_repository_builder& repo_builder)
+{
+  precoding_weight_matrix precoding = make_one_layer_one_port(nof_ports, 0);
+  unsigned                pm_index  = offset + get_prs_precoding_matrix_index();
   repo_builder.add(pm_index, precoding);
 
   return ++offset;
@@ -179,7 +189,9 @@ struct codebook_table_generator {
     mapper_offsets.pdcch_codebook_offsets.push_back(offset);
     offset = generate_pdcch(offset, nof_ports, repo_builder);
     mapper_offsets.csi_rs_codebook_offsets.push_back(offset);
-    generate_csi_rs(offset, nof_ports, repo_builder);
+    offset = generate_csi_rs(offset, nof_ports, repo_builder);
+    mapper_offsets.prs_codebook_offsets.push_back(offset);
+    generate_prs(offset, nof_ports, repo_builder);
   }
 
   void operator()(const pmi_codebook_two_port&) const
@@ -199,7 +211,9 @@ struct codebook_table_generator {
     mapper_offsets.pdsch_codebook_offsets.push_back(offset);
     offset = generate_pdsch_2_ports_2_layers(offset, repo_builder);
     mapper_offsets.csi_rs_codebook_offsets.push_back(offset);
-    generate_csi_rs(offset, nof_ports, repo_builder);
+    offset = generate_csi_rs(offset, nof_ports, repo_builder);
+    mapper_offsets.prs_codebook_offsets.push_back(offset);
+    generate_prs(offset, nof_ports, repo_builder);
   }
 
   void operator()(const pmi_codebook_typeI_single_panel& codebook_config) const
@@ -219,7 +233,9 @@ struct codebook_table_generator {
       offset = generate_pdsch_sp_type1(offset, codebook_config, nof_layers, repo_builder);
     }
     mapper_offsets.csi_rs_codebook_offsets.push_back(offset);
-    generate_csi_rs(offset, nof_ports, repo_builder);
+    offset = generate_csi_rs(offset, nof_ports, repo_builder);
+    mapper_offsets.prs_codebook_offsets.push_back(offset);
+    generate_prs(offset, nof_ports, repo_builder);
   }
 
   void operator()(const pmi_codebook_typeII&) const

@@ -17,13 +17,13 @@
 #include "ocudu/ran/prs/prs_constants.h"
 #include "ocudu/ran/srs/srs_bandwidth_configuration.h"
 #include "ocudu/ran/ssb/ssb_mapping.h"
+#include "ocudu/scheduler/config/periodic_resource_sched_validator.h"
 #include "ocudu/scheduler/config/pucch_guardbands.h"
 #include "ocudu/scheduler/config/pucch_resource_generator.h"
 #include "ocudu/scheduler/config/sched_cell_config_helpers.h"
 #include "ocudu/scheduler/config/serving_cell_config.h"
 #include "ocudu/scheduler/config/serving_cell_config_factory.h"
 #include "ocudu/scheduler/config/serving_cell_config_validator.h"
-#include "ocudu/scheduler/config/static_sched_validator.h"
 #include "ocudu/scheduler/sched_consts.h"
 #include "ocudu/support/config/validator_helpers.h"
 
@@ -1153,7 +1153,7 @@ check_outcome odu::is_du_cell_config_valid(const du_cell_config& cell_cfg)
   HANDLE_ERROR(check_ntn_config(cell_cfg));
   HANDLE_ERROR(check_tac_list(cell_cfg));
   HANDLE_ERROR(check_prs_config(cell_cfg));
-  HANDLE_ERROR(check_static_resource_collisions(cell_cfg.ran));
+  HANDLE_ERROR(check_periodic_resource_collisions(cell_cfg.ran));
   // TODO: Remaining.
   return {};
 }
