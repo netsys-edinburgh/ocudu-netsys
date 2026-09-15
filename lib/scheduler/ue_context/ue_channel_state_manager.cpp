@@ -19,11 +19,11 @@ ue_channel_state_manager::ue_channel_state_manager(const scheduler_ue_expert_con
 {
   // Set initial precoding value when no CSI has yet been received.
   if (nof_dl_ports == 2) {
-    recommended_prg_info.resize(2, pdsch_precoding_info::prg_info{pmi_two_antenna_port{.pmi = 0}});
+    recommended_prg_info.resize(2, precoding_matrix_indicator{pmi_two_antenna_port{.pmi = 0}});
   } else if (nof_dl_ports == 4) {
     recommended_prg_info.resize(
         4,
-        pdsch_precoding_info::prg_info{pmi_typeI_single_panel{
+        precoding_matrix_indicator{pmi_typeI_single_panel{
             .panel_config = {pmi_codebook_single_panel_config::two_one, pmi_codebook_typeI_mode::one},
             .i_1_1        = 0,
             .i_1_2        = std::nullopt,
@@ -33,7 +33,7 @@ ue_channel_state_manager::ue_channel_state_manager(const scheduler_ue_expert_con
     // Capped at MAX_NOF_LAYERS_PER_CODEWORD layers, as two codewords are not yet supported.
     recommended_prg_info.resize(
         4,
-        pdsch_precoding_info::prg_info{pmi_typeI_single_panel{
+        precoding_matrix_indicator{pmi_typeI_single_panel{
             .panel_config = {pmi_codebook_single_panel_config::four_one, pmi_codebook_typeI_mode::one},
             .i_1_1        = 0,
             .i_1_2        = std::nullopt,

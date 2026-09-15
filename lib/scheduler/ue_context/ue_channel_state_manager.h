@@ -49,17 +49,17 @@ public:
   unsigned get_recommended_pusch_tpmi(unsigned nof_layers) const;
 
   /// \brief Fetches the precoding codebook to be used in DL based on reported PMI and the chosen nof layers.
-  std::optional<pdsch_precoding_info> get_precoding(unsigned chosen_nof_layers, unsigned nof_rbs) const
+  precoding_and_beamforming_info get_precoding(unsigned chosen_nof_layers, unsigned nof_rbs) const
   {
     ocudu_assert(chosen_nof_layers <= nof_dl_ports, "Invalid number of layers chosen");
-    std::optional<pdsch_precoding_info> precoding_info;
     if (nof_dl_ports <= 1) {
       // In case of 1 DL port, no precoding is used.
-      return precoding_info;
+      return make_default_precoding();
     }
-    precoding_info.emplace();
-    precoding_info->nof_rbs_per_prg = nof_rbs;
-    precoding_info->prg_infos.emplace_back(recommended_prg_info[nof_layers_to_index(chosen_nof_layers)]);
+    precoding_and_beamforming_info precoding_info;
+    precoding_info.nof_rbs_per_prg = nof_rbs;
+    precoding_info.prgs.push_back(prg_precoding_and_beamforming{
+        .pmi = recommended_prg_info[nof_layers_to_index(chosen_nof_layers)], .beams = {}});
     return precoding_info;
   }
 
@@ -112,7 +112,7 @@ private:
   unsigned recommended_dl_layers = 1;
 
   /// \brief List of Recommended PMIs for different number of active layers. Position n is for layer n+1.
-  static_vector<pdsch_precoding_info::prg_info, NOF_LAYER_CHOICES> recommended_prg_info;
+  static_vector<precoding_matrix_indicator, NOF_LAYER_CHOICES> recommended_prg_info;
 
   /// Latest CSI report received from the UE.
   std::optional<csi_report_data> latest_csi_report;

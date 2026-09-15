@@ -26,7 +26,10 @@ TEST(ue_channel_state_manager_test, single_port_uses_no_precoding)
   const ue_channel_state_manager csm = make_channel_state_manager(1);
 
   EXPECT_EQ(csm.get_nof_dl_layers(), 1);
-  EXPECT_FALSE(csm.get_precoding(1, test_nof_rbs).has_value());
+  const precoding_and_beamforming_info precoding = csm.get_precoding(1, test_nof_rbs);
+  EXPECT_TRUE(precoding.is_wideband());
+  ASSERT_EQ(precoding.prgs.size(), 1);
+  EXPECT_TRUE(std::holds_alternative<std::monostate>(precoding.prgs[0].pmi));
 }
 
 // With 2 antenna ports the initial precoding uses a two-antenna-port PMI for every supported number of layers.
@@ -36,10 +39,9 @@ TEST(ue_channel_state_manager_test, two_ports_use_two_antenna_port_pmi)
 
   EXPECT_EQ(csm.get_nof_dl_layers(), 1);
   for (unsigned nof_layers = 1; nof_layers <= 2; ++nof_layers) {
-    const std::optional<pdsch_precoding_info> precoding = csm.get_precoding(nof_layers, test_nof_rbs);
-    ASSERT_TRUE(precoding.has_value());
-    ASSERT_FALSE(precoding->prg_infos.empty());
-    EXPECT_TRUE(std::holds_alternative<pmi_two_antenna_port>(precoding->prg_infos[0]))
+    const precoding_and_beamforming_info precoding = csm.get_precoding(nof_layers, test_nof_rbs);
+    ASSERT_FALSE(precoding.prgs.empty());
+    EXPECT_TRUE(std::holds_alternative<pmi_two_antenna_port>(precoding.prgs[0].pmi))
         << "unexpected PMI type for nof_layers=" << nof_layers;
   }
 }
@@ -51,10 +53,9 @@ TEST(ue_channel_state_manager_test, four_ports_use_two_one_codebook)
 
   EXPECT_EQ(csm.get_nof_dl_layers(), 1);
   for (unsigned nof_layers = 1; nof_layers <= 4; ++nof_layers) {
-    const std::optional<pdsch_precoding_info> precoding = csm.get_precoding(nof_layers, test_nof_rbs);
-    ASSERT_TRUE(precoding.has_value());
-    ASSERT_FALSE(precoding->prg_infos.empty());
-    EXPECT_EQ(std::get<pmi_typeI_single_panel>(precoding->prg_infos[0]).panel_config.n1_n2,
+    const precoding_and_beamforming_info precoding = csm.get_precoding(nof_layers, test_nof_rbs);
+    ASSERT_FALSE(precoding.prgs.empty());
+    EXPECT_EQ(std::get<pmi_typeI_single_panel>(precoding.prgs[0].pmi).panel_config.n1_n2,
               pmi_codebook_single_panel_config::two_one)
         << "unexpected codebook for nof_layers=" << nof_layers;
   }
@@ -68,10 +69,9 @@ TEST(ue_channel_state_manager_test, eight_ports_use_four_one_codebook)
 
   EXPECT_EQ(csm.get_nof_dl_layers(), 1);
   for (unsigned nof_layers = 1; nof_layers <= pdsch_constants::MAX_NOF_LAYERS_PER_CODEWORD; ++nof_layers) {
-    const std::optional<pdsch_precoding_info> precoding = csm.get_precoding(nof_layers, test_nof_rbs);
-    ASSERT_TRUE(precoding.has_value());
-    ASSERT_FALSE(precoding->prg_infos.empty());
-    EXPECT_EQ(std::get<pmi_typeI_single_panel>(precoding->prg_infos[0]).panel_config.n1_n2,
+    const precoding_and_beamforming_info precoding = csm.get_precoding(nof_layers, test_nof_rbs);
+    ASSERT_FALSE(precoding.prgs.empty());
+    EXPECT_EQ(std::get<pmi_typeI_single_panel>(precoding.prgs[0].pmi).panel_config.n1_n2,
               pmi_codebook_single_panel_config::four_one)
         << "unexpected codebook for nof_layers=" << nof_layers;
   }

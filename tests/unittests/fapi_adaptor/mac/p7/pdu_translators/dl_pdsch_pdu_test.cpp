@@ -120,8 +120,8 @@ TEST(mac_fapi_pdsch_pdu_conversor_test, valid_dl_msg_alloc_pdu_should_pass)
   ASSERT_EQ(pdu.pdsch_cfg.harq_id, fapi_pdu.context->get_h_id());
   ASSERT_EQ(bool(pdu.context.nof_retxs), !fapi_pdu.context->is_new_data());
 
-  const auto& mac_prec  = *pdu.pdsch_cfg.precoding;
+  const auto& mac_prec  = pdu.pdsch_cfg.precoding_and_beamforming;
   const auto& fapi_prec = fapi_pdu.precoding_and_beamforming;
-  ASSERT_EQ(mac_prec.nof_rbs_per_prg, fapi_prec.prg_size);
+  ASSERT_EQ(mac_prec.is_wideband() ? nof_prbs : mac_prec.nof_rbs_per_prg, fapi_prec.prg_size);
   ASSERT_FALSE(std::get<1>(pm_tools)->get_precoding_matrix(fapi_prec.prg.pm_index).get_nof_layers() == 0);
 }

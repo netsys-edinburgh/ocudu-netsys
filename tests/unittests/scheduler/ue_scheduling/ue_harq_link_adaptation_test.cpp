@@ -84,7 +84,7 @@ protected:
                                   search_space_set_type::ue_specific,
                                   dci_dl_format::f1_1,
                                   h_dl.id(),
-                                  std::nullopt};
+                                  make_default_precoding()};
     const dl_msg_alloc      ue_pdsch{
         pdsch,
              {{dl_msg_tb_info{{dl_msg_lc_info{lcid_dl_sch_t{lcid_t::LCID_SRB1}, cw.tb_size_bytes.value() - 4, {}}}}}},

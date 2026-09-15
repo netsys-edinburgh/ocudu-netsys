@@ -208,6 +208,9 @@ void ocudu::build_pdsch_f1_0_si_rnti(pdsch_information&                   pdsch,
       dci_cfg.system_information_indicator == 0 ? search_space_set_type::type0 : search_space_set_type::type0A;
   pdsch.dci_fmt = dci_dl_format::f1_0;
 
+  // [Implementation-defined] A PDSCH scheduled with DCI format 1_0 is neither precoded nor beamformed.
+  pdsch.precoding_and_beamforming = make_default_precoding();
+
   // Populate power offsets.
   if (not cell_cfg.nzp_csi_rs_list.empty()) {
     // [Implementation-defined] It is assumed that same powerControlOffset and powerControlOffsetSS is configured in
@@ -254,6 +257,9 @@ void ocudu::build_pdsch_f1_0_p_rnti(pdsch_information&                  pdsch,
   pdsch.vrb_prb_mapping = vrb_to_prb::mapping_type::non_interleaved;
   pdsch.ss_set_type     = search_space_set_type::type2;
   pdsch.dci_fmt         = dci_dl_format::f1_0;
+
+  // [Implementation-defined] A PDSCH scheduled with DCI format 1_0 is neither precoded nor beamformed.
+  pdsch.precoding_and_beamforming = make_default_precoding();
 
   // Populate power offsets.
   if (not cell_cfg.nzp_csi_rs_list.empty()) {
@@ -308,6 +314,9 @@ void ocudu::build_pdsch_f1_0_ra_rnti(pdsch_information&                   pdsch,
   pdsch.ss_set_type     = search_space_set_type::type1;
   pdsch.dci_fmt         = dci_dl_format::f1_0;
 
+  // [Implementation-defined] A PDSCH scheduled with DCI format 1_0 is neither precoded nor beamformed.
+  pdsch.precoding_and_beamforming = make_default_precoding();
+
   // Populate power offsets.
   if (not cell_cfg.nzp_csi_rs_list.empty()) {
     // [Implementation-defined] It is assumed that same powerControlOffset and powerControlOffsetSS is configured in
@@ -353,6 +362,9 @@ void ocudu::build_pdsch_f1_0_tc_rnti(pdsch_information&                   pdsch,
   pdsch.dci_fmt     = dci_dl_format::f1_0;
   pdsch.harq_id     = to_harq_id(dci_cfg.harq_process_number);
   pdsch.nof_layers  = 1U;
+
+  // [Implementation-defined] A PDSCH scheduled with DCI format 1_0 is neither precoded nor beamformed.
+  pdsch.precoding_and_beamforming = make_default_precoding();
 
   // Populate power offsets.
   if (not cell_cfg.nzp_csi_rs_list.empty()) {
@@ -405,6 +417,9 @@ void ocudu::build_pdsch_f1_0_c_rnti(pdsch_information&                  pdsch,
   pdsch.n_id =
       get_pdsch_n_id(cell_cfg.params.pci, active_bwp, dci_dl_format::f1_0, ss_info.cfg->is_common_search_space());
   pdsch.nof_layers = 1;
+
+  // [Implementation-defined] A PDSCH scheduled with DCI format 1_0 is neither precoded nor beamformed.
+  pdsch.precoding_and_beamforming = make_default_precoding();
 
   // Populate power offsets.
   if (not cell_cfg.nzp_csi_rs_list.empty()) {
@@ -475,7 +490,7 @@ void ocudu::build_pdsch_f1_1_c_rnti(pdsch_information&              pdsch,
   cw.tb_size_bytes   = mcs_tbs_info.tbs;
 
   // Beamforming and precoding.
-  pdsch.precoding = cs_mgr.get_precoding(pdsch_cfg.nof_layers, vrbs.length());
+  pdsch.precoding_and_beamforming = cs_mgr.get_precoding(pdsch_cfg.nof_layers, vrbs.length());
 
   // Populate power offsets.
   if (not cell_cfg.nzp_csi_rs_list.empty()) {

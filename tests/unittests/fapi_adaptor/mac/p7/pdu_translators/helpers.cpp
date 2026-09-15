@@ -267,16 +267,18 @@ static pdsch_information fill_valid_pdsch_information(coreset_configuration& cor
   info.mcs_table       = pdsch_mcs_table::qam64;
   info.codewords.push_back(pdsch_codeword{{modulation_scheme::QAM16, 220.F}, 5, 2, units::bytes{128}});
 
+  info.precoding_and_beamforming = make_default_precoding();
   if (nof_ports == 2) {
-    pdsch_precoding_info& pm               = info.precoding.emplace();
-    pm.nof_rbs_per_prg                     = 273U;
-    precoding_matrix_indicator& csi_report = pm.prg_infos.emplace_back();
-    auto&                       pmi        = csi_report.emplace<pmi_two_antenna_port>();
-    pmi.pmi                                = 1;
+    precoding_and_beamforming_info& pm = info.precoding_and_beamforming;
+    pm                                 = {};
+    pm.nof_rbs_per_prg                 = 273U;
+    auto& pmi                          = pm.prgs.emplace_back().pmi.emplace<pmi_two_antenna_port>();
+    pmi.pmi                            = 1;
   } else if (nof_ports == 4) {
-    pdsch_precoding_info& pm = info.precoding.emplace();
-    pm.nof_rbs_per_prg       = 273U;
-    pm.prg_infos.emplace_back().emplace<pmi_typeI_single_panel>(pmi_typeI_single_panel{
+    precoding_and_beamforming_info& pm = info.precoding_and_beamforming;
+    pm                                 = {};
+    pm.nof_rbs_per_prg                 = 273U;
+    pm.prgs.emplace_back().pmi.emplace<pmi_typeI_single_panel>(pmi_typeI_single_panel{
         pmi_codebook_typeI_single_panel{pmi_codebook_single_panel_config::two_one, pmi_codebook_typeI_mode::one},
         1,
         std::nullopt,

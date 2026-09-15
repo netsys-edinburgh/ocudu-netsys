@@ -10,7 +10,7 @@
 #include "ocudu/ran/logical_channel/lcid_dl_sch.h"
 #include "ocudu/ran/pdcch/dci_format.h"
 #include "ocudu/ran/pdsch/pdsch_mcs.h"
-#include "ocudu/ran/precoding/precoding_constants.h"
+#include "ocudu/ran/precoding/precoding_and_beamforming_info.h"
 #include "ocudu/ran/resource_allocation/vrb_to_prb.h"
 #include "ocudu/ran/rnti.h"
 #include "ocudu/ran/sib/sib_type.h"
@@ -23,18 +23,6 @@
 #include <optional>
 
 namespace ocudu {
-
-/// The precoding information associated with PDSCH PDUs.
-struct pdsch_precoding_info {
-  /// Precoding Resource Block Group (PRG) information.
-  using prg_info = precoding_matrix_indicator;
-
-  /// \brief Size in RBs of a precoding resource block group (PRG) to which same precoding and digital beamforming gets
-  /// applied. Values: {1,...,275}.
-  unsigned nof_rbs_per_prg;
-  /// PRG list.
-  static_vector<prg_info, precoding_constants::MAX_NOF_PRG> prg_infos;
-};
 
 /// PDSCH codeword.
 struct pdsch_codeword {
@@ -82,8 +70,8 @@ struct pdsch_information {
   dci_dl_format            dci_fmt;
   /// HARQ process number as per TS 38.212 Section 7.3.1.1. Values: {0,...,15}.
   harq_id_t harq_id;
-  /// Precoding information for the PDSCH. This field is empty in case of 1-antenna port setups.
-  std::optional<pdsch_precoding_info> precoding;
+  /// Precoding and beamforming of the PDSCH.
+  precoding_and_beamforming_info precoding_and_beamforming;
   /// Transmit power information for the PDSCH.
   tx_power_pdsch_information tx_pwr_info;
 };

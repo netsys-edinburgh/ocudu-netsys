@@ -74,25 +74,22 @@ static void fill_power_parameters(fapi::dl_pdsch_pdu_builder& builder, const tx_
                                                   fapi::to_power_control_offset_ss(power_params.pwr_ctrl_offset_ss));
 }
 
-static void fill_precoding_and_beamforming(fapi::dl_pdsch_pdu_builder&                builder,
-                                           const std::optional<pdsch_precoding_info>& mac_info,
-                                           const precoding_matrix_mapper&             pm_mapper,
-                                           unsigned                                   nof_layers,
-                                           unsigned                                   cell_nof_prbs)
+static void fill_precoding_and_beamforming(fapi::dl_pdsch_pdu_builder&           builder,
+                                           const precoding_and_beamforming_info& mac_info,
+                                           const precoding_matrix_mapper&        pm_mapper,
+                                           unsigned                              nof_layers,
+                                           unsigned                              cell_nof_prbs)
 {
   fapi::tx_precoding_and_beamforming_pdu_builder pm_bf_builder = builder.get_tx_precoding_and_beamforming_pdu_builder();
-  pm_bf_builder.set_prg_parameters((mac_info) ? mac_info->nof_rbs_per_prg : cell_nof_prbs);
+  // A wideband transmission spans the complete allocation, which this interface expresses in cell PRBs.
+  pm_bf_builder.set_prg_parameters(mac_info.is_wideband() ? cell_nof_prbs : mac_info.nof_rbs_per_prg);
 
-  if (!mac_info) {
+  for (const auto& prg : mac_info.prgs) {
     mac_pdsch_precoding_info info;
-    pm_bf_builder.set_pmi(pm_mapper.map(info, nof_layers));
-
-    return;
-  }
-
-  for (const auto& prg : mac_info->prg_infos) {
-    mac_pdsch_precoding_info info;
-    info.report = prg;
+    // A monostate PMI selects no precoding, which this interface expresses as an omnidirectional matrix.
+    if (not std::holds_alternative<std::monostate>(prg.pmi)) {
+      info.report = prg.pmi;
+    }
     pm_bf_builder.set_pmi(pm_mapper.map(info, nof_layers));
   }
 }
@@ -243,7 +240,7 @@ void ocudu::fapi_adaptor::convert_pdsch_mac_to_fapi(fapi::dl_pdsch_pdu_builder& 
 
   // Precoding and beamforming.
   fill_precoding_and_beamforming(
-      builder, mac_pdu.pdsch_cfg.precoding, pm_mapper, mac_pdu.pdsch_cfg.nof_layers, cell_nof_prbs);
+      builder, mac_pdu.pdsch_cfg.precoding_and_beamforming, pm_mapper, mac_pdu.pdsch_cfg.nof_layers, cell_nof_prbs);
 
   // Codeword information.
   fill_codeword_information(
