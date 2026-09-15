@@ -10,11 +10,21 @@
 
 using namespace ocudu;
 
+/// Function to call when an error is reported by the application.
+static void app_error_report_handler()
+{
+  ocudulog::fetch_basic_logger("APP").error("Emergency flush of the logger");
+  ocudulog::flush();
+}
+
 class sctp_network_server_peer_test : public ::testing::TestWithParam<bool>
 {
 protected:
   sctp_network_server_peer_test()
   {
+    // Set the application error handler.
+    set_error_handler(app_error_report_handler);
+
     ocudulog::fetch_basic_logger("SCTP-GW").set_level(ocudulog::basic_levels::debug);
     ocudulog::init();
 
