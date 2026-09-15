@@ -41,3 +41,4 @@ add_custom_target(fuzz_targets)
 
 add_subdirectory(ofh)
 add_subdirectory(ngap)
+add_subdirectory(rrc)

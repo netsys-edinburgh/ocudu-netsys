@@ -111,6 +111,7 @@ The seed corpus can be generated using:
 ```bash
 python3 tests/fuzz/ofh/gen_corpus.py
 python3 tests/fuzz/ngap/gen_corpus.py
+python3 tests/fuzz/rrc/gen_corpus.py
 ```
 
 Each script writes binary seed files into the corpus sub-directories of its
@@ -118,7 +119,7 @@ own layer.
 
 ### OSS-Fuzz zip format
 
-Both scripts accept an optional flag to write seeds as a zip file suitable
+Each script accepts an optional flag to write seeds as a zip file suitable
 for the `$OUT/<target>_seed_corpus.zip` convention expected by OSS-Fuzz:
 
 ```bash
@@ -130,6 +131,10 @@ cp $OUT/ngap_pdu_decoder_fuzzer_seed_corpus.zip \
 
 # OFH: one zip per target
 python3 tests/fuzz/ofh/gen_corpus.py --zip-dir $OUT/
+
+# RRC
+python3 tests/fuzz/rrc/gen_corpus.py \
+    --zip $OUT/rrc_ue_fuzzer_seed_corpus.zip
 ```
 
 ---
@@ -140,12 +145,12 @@ python3 tests/fuzz/ofh/gen_corpus.py --zip-dir $OUT/
 
 ```bash
 # Default: findings/ inside the repository root
-mkdir -p findings/uplane findings/ecpri findings/vlan findings/ngap findings/ngap_cu_cp
+mkdir -p findings/uplane findings/ecpri findings/vlan findings/ngap findings/ngap_cu_cp findings/rrc_ue
 
 # Alternative: any absolute path
 export FUZZ_OUTPUT_DIR=/tmp/fuzz_findings
 mkdir -p $FUZZ_OUTPUT_DIR/uplane $FUZZ_OUTPUT_DIR/ecpri $FUZZ_OUTPUT_DIR/vlan \
-         $FUZZ_OUTPUT_DIR/ngap $FUZZ_OUTPUT_DIR/ngap_cu_cp
+         $FUZZ_OUTPUT_DIR/ngap $FUZZ_OUTPUT_DIR/ngap_cu_cp $FUZZ_OUTPUT_DIR/rrc_ue
 ```
 
 `FUZZ_OUTPUT_DIR` is picked up automatically by `run_fuzzers.sh`.  For manual
@@ -208,6 +213,52 @@ AFL_FAST_CAL=1 afl-fuzz \
 | `fuzz_xnc_gateway` | No-op `xnc_connection_gateway`; the Xn-C interface is not under test |
 | `task_worker` | Background thread that executes CU-CP tasks |
 | `timer_manager` | Driven from the fuzzer main thread via `tick()` to cover timer-expiry code paths |
+
+### RRC UE uplink fuzzer
+
+```bash
+AFL_FAST_CAL=1 afl-fuzz \
+    -i tests/fuzz/rrc/corpus/rrc_ue \
+    -o findings/rrc_ue \
+    -- ./build_fuzz/tests/fuzz/rrc/rrc_ue_fuzzer @@
+```
+
+This harness drives an `rrc_ue_impl` directly, with no CU-CP, PDCP or F1AP around it. RRC is the
+only CU-CP layer an unauthenticated attacker reaches: `RRCSetupRequest`, `RRCSetupComplete` and
+`RRCReestablishmentRequest` are processed before AS security is activated.
+
+Injecting above PDCP is what makes the layer fuzzable at all. Once security is activated, PDCP
+verifies a MAC-I over the RRC PDU, so a mutated payload is rejected before RRC ever sees it and the
+UE is released. Above PDCP the `integrity_verified` flag becomes a fuzzer-controlled input bit,
+which is what reaches the TS 38.331 Annex B1 gating branches in `rrc_ue_impl::handle_pdu()`: a
+protected message arriving unprotected, and an unprotected message arriving protected.
+
+#### Input format
+
+The first byte is a control byte; the remaining bytes are the RRC PDU.
+
+| Bit | Meaning |
+|---|---|
+| 0 | Logical channel: 0 = UL-CCCH, 1 = UL-DCCH |
+| 1 | `integrity_verified` flag passed to the UL-DCCH handler |
+| 2 | SRB: 0 = SRB1, 1 = SRB2 |
+| 3-4 | UE state reached before the payload is injected (see below) |
+| 5-7 | Unused |
+
+| Value | UE state |
+|---|---|
+| 0 | Fresh. No RRC connection; only UL-CCCH is meaningful |
+| 1 | `RRCSetupRequest` handled, `RRCSetup` sent, awaiting `RRCSetupComplete` |
+| 2 | `RRCSetupComplete` handled. SRB1 is up, AS security is not active |
+| 3 | AS security activated on SRB1 and SRB2 created |
+
+The UE is rebuilt for every input, so a crash reproduces from its input file alone rather than
+depending on the inputs the fuzzer happened to run before it. The canned messages used to reach
+each state come from `tests/unittests/rrc/rrc_ue_test_helpers.h`.
+
+Logs are routed to `/dev/null` at debug level rather than switched off: `log_rrc_message()` and the
+`to_json()` call in `rrc_ue_impl::store_ue_capabilities()` walk the decoded, attacker-controlled
+ASN.1 structures, which makes them part of the surface under test.
 
 ### Running in parallel (recommended)
 
