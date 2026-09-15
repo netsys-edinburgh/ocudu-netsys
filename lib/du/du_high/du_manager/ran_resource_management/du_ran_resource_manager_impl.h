@@ -5,6 +5,7 @@
 #pragma once
 
 #include "du_bearer_resource_manager.h"
+#include "du_csi_resource_manager.h"
 #include "du_drx_resource_manager.h"
 #include "du_meas_config_manager.h"
 #include "du_pdsch_resource_manager.h"
@@ -157,6 +158,9 @@ private:
 
   // Manager of UE PUSCH configuration.
   du_pusch_resource_manager pusch_res_mng;
+
+  // Manager of UE CSI configuration.
+  du_csi_resource_manager csi_res_mng;
 
   // Allocator of UE bearer resources.
   du_bearer_resource_manager bearer_res_mng;

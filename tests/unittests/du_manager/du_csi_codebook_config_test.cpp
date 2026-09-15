@@ -63,14 +63,15 @@ ue_capability_summary::type2_codebook_params make_supported_type2_caps()
 class du_csi_codebook_config_tester : public ::testing::Test
 {
 protected:
-  du_csi_codebook_config_tester() :
+  explicit du_csi_codebook_config_tester(du_test_mode_config test_mode_cfg_ = {}) :
+    test_mode_cfg(test_mode_cfg_),
     cell_cfg_list({create_du_cell_config_with_type2(params)}),
     qos_cfg_list(config_helpers::make_default_du_qos_config_list(/* warn_on_drop */ true, 1000)),
     res_mng(cell_cfg_list,
             scheduler_expert_config{.ue = {.max_pucchs_per_slot = 31}},
             srb_cfg_list,
             qos_cfg_list,
-            dummy_test_mode_cfg)
+            test_mode_cfg)
   {
     auto result = res_mng.create_ue_resource_configurator(ue_idx, to_du_cell_index(0), true);
     report_fatal_error_if_not(result.has_value(), "Failed to create UE resources");
@@ -87,6 +88,12 @@ protected:
     const du_ue_resource_update_response resp = ue_res->update(to_du_cell_index(0), req, nullptr, &caps);
     report_fatal_error_if_not(not resp.failed(), "UE configuration failed");
 
+    return current_codebook();
+  }
+
+  /// Returns the codebook configuration currently held by the UE.
+  const codebook_config& current_codebook() const
+  {
     const serving_cell_config& serv_cell_cfg = ue_res->value().cell_group.cells.at(SERVING_PCELL_IDX).serv_cell_cfg;
     report_fatal_error_if_not(serv_cell_cfg.csi_meas_cfg.has_value(), "No CSI meas config for the UE");
     for (const csi_report_config& rep : serv_cell_cfg.csi_meas_cfg->csi_report_cfg_list) {
@@ -102,7 +109,7 @@ protected:
   static constexpr du_ue_index_t ue_idx = to_du_ue_index(0);
 
   cell_config_builder_params                  params{};
-  du_test_mode_config                         dummy_test_mode_cfg{};
+  du_test_mode_config                         test_mode_cfg;
   std::vector<du_cell_config>                 cell_cfg_list;
   std::map<srb_id_t, du_srb_config>           srb_cfg_list;
   std::map<five_qi_t, du_qos_config>          qos_cfg_list;
@@ -110,7 +117,30 @@ protected:
   std::optional<ue_ran_resource_configurator> ue_res;
 };
 
+/// Runs the same cell in test mode, where the UE capabilities are never decoded.
+class du_csi_codebook_config_test_mode_tester : public du_csi_codebook_config_tester
+{
+protected:
+  du_csi_codebook_config_test_mode_tester() :
+    du_csi_codebook_config_tester(du_test_mode_config{.test_ue = du_test_mode_config::test_mode_ue_config{}})
+  {
+  }
+};
+
 } // namespace
+
+TEST_F(du_csi_codebook_config_tester, type1_codebook_is_configured_before_the_capabilities_are_decoded)
+{
+  // Signalling the Type-II codebook to a UE whose capabilities are unknown would ask for a report it may not be able
+  // to produce.
+  ASSERT_TRUE(std::holds_alternative<codebook_config::type1>(current_codebook().codebook_type));
+}
+
+TEST_F(du_csi_codebook_config_test_mode_tester, type2_codebook_is_configured_for_a_test_mode_ue)
+{
+  // The test mode UE reports no capabilities, so the cell configuration is applied as is.
+  ASSERT_TRUE(std::holds_alternative<codebook_config::type2>(current_codebook().codebook_type));
+}
 
 TEST_F(du_csi_codebook_config_tester, type2_codebook_is_configured_for_a_capable_ue)
 {
