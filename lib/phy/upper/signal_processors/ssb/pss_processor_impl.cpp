@@ -28,7 +28,7 @@ void ocudu::pss_processor_impl::mapping(const std::array<cf_t, SEQUENCE_LEN>& se
     ocuduvec::sc_prod(precoded_sequence, sequence, precoding.mimo.get_coefficient(0, i_beam));
 
     // Write in the resource grid port that carries the beam.
-    grid.put(to_uint(precoding.beams[i_beam]), l, k, precoded_sequence);
+    grid.put(to_underlying(precoding.beams[i_beam]), l, k, precoded_sequence);
   }
 }
 

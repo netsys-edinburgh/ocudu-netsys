@@ -96,7 +96,7 @@ void prs_generator_impl::map(resource_grid_writer& grid, unsigned i_symbol, cons
   // Write the precoded symbols in the resource grid port that carries each of the beams.
   for (unsigned i_beam = 0; i_beam != nof_beams; ++i_beam) {
     // Get view of the destination OFDM symbol.
-    span<cbf16_t> grid_symbol_view = grid.get_view(to_uint(precoding.beams[i_beam]), i_symbol);
+    span<cbf16_t> grid_symbol_view = grid.get_view(to_underlying(precoding.beams[i_beam]), i_symbol);
 
     // Get view of the symbols to map.
     span<const cbf16_t> symbols_to_map = symbols.get_slice(i_beam);

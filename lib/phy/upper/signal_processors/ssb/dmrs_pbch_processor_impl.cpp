@@ -50,7 +50,7 @@ void dmrs_pbch_processor_impl::mapping(const std::array<cf_t, NOF_RE>& r,
     ocuduvec::sc_prod(symbols_cbf16, r, precoding.mimo.get_coefficient(0, i_beam));
 
     // Resource grid port that carries the beam.
-    unsigned port = to_uint(precoding.beams[i_beam]);
+    unsigned port = to_underlying(precoding.beams[i_beam]);
 
     // Create view with the symbols.
     span<const cbf16_t> symbols = symbols_cbf16;

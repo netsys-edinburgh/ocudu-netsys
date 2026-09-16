@@ -114,7 +114,7 @@ public:
   /// \return The channel coefficient for the given transmit and receive ports.
   cf_t get_coefficient(beam_identifier beam_id, unsigned i_antenna) const
   {
-    unsigned i_beam = to_uint(beam_id);
+    unsigned i_beam = to_underlying(beam_id);
     ocudu_assert(i_beam < get_nof_beams(),
                  "The beam index (i.e., {}) exceeds the maximum (i.e., {}).",
                  i_beam,
@@ -133,7 +133,7 @@ public:
   /// \param[in] i_antenna   Antenna port index.
   void set_coefficient(cf_t coefficient, beam_identifier beam_id, unsigned i_antenna)
   {
-    unsigned i_beam = to_uint(beam_id);
+    unsigned i_beam = to_underlying(beam_id);
     ocudu_assert(i_beam < get_nof_beams(),
                  "The beam index (i.e., {}) exceeds the maximum (i.e., {}).",
                  i_beam,
@@ -166,7 +166,7 @@ public:
   template <unsigned MaxNofAntennas>
   static_vector<cf_t, MaxNofAntennas> get_beam_coefficients(beam_identifier beam_id) const
   {
-    unsigned i_beam = to_uint(beam_id);
+    unsigned i_beam = to_underlying(beam_id);
     ocudu_assert(i_beam < get_nof_beams(),
                  "The beam index (i.e., {}) exceeds the maximum (i.e., {}).",
                  i_beam,

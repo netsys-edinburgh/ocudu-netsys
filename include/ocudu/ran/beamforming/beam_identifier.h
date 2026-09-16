@@ -7,7 +7,8 @@
 #include "ocudu/adt/static_vector.h"
 #include "ocudu/ran/antenna_topology.h"
 #include "ocudu/ran/precoding/precoding_constants.h"
-#include <type_traits>
+#include "ocudu/support/enum_utils.h"
+#include <cstdint>
 
 namespace ocudu {
 
@@ -15,7 +16,7 @@ namespace ocudu {
 static constexpr unsigned max_nof_beams = get_max_nof_beams();
 
 /// \brief Beam identifier type.
-enum class beam_identifier : unsigned {
+enum class beam_identifier : uint16_t {
   n0 = 0,
 
   /// Reserved beam identifier that flags an unset beam.
@@ -37,19 +38,10 @@ inline beam_identifier to_beam_id(unsigned beam_id)
   return static_cast<beam_identifier>(beam_id);
 }
 
-/// Convert a beam identifier to its underlying value.
-template <typename Integer = unsigned>
-Integer to_uint(beam_identifier beam_id)
-{
-  static_assert(std::is_same_v<std::underlying_type_t<beam_identifier>, Integer>,
-                "Integer type must match the underlying type of the beam identifier.");
-  return static_cast<Integer>(beam_id);
-}
-
 /// Determines whether a beam identifier is within the range of beams that an antenna topology can define.
 inline bool is_beam_id_valid(beam_identifier beam_id)
 {
-  return to_uint(beam_id) < max_nof_beams;
+  return to_underlying(beam_id) < max_nof_beams;
 }
 
 } // namespace ocudu

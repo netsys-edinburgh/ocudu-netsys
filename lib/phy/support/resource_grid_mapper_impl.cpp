@@ -44,10 +44,10 @@ static static_vector<unsigned, precoding_constants::MAX_NOF_PORTS> to_grid_ports
   for (beam_identifier beam_id : beams) {
     ocudu_assert(beam_id < beam_identifier::invalid,
                  "The beam identifier (i.e., {}) exceed the valid maximum (i.e., {}).",
-                 to_uint(beam_id),
-                 to_uint(beam_identifier::invalid) - 1);
+                 to_underlying(beam_id),
+                 to_underlying(beam_identifier::invalid) - 1);
 
-    ports.push_back(to_uint(beam_id));
+    ports.push_back(to_underlying(beam_id));
   }
 
   return ports;

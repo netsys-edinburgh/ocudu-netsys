@@ -59,10 +59,10 @@ static error_type<std::string> test_case(pss_processor& pss, const pss_processor
   std::vector<resource_grid_writer_spy::expected_entry_t> expected_grid_entries;
   for (unsigned i = 0; i != 127; ++i) {
     resource_grid_writer_spy::expected_entry_t entry = {};
-    entry.port                                       = to_uint(pss_args.precoding_and_beamforming.get_prg(0).beams[0]);
-    entry.symbol                                     = pss_args.ssb_first_symbol + 0;
-    entry.subcarrier                                 = pss_args.ssb_first_subcarrier + 56 + i;
-    entry.value                                      = sequence_gold[i];
+    entry.port       = to_underlying(pss_args.precoding_and_beamforming.get_prg(0).beams[0]);
+    entry.symbol     = pss_args.ssb_first_symbol + 0;
+    entry.subcarrier = pss_args.ssb_first_subcarrier + 56 + i;
+    entry.value      = sequence_gold[i];
 
     expected_grid_entries.emplace_back(entry);
   }

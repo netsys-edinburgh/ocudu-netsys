@@ -66,7 +66,7 @@ void pbch_modulator_impl::map(span<const cf_t> d_pbch, resource_grid_writer& gri
     ocuduvec::sc_prod(precoded_symbols, d_pbch, precoding.mimo.get_coefficient(0, i_beam));
 
     // Resource grid port that carries the beam.
-    unsigned port = to_uint(precoding.beams[i_beam]);
+    unsigned port = to_underlying(precoding.beams[i_beam]);
 
     span<const cf_t> symbols = precoded_symbols;
 

@@ -25,7 +25,7 @@ void sss_processor_impl::mapping(span<const cf_t> sequence, resource_grid_writer
     std::array<cf_t, sequence_len> precoded_sequence;
     ocuduvec::sc_prod(precoded_sequence, sequence, precoding.mimo.get_coefficient(0, i_beam));
 
-    grid.put(to_uint(precoding.beams[i_beam]), l, k, precoded_sequence);
+    grid.put(to_underlying(precoding.beams[i_beam]), l, k, precoded_sequence);
   }
 }
 

@@ -115,7 +115,7 @@ inline static_vector<uint8_t, 2 * max_nof_layers> beam_list_to_ports(precoding_b
 {
   static_vector<uint8_t, 2 * max_nof_layers> beam_ports;
   for (beam_identifier beam : beams) {
-    beam_ports.push_back(static_cast<uint8_t>(to_uint(beam)));
+    beam_ports.push_back(static_cast<uint8_t>(to_underlying(beam)));
   }
   return beam_ports;
 }

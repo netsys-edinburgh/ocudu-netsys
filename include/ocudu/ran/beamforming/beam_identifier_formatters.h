@@ -27,7 +27,7 @@ struct formatter<ocudu::beam_identifier> {
   template <typename FormatContext>
   auto format(const ocudu::beam_identifier& beam_id, FormatContext& ctx) const
   {
-    return format_to(ctx.out(), "{}", ocudu::to_uint(beam_id));
+    return format_to(ctx.out(), "{}", ocudu::to_underlying(beam_id));
   }
 };
 
