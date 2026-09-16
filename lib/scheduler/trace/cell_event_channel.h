@@ -9,6 +9,7 @@
 #include "ocudu/adt/static_vector.h"
 #include "ocudu/ocudulog/logger.h"
 #include "ocudu/ran/du_cell_index.h"
+#include "ocudu/ran/slot_pdu_capacity_constants.h"
 #include <thread>
 
 namespace ocudu::schedtrace {
@@ -25,8 +26,9 @@ public:
   /// Event queue (producer -> consumer): carries builders holding finished event buffers.
   using event_queue_type = concurrent_queue<event_builder*, concurrent_queue_policy::lockfree_spsc>;
 
-  /// Maximum number of slot inputs buffered per slot.
-  static constexpr unsigned max_inputs_per_slot = 256;
+  /// Maximum number of slot inputs buffered per slot. Dominated by the HARQ-ACK events of the slot: one per HARQ-ACK
+  /// bit of each UCI PDU. Excess inputs are dropped with a warning.
+  static constexpr unsigned max_inputs_per_slot = MAX_UCI_PDUS_PER_UCI_IND * 4;
 
   cell_event_channel(du_cell_index_t cell_idx, unsigned qsize, ocudulog::basic_logger& logger_) :
     cell_index(cell_idx), ev_pool(qsize), ev_queue(qsize), logger(logger_)
@@ -47,8 +49,8 @@ public:
   void add_input(fbs::SlotInput type, flatbuffers::Offset<void> value)
   {
     if (input_types.full()) {
-      logger.warning("cell={}: Discarding slot input trace event. Cause: Too many inputs in a single slot.",
-                     cell_index);
+      // Warn once per slot, when the inputs are cleared, rather than once per dropped input.
+      ++nof_dropped_inputs;
       return;
     }
     input_types.push_back(type);
@@ -113,6 +115,12 @@ public:
 private:
   void clear_inputs()
   {
+    if (nof_dropped_inputs > 0) {
+      logger.warning("cell={}: Discarded {} slot input trace events. Cause: Too many inputs in a single slot.",
+                     cell_index,
+                     nof_dropped_inputs);
+      nof_dropped_inputs = 0;
+    }
     input_types.clear();
     input_values.clear();
   }
@@ -128,6 +136,9 @@ private:
   /// Slot inputs of the event currently being prepared, buffered until the slot decision arrives.
   static_vector<fbs::SlotInput, max_inputs_per_slot>            input_types;
   static_vector<flatbuffers::Offset<void>, max_inputs_per_slot> input_values;
+
+  /// Number of inputs of the current slot that did not fit in the buffers above.
+  unsigned nof_dropped_inputs = 0;
 };
 
 } // namespace ocudu::schedtrace
