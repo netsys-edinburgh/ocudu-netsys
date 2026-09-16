@@ -48,7 +48,7 @@ decompress_one(uint8_t comp_param, uint8_t mantissa, const ru_compression_params
   prb[0] = comp_param;
 
   std::array<cbf16_t, NOF_SUBCARRIERS_PER_RB> out = {};
-  decompressor->decompress(out, prb, params);
+  EXPECT_TRUE(decompressor->decompress(out, prb, params));
   return out;
 }
 
@@ -69,7 +69,7 @@ decompress_width16(uint8_t                                                comp_p
   }
   auto decompressor = create_iq_decompressor(params.type, ocudulog::fetch_basic_logger("TEST"), impl);
   std::array<cbf16_t, NOF_SUBCARRIERS_PER_RB> out = {};
-  decompressor->decompress(out, prb, params);
+  EXPECT_TRUE(decompressor->decompress(out, prb, params));
   return out;
 }
 
