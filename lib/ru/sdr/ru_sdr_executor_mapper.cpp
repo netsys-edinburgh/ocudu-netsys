@@ -90,7 +90,7 @@ public:
     std::reference_wrapper<task_executor> tx_exec    = *config.common_exec;
     std::reference_wrapper<task_executor> rx_exec    = *config.common_exec;
 
-    if (config.exec_metrics_channel_registry) {
+    if (config.exec_metrics_channel_registry || config.executor_tracing_enable) {
       dl_exec = decorator.decorate(
           dl_exec, config.executor_tracing_enable, config.exec_metrics_channel_registry, "ru_dl_exec");
       ul_exec = decorator.decorate(
@@ -124,7 +124,7 @@ public:
       std::reference_wrapper<task_executor> tx_exec    = *baseband_exec;
       std::reference_wrapper<task_executor> rx_exec    = *baseband_exec;
 
-      if (config.exec_metrics_channel_registry) {
+      if (config.exec_metrics_channel_registry || config.executor_tracing_enable) {
         dl_exec = decorator.decorate(
             dl_exec, config.executor_tracing_enable, config.exec_metrics_channel_registry, "ru_dl_exec");
         ul_exec = decorator.decorate(
@@ -158,7 +158,7 @@ public:
       std::reference_wrapper<task_executor> tx_exec    = *baseband_exec.tx_exec;
       std::reference_wrapper<task_executor> rx_exec    = *baseband_exec.rx_exec;
 
-      if (config.exec_metrics_channel_registry) {
+      if (config.exec_metrics_channel_registry || config.executor_tracing_enable) {
         dl_exec = decorator.decorate(
             dl_exec, config.executor_tracing_enable, config.exec_metrics_channel_registry, "ru_dl_exec");
         ul_exec = decorator.decorate(
@@ -193,7 +193,7 @@ public:
       std::reference_wrapper<task_executor> tx_exec    = *baseband_exec.tx_exec;
       std::reference_wrapper<task_executor> rx_exec    = *baseband_exec.rx_exec;
 
-      if (config.exec_metrics_channel_registry) {
+      if (config.exec_metrics_channel_registry || config.executor_tracing_enable) {
         dl_exec = decorator.decorate(
             dl_exec, config.executor_tracing_enable, config.exec_metrics_channel_registry, "ru_dl_exec");
         ul_exec = decorator.decorate(

@@ -256,6 +256,13 @@ static void configure_cli11_metrics_args(CLI::App& app, ru_sdr_unit_metrics_conf
   add_option(*layers_subcmd, "--enable_ru", config.enable_ru_metrics, "Enable Radio Unit metrics");
 }
 
+static void configure_cli11_trace_args(CLI::App& app, ru_sdr_unit_tracer_config& config)
+{
+  CLI::App* layers_subcmd = add_subcommand(app, "layers", "Layer basis tracing configuration")->configurable();
+  add_option(*layers_subcmd, "--ru_enable", config.executor_tracing_enable, "Enable tracing for RU executors")
+      ->capture_default_str();
+}
+
 void ocudu::configure_cli11_with_ru_sdr_config_schema(CLI::App& app, ocudu::ru_sdr_unit_config& parsed_cfg)
 {
   /// RU SDR section.
@@ -274,6 +281,10 @@ void ocudu::configure_cli11_with_ru_sdr_config_schema(CLI::App& app, ocudu::ru_s
   app_helpers::configure_cli11_with_metrics_appconfig_schema(app, parsed_cfg.metrics_cfg.metrics_cfg);
   CLI::App* metrics_subcmd = add_subcommand(app, "metrics", "Metrics configuration")->configurable();
   configure_cli11_metrics_args(*metrics_subcmd, parsed_cfg.metrics_cfg);
+
+  // Tracer section.
+  CLI::App* trace_subcmd = add_subcommand(app, "trace", "General tracer configuration")->configurable();
+  configure_cli11_trace_args(*trace_subcmd, parsed_cfg.tracer);
 }
 
 void ocudu::autoderive_ru_sdr_parameters_after_parsing(CLI::App&           app,
