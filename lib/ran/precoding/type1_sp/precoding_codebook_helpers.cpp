@@ -5,6 +5,7 @@
 #include "ocudu/adt/to_array.h"
 #include "ocudu/ran/precoding/precoding_codebook_configuration.h"
 #include "ocudu/ran/precoding/precoding_codebook_type1_helpers.h"
+#include "ocudu/support/error_handling.h"
 #include "ocudu/support/math/math_utils.h"
 
 using namespace ocudu;
@@ -30,6 +31,22 @@ const pmi_codebook_single_panel_info& ocudu::get_single_panel_info(pmi_codebook_
 {
   ocudu_assert(n1_n2 <= pmi_codebook_single_panel_config::sixteen_one, "Row index exceeds the table size.");
   return single_panel_antenna_configurations[static_cast<unsigned>(n1_n2)];
+}
+
+antenna_topology ocudu::get_single_panel_topology(pmi_codebook_single_panel_config n1_n2)
+{
+  switch (n1_n2) {
+    case pmi_codebook_single_panel_config::two_one:
+      return antenna_topology::single_panel_two_one;
+    case pmi_codebook_single_panel_config::four_one:
+      return antenna_topology::single_panel_four_one;
+    case pmi_codebook_single_panel_config::two_two:
+      return antenna_topology::single_panel_two_two;
+    default:
+      break;
+  }
+  report_error("No supported antenna topology realizes the single-panel configuration {}.",
+               static_cast<unsigned>(n1_n2));
 }
 
 pmi_typeI_single_panel_param_sizes

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ocudu/ran/antenna_topology.h"
 #include <cstdint>
 
 namespace ocudu {
@@ -56,5 +57,12 @@ struct pmi_codebook_single_panel_info {
 
 /// Returns the single-panel codebook configuration of \f$(N_1, N_2)\f$ and \f$(O_1, O_2)\f$.
 const pmi_codebook_single_panel_info& get_single_panel_info(pmi_codebook_single_panel_config n1_n2);
+
+/// \brief Returns the antenna topology that realizes a single-panel codebook configuration.
+///
+/// \param[in] n1_n2 Single-panel configuration \f$(N_1, N_2)\f$.
+/// \return The antenna topology with the same antenna element distribution.
+/// \remark An error is reported if no supported antenna topology realizes the configuration.
+antenna_topology get_single_panel_topology(pmi_codebook_single_panel_config n1_n2);
 
 } // namespace ocudu

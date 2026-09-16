@@ -475,22 +475,6 @@ precoding_weight_matrix ocudu::make_type1_sp_mode1(const precoding_matrix_indica
   return result;
 }
 
-/// Gets the antenna topology from a Type-1 Single-Panel configuration.
-static antenna_topology to_antenna_topology(pmi_codebook_single_panel_config config)
-{
-  switch (config) {
-    case pmi_codebook_single_panel_config::two_one:
-      return antenna_topology::single_panel_two_one;
-    case pmi_codebook_single_panel_config::four_one:
-      return antenna_topology::single_panel_four_one;
-    case pmi_codebook_single_panel_config::two_two:
-      return antenna_topology::single_panel_two_two;
-    default:
-      break;
-  }
-  report_error("Unsupported Type-1 Single-Panel configuration.");
-}
-
 /// \brief Gets the distinct beams described by a Precoding Matrix Indicator for a given number of layers.
 ///
 /// \param[in] pmi        Precoding Matrix Indicator (PMI).
@@ -527,7 +511,7 @@ static precoding_beam_list get_beams_from_pmi(const pmi_typeI_single_panel& pmi,
   }
 
   // Get the antenna topology from the Type-1 Single-Panel configuration.
-  antenna_topology topology = to_antenna_topology(pmi.panel_config.n1_n2);
+  antenna_topology topology = get_single_panel_topology(pmi.panel_config.n1_n2);
 
   // Type-1 Single-Panel codebook uses at most two spatial beams for one to four layers - the base beam and, for more
   // than one layer, a second beam shifted by (k1, k2).
