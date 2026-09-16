@@ -81,6 +81,16 @@ struct periodic_occasion {
   }
 };
 
+/// \brief Returns the CRBs actually occupied by a CSI-RS or CSI-IM resource whose frequency band is \c freq_band_rbs.
+///
+/// \c csi-FrequencyOccupation only allows a number of RBs that is a multiple of 4, so the configured band can extend
+/// past the end of the BWP. As per TS 38.331, \c csi-FrequencyOccupation, the actual bandwidth of the resource is then
+/// the width of the BWP.
+crb_interval get_csi_occupied_crbs(const crb_interval& freq_band_rbs, const crb_interval& bwp_crbs)
+{
+  return freq_band_rbs & bwp_crbs;
+}
+
 /// \brief Returns a bitset marking every CRB in \c crbs as occupied.
 bounded_bitset<MAX_NOF_PRBS> to_crb_bitset(const crb_interval& crbs)
 {
@@ -189,7 +199,8 @@ std::vector<periodic_occasion> get_ssb_occasions(const ran_cell_config& ran)
 ///
 /// \remark ZP-CSI-RS resources are deliberately excluded: they do not represent a transmission by the cell, but an
 /// instruction for the UE not to expect PDSCH there, so they cannot collide with anything.
-std::vector<periodic_occasion> get_nzp_csi_rs_occasions(const serving_cell_config& serv_cell_cfg)
+std::vector<periodic_occasion> get_nzp_csi_rs_occasions(const serving_cell_config& serv_cell_cfg,
+                                                        const crb_interval&        dl_bwp_crbs)
 {
   std::vector<periodic_occasion> occasions;
 
@@ -206,10 +217,11 @@ std::vector<periodic_occasion> get_nzp_csi_rs_occasions(const serving_cell_confi
     const csi_rs_resource_mapping& res_mapping = res.res_mapping;
     const unsigned                 row         = csi_rs::get_csi_rs_resource_mapping_row_number(
         res_mapping.nof_ports, res_mapping.freq_density, res_mapping.cdm, res_mapping.fd_alloc);
+    const crb_interval occupied_crbs = get_csi_occupied_crbs(res_mapping.freq_band_rbs, dl_bwp_crbs);
 
     csi_rs_pattern_configuration pattern_cfg{
-        .start_rb                 = res_mapping.freq_band_rbs.start(),
-        .nof_rb                   = res_mapping.freq_band_rbs.length(),
+        .start_rb                 = occupied_crbs.start(),
+        .nof_rb                   = occupied_crbs.length(),
         .csi_rs_mapping_table_row = row,
         .symbol_l0                = res_mapping.first_ofdm_symbol_in_td,
         .symbol_l1                = res_mapping.first_ofdm_symbol_in_td2.value_or(0),
@@ -250,7 +262,8 @@ std::vector<periodic_occasion> get_nzp_csi_rs_occasions(const serving_cell_confi
 /// \remark A CSI-IM resource does not represent a transmission by the cell either, but it is still checked against
 /// other transmissions: if something lands on a CSI-IM resource's REs, the cell's own signal leaks into what is meant
 /// to be an interference-only measurement.
-std::vector<periodic_occasion> get_csi_im_occasions(const serving_cell_config& serv_cell_cfg)
+std::vector<periodic_occasion> get_csi_im_occasions(const serving_cell_config& serv_cell_cfg,
+                                                    const crb_interval&        dl_bwp_crbs)
 {
   std::vector<periodic_occasion> occasions;
 
@@ -273,7 +286,7 @@ std::vector<periodic_occasion> get_csi_im_occasions(const serving_cell_config& s
     occ.origin      = {occasion_origin::signal_type::CSI_IM, static_cast<uint8_t>(res.res_id), 0};
     occ.slot_period = to_underlying(*res.csi_res_period);
     occ.slot_offset = *res.csi_res_offset;
-    occ.crbs        = to_crb_bitset(res.freq_band_rbs);
+    occ.crbs        = to_crb_bitset(get_csi_occupied_crbs(res.freq_band_rbs, dl_bwp_crbs));
     for (unsigned sym = pattern.symbol_location, sym_end = sym + nof_symbols; sym != sym_end; ++sym) {
       for (unsigned sc = pattern.subcarrier_location, sc_end = sc + nof_subcarriers; sc != sc_end; ++sc) {
         occ.re_masks[sym].set(sc);
@@ -519,9 +532,11 @@ error_type<std::string> ocudu::check_periodic_resource_collisions(const ran_cell
 {
   const serving_cell_config serv_cell_cfg = config_helpers::make_default_ue_cell_config(ran).serv_cell_cfg;
 
+  const crb_interval& dl_bwp_crbs = ran.dl_cfg_common.init_dl_bwp.generic_params.crbs;
+
   std::vector<periodic_occasion> dl_occasions = get_ssb_occasions(ran);
-  append(dl_occasions, get_nzp_csi_rs_occasions(serv_cell_cfg));
-  append(dl_occasions, get_csi_im_occasions(serv_cell_cfg));
+  append(dl_occasions, get_nzp_csi_rs_occasions(serv_cell_cfg, dl_bwp_crbs));
+  append(dl_occasions, get_csi_im_occasions(serv_cell_cfg, dl_bwp_crbs));
   append(dl_occasions, get_prs_occasions(ran.prs_cfg));
 
   std::vector<periodic_occasion> ul_occasions = get_prach_occasions(ran);

@@ -43,6 +43,17 @@ TEST(periodic_resource_sched_validator_test, default_cell_config_has_no_periodic
   ASSERT_TRUE(check_periodic_resource_collisions(ran).has_value());
 }
 
+TEST(periodic_resource_sched_validator_test, csi_resource_freq_band_wider_than_the_cell_bandwidth_is_capped_at_the_bwp)
+{
+  // csi-FrequencyOccupation only allows a number of RBs that is a multiple of 4, so in a 273-CRB cell the CSI-RS and
+  // CSI-IM frequency bands span 276 CRBs, i.e. past the end of the DL BWP.
+  const cell_config_builder_params params =
+      cell_config_builder_profiles::create(duplex_mode::TDD, frequency_range::FR1, bs_channel_bandwidth::MHz100);
+  const ran_cell_config ran = sched_config_helper::make_default_sched_cell_configuration_request(params).ran;
+  ASSERT_EQ(ran.dl_cfg_common.init_dl_bwp.generic_params.crbs.length(), 273);
+  ASSERT_TRUE(check_periodic_resource_collisions(ran).has_value());
+}
+
 TEST(periodic_resource_sched_validator_test, prs_resources_on_same_crbs_symbols_and_comb_offset_collide)
 {
   ran_cell_config ran = sched_config_helper::make_default_sched_cell_configuration_request().ran;
