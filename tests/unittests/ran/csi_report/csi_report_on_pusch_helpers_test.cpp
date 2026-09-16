@@ -804,6 +804,108 @@ INSTANTIATE_TEST_SUITE_P(
                                          csi_report_quantities::cri_ri_li_pmi_cqi),
                        ::testing::Range(0U, 10U)));
 
+// Unpacks a Type II CSI report from a fixed bit stream.
+TEST(csi_report_unpacking, typeII_pusch_report_from_a_fixed_bit_stream)
+{
+  // Type II codebook configuration.
+  pmi_codebook_config pmi_codebook =
+      pmi_codebook_typeII{pmi_codebook_single_panel_config::two_one, 2, pmi_codebook_typeII_phase_size::qpsk, false};
+
+  // The maximum rank is limited by the codebook type, since the Type II codebook never reports a rank above two, as
+  // per TS38.214 Section 5.2.2.2.3.
+  unsigned max_rank = get_precoding_codebook_max_rank(pmi_codebook);
+
+  // CSI report configuration. The subband configuration is absent, i.e. the report covers zero subbands.
+  csi_report_configuration configuration = {.nof_csi_rs_resources = 1,
+                                            .nof_reported_rs      = 1,
+                                            .pmi_codebook         = pmi_codebook,
+                                            .ri_restriction       = ~ri_restriction_type(max_rank),
+                                            .quantities           = csi_report_quantities::cri_ri_pmi_cqi,
+                                            .subband              = std::nullopt};
+
+  // Expected CSI Part 1 fields.
+  static constexpr unsigned expected_cri          = 0;
+  static constexpr unsigned expected_ri           = 1;
+  static constexpr unsigned expected_wideband_cqi = 15;
+
+  // Expected numbers of non-zero wideband amplitude coefficients reported in CSI Part 1, i.e. M_0 and M_1.
+  static_vector<uint8_t, max_nof_typeII_layers> expected_nof_amplitudes = {4, 1};
+
+  // Expected Type II PMI wideband information fields X1.
+  static constexpr unsigned                           expected_i_1_1 = 0;
+  static constexpr unsigned                           expected_i_1_2 = 0;
+  static constexpr unsigned                           expected_i_1_3 = 3;
+  static_vector<uint8_t, max_nof_typeII_coefficients> expected_i_1_4 = {1, 2, 3, 7};
+
+  // Expected Type II PMI coefficient fields X2.
+  static_vector<uint8_t, max_nof_typeII_coefficients> expected_i_2_1 = {1, 1, 0, 0};
+  static_vector<uint8_t, max_nof_typeII_coefficients> expected_i_2_2 = {};
+
+  // Load the packed CSI report bit stream.
+  csi_report_packed csi_packed;
+  csi_packed.push_back(0x7e194d40u, 32);
+  csi_packed.push_back(0x00000000u, 32);
+
+  // The CSI Part 1 size is given by the report configuration alone.
+  csi_report_size report_size = get_csi_report_pusch_size(configuration);
+  unsigned        part1_size  = report_size.part1_size.value();
+
+  // The CSI Part 2 size is signaled by the CSI Part 1 contents, as per TS38.212 Table 6.3.2.1.2-4.
+  uci_payload_type csi1_payload;
+  csi1_payload.push_back(csi_packed.extract(0, part1_size), part1_size);
+  unsigned part2_size = uci_part2_get_size(csi1_payload, report_size.part2_correspondence).value();
+
+  // Split the bit stream into the two report parts.
+  csi_report_packed csi1_packed = csi_packed.slice(0, part1_size);
+  csi_report_packed csi2_packed = csi_packed.slice(part1_size, part1_size + part2_size);
+
+  // Unpack.
+  ASSERT_TRUE(validate_pusch_csi_payload(csi1_packed, csi2_packed, configuration));
+  csi_report_data unpacked = csi_report_unpack_pusch(csi1_packed, csi2_packed, configuration);
+
+  // Assert Part 1 size.
+  ASSERT_EQ(part1_size, 9);
+
+  // Assert the position of the indicators of the number of non-zero wideband amplitude coefficients within CSI Part 1
+  // by checking the value in the expected position against the correct M_l value.
+  // The first indicator M_0 comes after CRI (0 bits) + RI (1 bit) + wideband CQI (4 bits).
+  static constexpr unsigned nof_amplitudes_offset = 5;
+  static constexpr unsigned nof_amplitudes_size   = 2;
+  ASSERT_EQ(csi1_packed.extract(nof_amplitudes_offset, nof_amplitudes_size), expected_nof_amplitudes[0] - 1);
+  ASSERT_EQ(csi1_packed.extract(nof_amplitudes_offset + nof_amplitudes_size, nof_amplitudes_size),
+            expected_nof_amplitudes[1] - 1);
+
+  // Assert the CSI Part 1 fields.
+  ASSERT_EQ(unpacked.cri.size(), 1);
+  ASSERT_EQ(unpacked.cri.front(), expected_cri);
+  ASSERT_TRUE(unpacked.ri.has_value());
+  ASSERT_EQ(unpacked.ri.value().value(), expected_ri);
+  ASSERT_TRUE(unpacked.first_tb_wideband_cqi.has_value());
+  ASSERT_EQ(unpacked.first_tb_wideband_cqi.value().value(), expected_wideband_cqi);
+
+  // Assert that the report carries a Type II PMI with one layer per reported rank.
+  ASSERT_TRUE(unpacked.pmi.has_value());
+  ASSERT_TRUE(std::holds_alternative<pmi_typeII>(unpacked.pmi.value()));
+  const pmi_typeII& pmi = std::get<pmi_typeII>(unpacked.pmi.value());
+  ASSERT_EQ(pmi.layers.size(), expected_ri);
+
+  // Assert the wideband information fields X1.
+  ASSERT_EQ(pmi.i_1_1, expected_i_1_1);
+  ASSERT_EQ(pmi.i_1_2, expected_i_1_2);
+  ASSERT_EQ(pmi.layers[0].i_1_3, expected_i_1_3);
+  ASSERT_EQ(pmi.layers[0].i_1_4, expected_i_1_4);
+
+  // Assert that the unpacked wideband amplitudes match the number of non-zero coefficients reported in CSI Part 1.
+  ASSERT_EQ(std::count_if(pmi.layers[0].i_1_4.begin(),
+                          pmi.layers[0].i_1_4.end(),
+                          [](uint8_t amplitude) { return amplitude != 0; }),
+            expected_nof_amplitudes[0]);
+
+  // Assert the coefficient fields X2.
+  ASSERT_EQ(pmi.layers[0].i_2_1, expected_i_2_1);
+  ASSERT_EQ(pmi.layers[0].i_2_2, expected_i_2_2);
+}
+
 // Verify that no supported CSI report configuration produces a report part larger than \c csi_report_max_size.
 //
 // \c csi_report_max_size bounds the packed CSI report container, hence a configuration exceeding it would be truncated.
