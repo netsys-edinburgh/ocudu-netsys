@@ -173,6 +173,30 @@ static bool validate_ru_ofh_unit_config(span<const ru_ofh_unit_cell_config>     
       return false;
     }
 
+    if (ofh_cell.ru_dl_port_id.size() > ofh::MAX_NOF_SUPPORTED_EAXC) {
+      fmt::println("RU number of downlink ports={} is bigger than supported={}",
+                   ofh_cell.ru_dl_port_id.size(),
+                   ofh::MAX_NOF_SUPPORTED_EAXC);
+
+      return false;
+    }
+
+    if (ofh_cell.ru_ul_port_id.size() > ofh::MAX_NOF_SUPPORTED_EAXC) {
+      fmt::println("RU number of uplink ports={} is bigger than supported={}",
+                   ofh_cell.ru_ul_port_id.size(),
+                   ofh::MAX_NOF_SUPPORTED_EAXC);
+
+      return false;
+    }
+
+    if (ofh_cell.ru_prach_port_id.size() > ofh::MAX_NOF_SUPPORTED_EAXC) {
+      fmt::println("RU number of PRACH ports={} is bigger than supported={}",
+                   ofh_cell.ru_prach_port_id.size(),
+                   ofh::MAX_NOF_SUPPORTED_EAXC);
+
+      return false;
+    }
+
     if (!validate_scaling_params(ofh_cell.cell.iq_scaling_config)) {
       return false;
     }

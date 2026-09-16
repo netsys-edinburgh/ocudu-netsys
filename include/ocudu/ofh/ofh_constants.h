@@ -12,7 +12,7 @@ namespace ofh {
 enum class message_type { control_plane, user_plane, num_ofh_types };
 
 /// Maximum number of supported eAxC. Implementation defined.
-constexpr unsigned MAX_NOF_SUPPORTED_EAXC = 4;
+constexpr unsigned MAX_NOF_SUPPORTED_EAXC = 8;
 
 /// Maximum allowed value for eAxC ID.
 constexpr size_t MAX_SUPPORTED_EAXC_ID_VALUE = 64;
