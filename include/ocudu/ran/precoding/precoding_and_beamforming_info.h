@@ -38,7 +38,7 @@ struct precoding_and_beamforming_info {
   /// Possible values: {1, ..., 275}, or \ref wideband_prg.
   unsigned nof_rbs_per_prg = wideband_prg;
   /// PRG list, in ascending resource block order.
-  static_vector<prg_precoding_and_beamforming, precoding_constants::MAX_NOF_PRG> prgs;
+  static_vector<prg_precoding_and_beamforming, precoding_constants::MAX_NOF_PRG_PER_SCHED_PDU> prgs;
 
   /// Returns true if the same precoding and beamforming applies to the complete allocation.
   bool is_wideband() const { return nof_rbs_per_prg == wideband_prg; }

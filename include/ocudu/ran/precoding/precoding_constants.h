@@ -17,6 +17,10 @@ constexpr unsigned MIN_PRG_SIZE = 4;
 /// Maximum number of PRG.
 constexpr unsigned MAX_NOF_PRG = divide_ceil(MAX_NOF_PRBS, MIN_PRG_SIZE);
 
+/// [Implementation-defined] Maximum number of PRG carried in a scheduler result PDU.
+constexpr unsigned MAX_NOF_PRG_PER_SCHED_PDU = 1;
+static_assert(MAX_NOF_PRG_PER_SCHED_PDU <= MAX_NOF_PRG);
+
 /// Maximum number of layers supported by the precoder.
 constexpr unsigned MAX_NOF_LAYERS = 8;
 

@@ -280,8 +280,8 @@ static auto make_rar_info_log_entry(const rar_information& rar_info)
 
 static auto make_ue_dl_msg_info_log_entry(const dl_msg_alloc& ue_msg)
 {
-  // Capture only the fields needed for formatting instead of the entire dl_msg_alloc struct (~2.5 KiB),
-  // which exceeds the type_list_buffer_stream segment size (2048 bytes) and would be silently dropped.
+  // Capture only the fields needed for formatting instead of the entire dl_msg_alloc struct, to keep the entry
+  // within the type_list_buffer_stream segment size (2048 bytes).
   const auto& pdsch   = ue_msg.pdsch_cfg;
   const bool  has_cw1 = pdsch.codewords.size() > 1;
 
@@ -549,8 +549,8 @@ static auto make_rar_debug_log_entry(const rar_information& rar_info)
 
 static auto make_ue_dl_msg_debug_log_entry(const dl_msg_alloc& ue_grant)
 {
-  // Capture only the fields needed for formatting instead of the entire dl_msg_alloc struct (~2.5 KiB),
-  // which exceeds the type_list_buffer_stream segment size (2048 bytes) and would be silently dropped.
+  // Capture only the fields needed for formatting instead of the entire dl_msg_alloc struct, to keep the entry
+  // within the type_list_buffer_stream segment size (2048 bytes).
   std::optional<precoding_matrix_indicator> first_prg;
   const auto&                               prgs = ue_grant.pdsch_cfg.precoding_and_beamforming.prgs;
   // A monostate PMI selects no precoding, which carries nothing worth logging.
@@ -636,8 +636,8 @@ static auto make_ue_dl_msg_debug_log_entry(const dl_msg_alloc& ue_grant)
 
 static auto make_paging_debug_log_entry(const dl_paging_allocation& pg)
 {
-  // Capture only the fields needed for formatting instead of the entire dl_paging_allocation struct, which exceeds
-  // the type_list_buffer_stream segment size (2048 bytes) and would be silently dropped.
+  // Capture only the fields needed for formatting instead of the entire dl_paging_allocation struct, to keep the
+  // entry within the type_list_buffer_stream segment size (2048 bytes).
   return make_formattable([rb             = pg.pdsch_cfg.rbs,
                            symbols        = pg.pdsch_cfg.symbols,
                            tbs            = pg.pdsch_cfg.codewords[0].tb_size_bytes,
