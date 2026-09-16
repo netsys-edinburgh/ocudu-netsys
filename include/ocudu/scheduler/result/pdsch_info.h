@@ -169,8 +169,8 @@ struct rar_ul_grant {
 
 /// Stores the information associated with a RAR.
 struct rar_information {
-  pdsch_information                                  pdsch_cfg;
-  static_vector<rar_ul_grant, MAX_RAR_PDUS_PER_SLOT> grants;
+  pdsch_information                               pdsch_cfg;
+  static_vector<rar_ul_grant, MAX_GRANTS_PER_RAR> grants;
   /// \brief Backoff Indicator (BI) value included as the first MAC subPDU of the RAR, as per TS 38.321, Section
   /// 6.2.2 and Table 7.2-1. Unset if no Backoff Indicator subPDU is included.
   std::optional<uint8_t> backoff_indicator;
