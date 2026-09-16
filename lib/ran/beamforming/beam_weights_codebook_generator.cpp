@@ -46,9 +46,10 @@ beam_weights_codebook ocudu::generate_beam_weights_codebook(antenna_topology top
 
           // Generate expected coefficients for the panel, beams, and polarization.
           for (unsigned j = 0; j != nof_elements_dim1; ++j) {
+            cf_t v_l = std::polar(amplitude, TWOPI * j * i_beam_dim1 / nof_beams_dim1);
             for (unsigned k = 0; k != nof_elements_dim2; ++k) {
-              cf_t u_m   = std::polar(1.0F, TWOPI * j * i_beam_dim1 / nof_beams_dim1);
-              cf_t v_l_m = u_m * std::polar(amplitude, TWOPI * k * i_beam_dim2 / nof_beams_dim2);
+              cf_t u_m   = std::polar(1.0F, TWOPI * k * i_beam_dim2 / nof_beams_dim2);
+              cf_t v_l_m = v_l * u_m;
               beam_weights.set_coefficient(v_l_m, beam_id, i_port++);
             }
           }
