@@ -39,7 +39,7 @@ public:
   const du_high_unit_config& derived_config()
   {
     unit_cfg = parsed_cfg.config;
-    autoderive_du_high_parameters_after_parsing(app, unit_cfg);
+    autoderive_du_high_parameters_after_parsing(unit_cfg);
     return unit_cfg;
   }
 
@@ -186,7 +186,7 @@ du_high_unit_config parse_config(const std::string& yaml_text)
 
   const std::vector<const char*> argv = {"du_high_sib_config_test", "-c", cfg_file.path().c_str()};
   app.parse(static_cast<int>(argv.size()), argv.data());
-  autoderive_du_high_parameters_after_parsing(app, parsed_cfg.config);
+  autoderive_du_high_parameters_after_parsing(parsed_cfg.config);
 
   return parsed_cfg.config;
 }

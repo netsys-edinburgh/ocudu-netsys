@@ -3135,7 +3135,7 @@ static band_helper::custom_band_config to_custom_band_config(const du_high_unit_
   return dst;
 }
 
-void ocudu::autoderive_du_high_parameters_after_parsing(CLI::App& app, du_high_unit_config& unit_cfg)
+void ocudu::autoderive_du_high_parameters_after_parsing(du_high_unit_config& unit_cfg)
 {
   static_vector<band_helper::custom_band_config, band_helper::max_nof_custom_bands> raster_bands;
   for (const auto& cb : unit_cfg.custom_freq_bands) {
