@@ -5,7 +5,6 @@
 #pragma once
 
 #include "precoding_matrix_indicator.h"
-#include "ocudu/ran/beamforming/beam_identifier.h"
 #include "ocudu/ran/precoding/precoding_constants.h"
 #include "ocudu/ran/precoding/precoding_weight_matrix.h"
 #include "ocudu/ran/precoding_beamforming_composite.h"
@@ -98,20 +97,6 @@ precoding_weight_matrix make_type1_sp_mode1(const precoding_matrix_indicator& pm
 /// \param[in] nof_layers The number of layers used for the transmission.
 /// \return A precoding weight matrix for the given number of layers and the given antenna panel distribution.
 precoding_weight_matrix make_type2(const precoding_matrix_indicator& pmi, unsigned nof_layers);
-
-/// \brief Calculates the MIMO precoding matrix and its beam list for a Type I Single-Panel PMI.
-///
-/// \param[in] pmi        Type I Single-Panel Precoding Matrix Indicator (PMI).
-/// \param[in] nof_layers Number of transmission layers, one to four.
-/// \return The MIMO precoding matrix and beam list described by the PMI.
-precoding_beamforming_composite calculate_mimo_matrix(const pmi_typeI_single_panel& pmi, unsigned nof_layers);
-
-/// \brief Calculates the MIMO precoding matrix and its beam list for a Type II PMI.
-///
-/// \param[in] pmi        Type II Precoding Matrix Indicator (PMI).
-/// \param[in] nof_layers Number of transmission layers, one or two.
-/// \return The MIMO precoding matrix and beam list described by the PMI.
-precoding_beamforming_composite calculate_mimo_matrix(const pmi_typeII& pmi, unsigned nof_layers);
 
 /// \brief Derives the MIMO precoding matrix and its beam list from the specified PMI for the given number of layers.
 ///

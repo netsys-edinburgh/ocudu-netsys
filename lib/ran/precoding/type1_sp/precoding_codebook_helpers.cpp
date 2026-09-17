@@ -33,22 +33,6 @@ const pmi_codebook_single_panel_info& ocudu::get_single_panel_info(pmi_codebook_
   return single_panel_antenna_configurations[static_cast<unsigned>(n1_n2)];
 }
 
-antenna_topology ocudu::get_single_panel_topology(pmi_codebook_single_panel_config n1_n2)
-{
-  switch (n1_n2) {
-    case pmi_codebook_single_panel_config::two_one:
-      return antenna_topology::single_panel_two_one;
-    case pmi_codebook_single_panel_config::four_one:
-      return antenna_topology::single_panel_four_one;
-    case pmi_codebook_single_panel_config::two_two:
-      return antenna_topology::single_panel_two_two;
-    default:
-      break;
-  }
-  report_error("No supported antenna topology realizes the single-panel configuration {}.",
-               static_cast<unsigned>(n1_n2));
-}
-
 pmi_typeI_single_panel_param_sizes
 ocudu::get_pmi_sizes_typeI_single_panel(const pmi_codebook_single_panel_info& panel_info, uint8_t ri)
 {

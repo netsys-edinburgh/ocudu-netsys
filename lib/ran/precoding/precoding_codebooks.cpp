@@ -3,6 +3,8 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/ran/precoding/precoding_codebooks.h"
+#include "type1_sp/precoding_codebooks.h"
+#include "type2/precoding_codebooks.h"
 #include "ocudu/adt/format.h"
 #include "ocudu/adt/interval.h"
 
@@ -72,6 +74,22 @@ precoding_weight_matrix ocudu::make_identity(unsigned nof_streams)
     }
   }
   return result;
+}
+
+antenna_topology ocudu::get_single_panel_topology(pmi_codebook_single_panel_config n1_n2)
+{
+  switch (n1_n2) {
+    case pmi_codebook_single_panel_config::two_one:
+      return antenna_topology::single_panel_two_one;
+    case pmi_codebook_single_panel_config::four_one:
+      return antenna_topology::single_panel_four_one;
+    case pmi_codebook_single_panel_config::two_two:
+      return antenna_topology::single_panel_two_two;
+    default:
+      break;
+  }
+  report_error("No supported antenna topology realizes the single-panel configuration {}.",
+               static_cast<unsigned>(n1_n2));
 }
 
 namespace {

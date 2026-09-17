@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/ran/precoding/precoding_codebooks.h"
+#include "precoding_codebooks.h"
 #include "ocudu/ran/beamforming/beam_identifier_helpers.h"
 #include "ocudu/ran/precoding/precoding_codebook_type2_helpers.h"
 #include "ocudu/ran/precoding/precoding_constants.h"
