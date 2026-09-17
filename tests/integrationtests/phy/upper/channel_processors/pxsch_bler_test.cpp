@@ -215,8 +215,8 @@ private:
     // Prepare receive soft buffer pool.
     rx_buffer_pool_config buffer_pool_config;
     buffer_pool_config.max_codeblock_size   = ldpc::MAX_CODEBLOCK_SIZE;
-    buffer_pool_config.nof_buffers          = 1;
-    buffer_pool_config.nof_codeblocks       = nof_codeblocks;
+    buffer_pool_config.nof_buffers          = nof_buffers;
+    buffer_pool_config.nof_codeblocks       = nof_buffers * nof_codeblocks;
     buffer_pool_config.expire_timeout_slots = 1;
     buffer_pool_config.external_soft_bits   = false;
 
@@ -361,6 +361,8 @@ private:
     for (unsigned n = 0; n != cfg.nof_repetitions; ++n) {
       // Generate random data.
       std::generate(tx_data.begin(), tx_data.end(), [&rgen]() { return static_cast<uint8_t>(rgen() & 0xff); });
+      // Select a HARQ identifier for this run.
+      harq_id_t harq_id = to_harq_id(n % nof_buffers);
 
       // Process PDSCH.
       std::vector<pdsch_processor_notifier_adaptor> tx_notifiers(cfg.rep_rv_sequence.size());
@@ -390,7 +392,7 @@ private:
 
         // Get a receive buffer.
         unique_rx_buffer buffer = buffer_pool->get_pool().reserve(
-            pusch_config[i_rep].slot, trx_buffer_identifier(rnti, 0), nof_codeblocks, new_data);
+            pusch_config[i_rep].slot, trx_buffer_identifier(rnti, harq_id), nof_codeblocks, new_data);
         report_error_if_not(buffer, "Invalid buffer.");
 
         // Fork PUSCH reception.
@@ -457,6 +459,7 @@ private:
   }
 
   unsigned                    nof_codeblocks;
+  static constexpr unsigned   nof_buffers      = 4;
   uint64_t                    count            = 0;
   uint64_t                    crc_error_count  = 0;
   uint64_t                    data_error_count = 0;
