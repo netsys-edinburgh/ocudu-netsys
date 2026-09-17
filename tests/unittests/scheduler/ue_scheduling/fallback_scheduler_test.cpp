@@ -661,7 +661,9 @@ TEST_P(fallback_scheduler_tester, when_ra_conres_timer_expires_ue_doesnt_get_all
     // Set the grid busy for all slots until the RA-ConRes timer expires, to test the scheduler behaviour after that
     // timer has expired.
     // NOTE: Allocate in advance, to prevent the scheduler from finding space for allocation in the next slots.
-    const unsigned in_advance_slot_alloc = 5U;
+    // NOTE: This must stay strictly greater than the fallback scheduler's \c max_dl_slots_ahead_sched, otherwise the
+    // scheduler looks past the busy region and finds free PDSCH space, defeating the purpose of the test.
+    const unsigned in_advance_slot_alloc = 10U;
     for (unsigned sl_in_adv = 1U; sl_in_adv <= in_advance_slot_alloc; ++sl_in_adv) {
       const slot_point next_allocation_slot       = current_slot + sl_in_adv;
       const int        elapsed_time_since_msg3_rx = next_allocation_slot - msg3_rx_slot;
