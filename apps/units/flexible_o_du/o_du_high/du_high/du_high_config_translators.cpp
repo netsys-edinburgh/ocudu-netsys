@@ -731,10 +731,14 @@ std::vector<odu::du_cell_config> ocudu::generate_du_cell_config(const du_high_un
     // > SSB.
     const antenna_topology topology = get_antenna_topology(base_cell.nof_antennas_dl).value();
     out_cell.ran.ssb_cfg.ssb_beams.reset();
-    for (const auto& beam : base_cell.ssb_cfg.beams) {
-      const du_high_unit_ssb_beam_coordinates_config& coord = beam.beam_coordinates.value();
-      out_cell.ran.ssb_cfg.ssb_beams.set_beam(
-          beam.ssb_index, get_beam_id(topology, 0, coord.i_pol, coord.i_beam_dim1, coord.i_beam_dim2));
+    for (const auto& ssb_beam : base_cell.ssb_cfg.beams) {
+      const auto& beam = *std::find_if(base_cell.ref_beams.begin(),
+                                       base_cell.ref_beams.end(),
+                                       [&ssb_beam](const du_high_unit_ref_beam_config& cell_beam) {
+                                         return cell_beam.ref_beam_id == ssb_beam.ref_beam_id.value();
+                                       });
+      out_cell.ran.ssb_cfg.ssb_beams.set_beam(ssb_beam.ssb_index,
+                                              get_beam_id(topology, 0, beam.i_pol, beam.i_beam_dim1, beam.i_beam_dim2));
     }
     out_cell.ran.ssb_cfg.ssb_period      = static_cast<ssb_periodicity>(base_cell.ssb_cfg.ssb_period_msec);
     out_cell.ran.ssb_cfg.ssb_block_power = base_cell.ssb_cfg.ssb_block_power;

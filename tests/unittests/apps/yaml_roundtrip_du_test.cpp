@@ -100,19 +100,23 @@ TEST(du_multiple_ssb_beams_config_test, roundtrip)
   const std::string yaml_text = read_file(CONFIGS + "/du_rf_b200_tdd_n78_20mhz.yml");
 
   YAML::Node node = YAML::Load(yaml_text);
-  YAML::Node beams;
+  YAML::Node ref_beams;
+  YAML::Node ssb_beams;
   for (unsigned i_beam_dim1 : {0U, 3U, 7U}) {
-    YAML::Node coord_node;
-    coord_node["i_pol"]       = 1;
-    coord_node["i_beam_dim1"] = i_beam_dim1;
-    coord_node["i_beam_dim2"] = 0;
+    YAML::Node cell_beam_node;
+    cell_beam_node["ref_beam_id"] = i_beam_dim1;
+    cell_beam_node["i_pol"]       = 1;
+    cell_beam_node["i_beam_dim1"] = i_beam_dim1;
+    cell_beam_node["i_beam_dim2"] = 0;
+    ref_beams.push_back(cell_beam_node);
 
-    YAML::Node beam_node;
-    beam_node["ssb_index"]        = i_beam_dim1;
-    beam_node["beam_coordinates"] = coord_node;
-    beams.push_back(beam_node);
+    YAML::Node ssb_beam_node;
+    ssb_beam_node["ssb_index"]   = i_beam_dim1;
+    ssb_beam_node["ref_beam_id"] = i_beam_dim1;
+    ssb_beams.push_back(ssb_beam_node);
   }
-  node["cell_cfg"]["ssb"]["beams"]    = beams;
+  node["cell_cfg"]["ssb"]["beams"]    = ssb_beams;
+  node["cell_cfg"]["ref_beams"]       = ref_beams;
   node["cell_cfg"]["nof_antennas_dl"] = 4;
 
   assert_roundtrip(YAML::Dump(node), &load_and_emit, "du multiple SSB beams");

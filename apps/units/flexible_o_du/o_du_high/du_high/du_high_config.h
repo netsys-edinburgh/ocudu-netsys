@@ -135,8 +135,16 @@ struct du_high_unit_drx_config {
   unsigned long_cycle = 0;
 };
 
-/// Coordinates of a beam within the beam grid that the antenna topology of the cell defines.
-struct du_high_unit_ssb_beam_coordinates_config {
+/// \brief Beam that the reference signals of a cell can be transmitted on.
+///
+/// The beam is a position within the beam grid that the antenna topology of the cell defines, as per TS 38.214
+/// Section 5.2.2.2.
+///
+/// \remark An accepted beam is not a guarantee that the RU is able to form it.
+struct du_high_unit_ref_beam_config {
+  /// \brief Identifier that the reference signals of the cell use to select this beam.
+  /// \remark Not to be confused with \c beam_identifier, the beam that the RAN and PHY layers transmit on.
+  unsigned ref_beam_id = 0;
   /// Beam polarization index.
   unsigned i_pol = 0;
   /// First dimension beam index, parameter \f$l\f$ of TS 38.214 Section 5.2.2.2.
@@ -145,14 +153,13 @@ struct du_high_unit_ssb_beam_coordinates_config {
   unsigned i_beam_dim2 = 0;
 };
 
-/// \brief Beam assigned to one transmitted SSB candidate.
-///
-/// \remark An accepted beam is not a guarantee that the RU is able to form it.
+/// Beam assigned to one transmitted SSB candidate.
 struct du_high_unit_ssb_beam_config {
   /// Index of the SSB candidate within the SSB burst, as per TS 38.213 Section 4.1.
   unsigned ssb_index = 0;
-  /// Beam that carries the SSB candidate. Derived from the position of the candidate in the burst if not set.
-  std::optional<du_high_unit_ssb_beam_coordinates_config> beam_coordinates;
+  /// \brief Beam that carries the SSB candidate, given as the identifier of one of the reference beams of the cell.
+  /// Derived from the position of the candidate in the burst if not set.
+  std::optional<unsigned> ref_beam_id;
 };
 
 struct du_high_unit_ssb_config {
@@ -1367,6 +1374,9 @@ struct du_high_unit_base_cell_config {
   int q_qual_min = -20;
   /// SSB parameters.
   du_high_unit_ssb_config ssb_cfg;
+  /// \brief Beams that the reference signals of the cell can be transmitted on.
+  /// The beams that the transmitted SSB candidates need are appended if they are not configured.
+  std::vector<du_high_unit_ref_beam_config> ref_beams;
   /// SIB parameters.
   du_high_unit_sib_config sib_cfg;
   /// UL common configuration parameters.

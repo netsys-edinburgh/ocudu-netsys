@@ -1361,7 +1361,8 @@ static bool validate_tdd_ul_dl_unit_config(const du_high_unit_tdd_ul_dl_config& 
 }
 
 /// Validates that the beams assigned to the transmitted SSB candidates fit the antenna topology and are distinct.
-static bool validate_ssb_beams(const du_high_unit_ssb_config& config, unsigned nof_antennas_dl)
+/// Validates that the beams of a cell fit its antenna topology and are distinct.
+static bool validate_ref_beams(const std::vector<du_high_unit_ref_beam_config>& beams, unsigned nof_antennas_dl)
 {
   const std::optional<antenna_topology> topology = get_antenna_topology(nof_antennas_dl);
   if (!topology.has_value()) {
@@ -1374,49 +1375,49 @@ static bool validate_ssb_beams(const du_high_unit_ssb_config& config, unsigned n
   const unsigned nof_beams_d1 = get_nof_beams_dim1(*topology);
   const unsigned nof_beams_d2 = get_nof_beams_dim2(*topology);
 
-  for (const auto& beam : config.beams) {
-    const du_high_unit_ssb_beam_coordinates_config& coord = beam.beam_coordinates.value();
-    if (coord.i_pol >= nof_pol) {
-      fmt::print("Polarization index {} of SSB index {} is out of range. Antenna topology {} defines {} "
-                 "polarizations.\n",
-                 coord.i_pol,
-                 beam.ssb_index,
+  for (const auto& beam : beams) {
+    if (beam.i_pol >= nof_pol) {
+      fmt::print("Polarization index {} of beam {} is out of range. Antenna topology {} defines {} polarizations.\n",
+                 beam.i_pol,
+                 beam.ref_beam_id,
                  to_string(*topology),
                  nof_pol);
       return false;
     }
-    if (coord.i_beam_dim1 >= nof_beams_d1) {
-      fmt::print("First dimension beam index {} of SSB index {} is out of range. Antenna topology {} defines {} beams "
-                 "in the first dimension.\n",
-                 coord.i_beam_dim1,
-                 beam.ssb_index,
+    if (beam.i_beam_dim1 >= nof_beams_d1) {
+      fmt::print("First dimension beam index {} of beam {} is out of range. Antenna topology {} defines {} beams in "
+                 "the first dimension.\n",
+                 beam.i_beam_dim1,
+                 beam.ref_beam_id,
                  to_string(*topology),
                  nof_beams_d1);
       return false;
     }
-    if (coord.i_beam_dim2 >= nof_beams_d2) {
-      fmt::print("Second dimension beam index {} of SSB index {} is out of range. Antenna topology {} defines {} beams "
-                 "in the second dimension.\n",
-                 coord.i_beam_dim2,
-                 beam.ssb_index,
+    if (beam.i_beam_dim2 >= nof_beams_d2) {
+      fmt::print("Second dimension beam index {} of beam {} is out of range. Antenna topology {} defines {} beams in "
+                 "the second dimension.\n",
+                 beam.i_beam_dim2,
+                 beam.ref_beam_id,
                  to_string(*topology),
                  nof_beams_d2);
       return false;
     }
   }
 
-  for (unsigned i = 1, e = config.beams.size(); i != e; ++i) {
+  for (unsigned i = 1, e = beams.size(); i != e; ++i) {
     for (unsigned j = 0; j != i; ++j) {
-      const du_high_unit_ssb_beam_coordinates_config& lhs = config.beams[i].beam_coordinates.value();
-      const du_high_unit_ssb_beam_coordinates_config& rhs = config.beams[j].beam_coordinates.value();
-      if (lhs.i_pol == rhs.i_pol and lhs.i_beam_dim1 == rhs.i_beam_dim1 and lhs.i_beam_dim2 == rhs.i_beam_dim2) {
-        fmt::print("SSB indexes {} and {} are assigned the same beam (polarization {}, first dimension {}, second "
-                   "dimension {}).\n",
-                   config.beams[j].ssb_index,
-                   config.beams[i].ssb_index,
-                   lhs.i_pol,
-                   lhs.i_beam_dim1,
-                   lhs.i_beam_dim2);
+      if (beams[i].ref_beam_id == beams[j].ref_beam_id) {
+        fmt::print("Beam identifier {} is configured more than once.\n", beams[i].ref_beam_id);
+        return false;
+      }
+      if (beams[i].i_pol == beams[j].i_pol and beams[i].i_beam_dim1 == beams[j].i_beam_dim1 and
+          beams[i].i_beam_dim2 == beams[j].i_beam_dim2) {
+        fmt::print("Beams {} and {} select the same beam (polarization {}, first dimension {}, second dimension {}).\n",
+                   beams[j].ref_beam_id,
+                   beams[i].ref_beam_id,
+                   beams[i].i_pol,
+                   beams[i].i_beam_dim1,
+                   beams[i].i_beam_dim2);
         return false;
       }
     }
@@ -1425,11 +1426,42 @@ static bool validate_ssb_beams(const du_high_unit_ssb_config& config, unsigned n
   return true;
 }
 
-static bool validate_ssb_cell_unit_config(const du_high_unit_ssb_config& config,
-                                          nr_band                        band,
-                                          arfcn_t                        dl_arfcn,
-                                          subcarrier_spacing             ssb_scs,
-                                          unsigned                       nof_antennas_dl)
+/// Validates that every transmitted SSB candidate selects a distinct beam of the cell.
+static bool validate_ssb_beams(const du_high_unit_ssb_config&                   config,
+                               const std::vector<du_high_unit_ref_beam_config>& ref_beams)
+{
+  for (const auto& ssb_beam : config.beams) {
+    const unsigned ref_beam_id = ssb_beam.ref_beam_id.value();
+    const bool     is_defined  = std::any_of(ref_beams.begin(), ref_beams.end(), [ref_beam_id](const auto& beam) {
+      return beam.ref_beam_id == ref_beam_id;
+    });
+    if (!is_defined) {
+      fmt::print(
+          "SSB index {} selects the beam {}, which the cell does not define.\n", ssb_beam.ssb_index, ref_beam_id);
+      return false;
+    }
+  }
+
+  for (unsigned i = 1, e = config.beams.size(); i != e; ++i) {
+    for (unsigned j = 0; j != i; ++j) {
+      if (config.beams[i].ref_beam_id == config.beams[j].ref_beam_id) {
+        fmt::print("SSB indexes {} and {} are assigned the same beam {}.\n",
+                   config.beams[j].ssb_index,
+                   config.beams[i].ssb_index,
+                   config.beams[i].ref_beam_id.value());
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+static bool validate_ssb_cell_unit_config(const du_high_unit_ssb_config&                   config,
+                                          nr_band                                          band,
+                                          arfcn_t                                          dl_arfcn,
+                                          subcarrier_spacing                               ssb_scs,
+                                          const std::vector<du_high_unit_ref_beam_config>& ref_beams)
 {
   if (config.beams.empty()) {
     fmt::print("At least one SSB candidate must be transmitted.\n");
@@ -1458,7 +1490,7 @@ static bool validate_ssb_cell_unit_config(const du_high_unit_ssb_config& config,
     transmitted_ssbs.set(ssb_beam.ssb_index);
   }
 
-  if (!validate_ssb_beams(config, nof_antennas_dl)) {
+  if (!validate_ssb_beams(config, ref_beams)) {
     return false;
   }
 
@@ -1903,7 +1935,11 @@ static bool validate_base_cell_unit_config(const du_high_unit_base_cell_config& 
     return false;
   }
 
-  if (!validate_ssb_cell_unit_config(config.ssb_cfg, band, config.dl_f_ref_arfcn, ssb_scs, config.nof_antennas_dl)) {
+  if (!validate_ref_beams(config.ref_beams, config.nof_antennas_dl)) {
+    return false;
+  }
+
+  if (!validate_ssb_cell_unit_config(config.ssb_cfg, band, config.dl_f_ref_arfcn, ssb_scs, config.ref_beams)) {
     return false;
   }
 
