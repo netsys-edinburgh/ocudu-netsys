@@ -6,6 +6,7 @@
 
 #include "precoding_matrix_indicator.h"
 #include "ocudu/ran/beamforming/beam_identifier.h"
+#include "ocudu/ran/precoding/precoding_constants.h"
 #include "ocudu/ran/precoding/precoding_weight_matrix.h"
 #include "ocudu/ran/precoding_beamforming_composite.h"
 
@@ -13,10 +14,16 @@ namespace ocudu {
 
 /// \brief Maximum number of beams contained in a composite precoding matrix weights.
 ///
-/// It is derived from the structure of 3GPP precoding matrices defined in TS38.214 Section 5.2.2.2.1. In case of four
-/// layers, the precoding uses two different beams, \f$v_{l, m}\f$ and \f$v_{l', m'}\f$, where \f$l \neq l'\f$ and \f$m
-/// \neq m'\f$. In such case, two beams are allocated, each one with two polarizations.
-static constexpr unsigned max_nof_beams_per_pmi = 4;
+/// It is derived from the structure of the 3GPP precoding matrices defined in TS38.214 Section 5.2.2.2:
+/// - the Type I Single-Panel codebook uses at most two spatial beams, \f$v_{l, m}\f$ and \f$v_{l', m'}\f$ with
+///   \f$l \neq l'\f$ and \f$m \neq m'\f$, which occurs for four layers; and
+/// - the Type II codebook combines up to \f$L = 4\f$ spatial beams, as per Section 5.2.2.2.3.
+///
+/// In both cases each spatial beam is allocated once per polarization, so the Type II codebook sets the maximum at
+/// \f$2L\f$ beams, one per combining coefficient.
+static constexpr unsigned max_nof_beams_per_pmi = 2 * max_nof_typeII_beams;
+static_assert(max_nof_beams_per_pmi <= precoding_constants::MAX_NOF_PORTS,
+              "The composite precoding matrix cannot hold one port per beam.");
 
 /// Constructs a precoder configuration for a single transmitter port.
 precoding_weight_matrix make_single_port();
@@ -98,6 +105,13 @@ precoding_weight_matrix make_type2(const precoding_matrix_indicator& pmi, unsign
 /// \param[in] nof_layers Number of transmission layers, one to four.
 /// \return The MIMO precoding matrix and beam list described by the PMI.
 precoding_beamforming_composite calculate_mimo_matrix(const pmi_typeI_single_panel& pmi, unsigned nof_layers);
+
+/// \brief Calculates the MIMO precoding matrix and its beam list for a Type II PMI.
+///
+/// \param[in] pmi        Type II Precoding Matrix Indicator (PMI).
+/// \param[in] nof_layers Number of transmission layers, one or two.
+/// \return The MIMO precoding matrix and beam list described by the PMI.
+precoding_beamforming_composite calculate_mimo_matrix(const pmi_typeII& pmi, unsigned nof_layers);
 
 /// \brief Derives the MIMO precoding matrix and its beam list from the specified PMI for the given number of layers.
 ///

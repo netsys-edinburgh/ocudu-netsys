@@ -98,12 +98,9 @@ struct mimo_matrix_calculator {
     return calculate_mimo_matrix(pmi, nof_layers);
   }
 
-  precoding_beamforming_composite operator()(const pmi_typeII&) const
+  precoding_beamforming_composite operator()(const pmi_typeII& pmi) const
   {
-    // The compact MIMO-matrix / beam-list form is specific to the Type I Single-Panel codebook. The Type II codebook
-    // uses a linear combination of up to L beams per layer and is generated through make_type2().
-    ocudu_assertion_failure("The MIMO precoding matrix form is not supported for the Type II codebook");
-    return {};
+    return calculate_mimo_matrix(pmi, nof_layers);
   }
 };
 

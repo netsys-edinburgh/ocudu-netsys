@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/ran/precoding/precoding_codebooks.h"
+#include "ocudu/ran/beamforming/beam_identifier_helpers.h"
 #include "ocudu/ran/precoding/precoding_codebook_type2_helpers.h"
 #include "ocudu/ran/precoding/precoding_constants.h"
 #include "ocudu/support/math/math_utils.h"
@@ -157,4 +158,101 @@ precoding_weight_matrix ocudu::make_type2(const precoding_matrix_indicator& pmi,
   result *= 1.0F / std::sqrt(static_cast<float>(n1n2) * static_cast<float>(nof_layers));
 
   return result;
+}
+
+precoding_beamforming_composite ocudu::calculate_mimo_matrix(const pmi_typeII& pmi, unsigned nof_layers)
+{
+  const pmi_codebook_typeII&            config = pmi.config;
+  const pmi_codebook_single_panel_info& panel  = get_single_panel_info(config.n1_n2);
+
+  unsigned L          = config.nof_beams.value();
+  unsigned nof_coeffs = 2 * L;
+  unsigned N_psk      = static_cast<unsigned>(config.phase_alphabet_size);
+
+  // Validate the PMI against the number of layers.
+  ocudu_assert((nof_layers > 0) && (nof_layers <= max_nof_typeII_layers),
+               "The Type II codebook supports one or two layers, requested {}.",
+               nof_layers);
+  ocudu_assert(pmi.layers.size() == nof_layers,
+               "The number of layer coefficient sets (i.e., {}) does not match the number of layers (i.e., {}).",
+               pmi.layers.size(),
+               nof_layers);
+
+  // Extract the beam selection inside each beam group from the PMI.
+  pmi_typeII_beam_selection beam_selection = get_typeII_beam_selection(pmi.i_1_1, panel.o1, panel.o2);
+
+  // Extract the beam groups from the PMI.
+  static_vector<pmi_typeII_beam_group, max_nof_typeII_beams> beam_groups =
+      get_typeII_beam_groups(pmi.i_1_2, panel.n1, panel.n2, L);
+
+  // Extract the antenna topology used in the codebook.
+  antenna_topology topology = get_single_panel_topology(config.n1_n2);
+
+  // Resulting beam list contained in the PMI.
+  precoding_beam_list beams;
+
+  for (const pmi_typeII_beam_group& group : beam_groups) {
+    unsigned m1 = panel.o1 * group.n1 + beam_selection.q1;
+    unsigned m2 = panel.o2 * group.n2 + beam_selection.q2;
+    beams.push_back(get_beam_id(topology, 0, 0, m1, m2));
+    beams.push_back(get_beam_id(topology, 0, 1, m1, m2));
+  }
+
+  // Number of beams without the polarization dimension.
+  unsigned nof_beams = beams.size() / 2;
+
+  // Resulting MIMO precoding matrix from the PMI.
+  precoding_weight_matrix weights(nof_layers, beams.size());
+
+  // Iterate each transmission layer.
+  for (unsigned i_layer = 0; i_layer != nof_layers; ++i_layer) {
+    // Get the precoding coefficients for each beam allocated in the layer.
+    const pmi_typeII::layer_coefficients& coefficients = pmi.layers[i_layer];
+
+    // Validate the reported per-layer coefficient sizes, L beams by two polarizations.
+    ocudu_assert(coefficients.i_1_4.size() == nof_coeffs,
+                 "The number of wideband amplitude indices (i.e., {}) must be twice the number of beams (i.e., {}).",
+                 coefficients.i_1_4.size(),
+                 nof_coeffs);
+    ocudu_assert(coefficients.i_2_1.size() == nof_coeffs,
+                 "The number of phase indices (i.e., {}) must be twice the number of beams (i.e., {}).",
+                 coefficients.i_2_1.size(),
+                 nof_coeffs);
+    ocudu_assert(config.subband_amplitude ? (coefficients.i_2_2.size() == nof_coeffs) : coefficients.i_2_2.empty(),
+                 "The number of subband amplitude indices (i.e., {}) is inconsistent with subbandAmplitude={}.",
+                 coefficients.i_2_2.size(),
+                 config.subband_amplitude);
+    ocudu_assert(coefficients.i_1_3 < nof_coeffs,
+                 "The strongest-coefficient index i_1_3 (i.e., {}) is out of range (i.e., {}).",
+                 coefficients.i_1_3,
+                 nof_coeffs);
+
+    // Compute the combining coefficients and the layer energy used for the per-layer normalization.
+    static_vector<cf_t, max_nof_typeII_coefficients> coeffs(nof_coeffs);
+    float                                            energy = 0.0F;
+
+    for (unsigned coeff = 0; coeff != nof_coeffs; ++coeff) {
+      // Wideband amplitude, as per TS38.214 Table 5.2.2.2.3-2.
+      float p1 = get_typeII_wideband_amplitude(coefficients.i_1_4[coeff]);
+      // Subband amplitude, as per TS38.214 Table 5.2.2.2.3-3. When subband amplitude is disabled, k2 = 1 (p2 = 1).
+      float p2 = config.subband_amplitude ? get_typeII_subband_amplitude(coefficients.i_2_2[coeff]) : 1.0F;
+      // Phase offset per beam and polarization, as per TS38.214 Section 5.2.2.2.3.
+      cf_t phi = std::polar(1.0F, TWOPI * static_cast<float>(coefficients.i_2_1[coeff]) / static_cast<float>(N_psk));
+
+      coeffs[coeff] = (p1 * p2) * phi;
+      energy += (p1 * p2) * (p1 * p2);
+    }
+    ocudu_assert(energy > 0.0F, "The layer coefficient energy must be strictly positive.");
+
+    // Normalize by the number of layers and energy.
+    float scaling = std::sqrt(2.0F / (static_cast<float>(nof_layers) * energy));
+
+    // The layer is mapped onto all the beams.
+    for (unsigned i_beam = 0; i_beam != nof_beams; ++i_beam) {
+      weights.set_coefficient(scaling * coeffs[i_beam], i_layer, 2 * i_beam);
+      weights.set_coefficient(scaling * coeffs[i_beam + L], i_layer, 2 * i_beam + 1);
+    }
+  }
+
+  return {weights, beams};
 }
