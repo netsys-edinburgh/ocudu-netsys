@@ -73,3 +73,44 @@ precoding_weight_matrix ocudu::make_identity(unsigned nof_streams)
   }
   return result;
 }
+
+namespace {
+
+/// MIMO precoding matrix calculator from a given Precoding Matrix Indicator (PMI).
+struct mimo_matrix_calculator {
+  /// Number of transmission layers.
+  unsigned nof_layers;
+
+  precoding_beamforming_composite operator()(std::monostate) const
+  {
+    ocudu_assertion_failure("Unsupported PMI codebook configuration");
+    return {};
+  }
+
+  precoding_beamforming_composite operator()(const pmi_two_antenna_port&) const
+  {
+    ocudu_assertion_failure("Unsupported PMI codebook configuration");
+    return {};
+  }
+
+  precoding_beamforming_composite operator()(const pmi_typeI_single_panel& pmi) const
+  {
+    return calculate_mimo_matrix(pmi, nof_layers);
+  }
+
+  precoding_beamforming_composite operator()(const pmi_typeII&) const
+  {
+    // The compact MIMO-matrix / beam-list form is specific to the Type I Single-Panel codebook. The Type II codebook
+    // uses a linear combination of up to L beams per layer and is generated through make_type2().
+    ocudu_assertion_failure("The MIMO precoding matrix form is not supported for the Type II codebook");
+    return {};
+  }
+};
+
+} // namespace
+
+precoding_beamforming_composite ocudu::get_mimo_matrix_from_pmi(const precoding_matrix_indicator& pmi,
+                                                                unsigned                          nof_layers)
+{
+  return std::visit(mimo_matrix_calculator{nof_layers}, pmi);
+}

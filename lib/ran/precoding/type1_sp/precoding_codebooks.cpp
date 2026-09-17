@@ -475,9 +475,12 @@ precoding_weight_matrix ocudu::make_type1_sp_mode1(const precoding_matrix_indica
   return result;
 }
 
-/// \brief Gets the distinct beams described by a Precoding Matrix Indicator for a given number of layers.
+/// \brief Gets the distinct beams described by a Type I Single-Panel PMI for a given number of layers.
 ///
-/// \param[in] pmi        Precoding Matrix Indicator (PMI).
+/// The codebook selects at most two spatial beams, as per TS38.214 Section 5.2.2.2.1, each one allocated to the two
+/// polarizations.
+///
+/// \param[in] pmi        Type I Single-Panel Precoding Matrix Indicator (PMI).
 /// \param[in] nof_layers Transmission number of layers.
 /// \return The distinct beam identifiers used by the transmission.
 /// \remark An assertion is triggered if the PMI is invalid for the given number of layers.
@@ -532,75 +535,44 @@ static precoding_beam_list get_beams_from_pmi(const pmi_typeI_single_panel& pmi,
   return beams;
 }
 
-namespace {
-
-/// Dispatches MIMO precoding matrix extractor to the correct handler for the PMI codebook type.
-struct mimo_matrix_from_pmi_extractor {
-  /// Number of transmission layers.
-  unsigned nof_layers;
-
-  precoding_beamforming_composite operator()(std::monostate) const
-  {
-    ocudu_assertion_failure("Unsupported PMI codebook configuration");
-    return {};
-  }
-
-  precoding_beamforming_composite operator()(const pmi_two_antenna_port&) const
-  {
-    ocudu_assertion_failure("Unsupported PMI codebook configuration");
-    return {};
-  }
-
-  precoding_beamforming_composite operator()(const pmi_typeII&) const
-  {
-    // The compact MIMO-matrix / beam-list form is specific to the Type I Single-Panel codebook. The Type II codebook
-    // uses a linear combination of up to L beams per layer and is generated through make_type2().
-    ocudu_assertion_failure("The MIMO precoding matrix form is not supported for the Type II codebook");
-    return {};
-  }
-
-  precoding_beamforming_composite operator()(const pmi_typeI_single_panel& pmi) const
-  {
-    static constexpr unsigned max_nof_layers = 4;
-    ocudu_assert(nof_layers <= max_nof_layers,
-                 "The maximum number of supported layers for MIMO precoding is {}.",
-                 max_nof_layers);
-
-    ocudu_assert(pmi.panel_config.mode == pmi_codebook_typeI_mode::one, "Unsupported mode.");
-
-    // Cross-polarization phase offset. Clamp i_2 to its valid range for the given number of layers.
-    pmi_typeI_single_panel_param_ranges pmi_ranges    = get_pmi_ranges_typeI_single_panel(pmi.panel_config, nof_layers);
-    unsigned                            i_2           = pmi.i_2 % pmi_ranges.i_2;
-    float                               phase_offset  = (TWOPI / 4.0F) * static_cast<float>(i_2);
-    cf_t                                phi           = std::polar(1.0f, phase_offset);
-    float                               normalization = 1.0f / std::sqrt(static_cast<float>(nof_layers));
-
-    // Extract the selected beam list from the PMI.
-    precoding_beam_list beams = get_beams_from_pmi(pmi, nof_layers);
-    // Number of beams without the polarization dimension.
-    unsigned nof_beams = beams.size() / 2;
-
-    // Fill the MIMO matrix from the given PMI. Each layer is mapped to two beams, one for each polarization.
-    precoding_weight_matrix weights(nof_layers, beams.size());
-    for (unsigned i_layer = 0; i_layer != nof_layers; ++i_layer) {
-      // Index of the allocated beam for the layer.
-      unsigned i_beam = i_layer % nof_beams;
-      // First half of the layers uses +phi, second half uses -phi, as per TS38.214 Section 5.2.2.2.1.
-      cf_t layer_pol = (i_layer < (nof_layers + 1) / 2) ? phi : -phi;
-
-      // First polarization uses a unit weight, second polarization uses the cross-polarization weight.
-      weights.set_coefficient(normalization, i_layer, 2 * i_beam);
-      weights.set_coefficient(layer_pol * normalization, i_layer, 2 * i_beam + 1);
-    }
-
-    return {weights, beams};
-  }
-};
-
-} // namespace
-
-precoding_beamforming_composite ocudu::get_mimo_matrix_from_pmi(const precoding_matrix_indicator& pmi,
-                                                                unsigned                          nof_layers)
+precoding_beamforming_composite ocudu::calculate_mimo_matrix(const pmi_typeI_single_panel& pmi, unsigned nof_layers)
 {
-  return std::visit(mimo_matrix_from_pmi_extractor{nof_layers}, pmi);
+  /// Maximum number of layers supported for one codeword.
+  static constexpr unsigned max_nof_typeI_sp_layers = 4;
+
+  // Validate the PMI against the number of layers.
+  ocudu_assert((nof_layers > 0) && (nof_layers <= max_nof_typeI_sp_layers),
+               "The Type I Single-Panel codebook supports one to four layers for one codeword, requested {}.",
+               nof_layers);
+  ocudu_assert(pmi.panel_config.mode == pmi_codebook_typeI_mode::one, "Unsupported mode.");
+
+  // Extract the selected beam list from the PMI.
+  precoding_beam_list beams = get_beams_from_pmi(pmi, nof_layers);
+
+  // Number of beams without the polarization dimension.
+  unsigned nof_beams = beams.size() / 2;
+
+  // Cross-polarization phase offset. Clamp i_2 to its valid range for the given number of layers.
+  pmi_typeI_single_panel_param_ranges pmi_ranges = get_pmi_ranges_typeI_single_panel(pmi.panel_config, nof_layers);
+  unsigned                            i_2        = pmi.i_2 % pmi_ranges.i_2;
+  cf_t                                phi        = std::polar(1.0F, (TWOPI / 4.0F) * static_cast<float>(i_2));
+
+  // Resulting MIMO precoding matrix.
+  precoding_weight_matrix weights(nof_layers, beams.size());
+
+  // Normalize precoding by the number of layers.
+  float scaling = 1.0F / std::sqrt(static_cast<float>(nof_layers));
+
+  for (unsigned i_layer = 0; i_layer != nof_layers; ++i_layer) {
+    // Index of the allocated beam for the layer.
+    unsigned i_beam = i_layer % nof_beams;
+    // First half of the layers uses +phi, second half uses -phi, as per TS38.214 Section 5.2.2.2.1.
+    cf_t layer_pol = (i_layer < (nof_layers + 1) / 2) ? phi : -phi;
+
+    // The layer is mapped onto a single beam.
+    weights.set_coefficient(scaling, i_layer, 2 * i_beam);
+    weights.set_coefficient(scaling * layer_pol, i_layer, 2 * i_beam + 1);
+  }
+
+  return {weights, beams};
 }
