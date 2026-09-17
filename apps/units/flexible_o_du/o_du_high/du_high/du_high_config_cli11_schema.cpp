@@ -10,6 +10,7 @@
 #include "ntn/du_high_ntn_config_cli11_schema.h"
 #include "ocudu/adt/format.h"
 #include "ocudu/adt/ranges/transform.h"
+#include "ocudu/ran/antenna_topology.h"
 #include "ocudu/ran/csi_report/csi_report_configuration.h"
 #include "ocudu/ran/drx_config.h"
 #include "ocudu/ran/du_types.h"
@@ -549,14 +550,33 @@ static void configure_cli11_mac_cell_group_args(CLI::App& app, du_high_unit_mac_
   configure_cli11_mac_sr_args(*sr_subcmd, mcg_params.sr_cfg);
 }
 
+static void configure_cli11_ssb_beam_coordinates_args(CLI::App&                                 app,
+                                                      du_high_unit_ssb_beam_coordinates_config& coord_params)
+{
+  add_option(app, "--i_pol", coord_params.i_pol, "Polarization index of the beam")->capture_default_str();
+  add_option(app, "--i_beam_dim1", coord_params.i_beam_dim1, "First dimension index of the beam")
+      ->capture_default_str();
+  add_option(app, "--i_beam_dim2", coord_params.i_beam_dim2, "Second dimension index of the beam")
+      ->capture_default_str();
+}
+
 static void configure_cli11_ssb_beam_args(CLI::App& app, du_high_unit_ssb_beam_config& beam_params)
 {
   add_option(app, "--ssb_index", beam_params.ssb_index, "Index of the SSB candidate within the SSB burst")
       ->capture_default_str()
       ->range(0, static_cast<int>(MAX_NOF_SSB_CANDIDATES - 1));
-  add_option(app, "--beam_id", beam_params.beam_id, "Beam that carries the SSB candidate")
-      ->capture_default_str()
-      ->range(0, static_cast<int>(max_nof_beams - 1));
+
+  CLI::App* coord_subcmd = add_subcommand(app, "beam_coordinates", "Beam that carries the SSB candidate");
+  auto      coord_cfg    = std::make_shared<du_high_unit_ssb_beam_coordinates_config>();
+  configure_cli11_ssb_beam_coordinates_args(*coord_subcmd, *coord_cfg);
+  coord_subcmd->parse_complete_callback([&app, &beam_params, coord_cfg]() {
+    CLI::App* sub_cmd = app.get_subcommand("beam_coordinates");
+    if (sub_cmd->count() != 0) {
+      beam_params.beam_coordinates.emplace(*coord_cfg);
+    } else {
+      sub_cmd->disabled();
+    }
+  });
 }
 
 static void configure_cli11_ssb_args(CLI::App& app, du_high_unit_ssb_config& ssb_params)
@@ -566,7 +586,8 @@ static void configure_cli11_ssb_args(CLI::App& app, du_high_unit_ssb_config& ssb
       "--beams",
       ssb_params.beams,
       configure_cli11_ssb_beam_args,
-      "Transmitted SSB candidates and the beam assigned to each of them");
+      "Transmitted SSB candidates and the beam assigned to each of them. The beam parameters left unset are derived "
+      "from the range of possible parameters given the antenna topology of the cell");
   add_option(app, "--ssb_period", ssb_params.ssb_period_msec, "Period of SSB scheduling in milliseconds")
       ->capture_default_str()
       ->enum_values({5, 10, 20});
@@ -3044,6 +3065,43 @@ void ocudu::configure_cli11_with_du_high_config_schema(CLI::App& app, du_high_pa
 }
 
 // Derive the parameters set to "auto"-derived for a cell.
+/// \brief Assigns a beam to the transmitted SSB candidates that do not configure one.
+///
+/// The beams sweep the grid that the antenna topology defines, advancing the polarization first, then the first
+/// dimension and last the second dimension.
+static void derive_ssb_beam_coordinates(du_high_unit_ssb_config& ssb_cfg, unsigned nof_antennas_dl)
+{
+  const std::optional<antenna_topology> topology = get_antenna_topology(nof_antennas_dl);
+  if (not topology.has_value()) {
+    return;
+  }
+
+  const unsigned nof_pol      = get_nof_antenna_polarizations(*topology);
+  const unsigned nof_beams_d1 = get_nof_beams_dim1(*topology);
+
+  std::vector<du_high_unit_ssb_beam_config*> sorted_beams;
+  sorted_beams.reserve(ssb_cfg.beams.size());
+  for (auto& beam : ssb_cfg.beams) {
+    sorted_beams.push_back(&beam);
+  }
+  std::sort(sorted_beams.begin(), sorted_beams.end(), [](const auto* lhs, const auto* rhs) {
+    return lhs->ssb_index < rhs->ssb_index;
+  });
+
+  for (unsigned i = 0, e = sorted_beams.size(); i != e; ++i) {
+    if (sorted_beams[i]->beam_coordinates.has_value()) {
+      continue;
+    }
+
+    // The second dimension is not wrapped around, so a grid with fewer beams than SSB candidates is rejected by the
+    // configuration validator instead of assigning the same beam twice.
+    sorted_beams[i]->beam_coordinates.emplace(
+        du_high_unit_ssb_beam_coordinates_config{.i_pol       = i % nof_pol,
+                                                 .i_beam_dim1 = (i / nof_pol) % nof_beams_d1,
+                                                 .i_beam_dim2 = i / (nof_pol * nof_beams_d1)});
+  }
+}
+
 static void derive_cell_auto_params(du_high_unit_base_cell_config& cell_cfg)
 {
   // If NR band is not set, derive a valid one from the DL-ARFCN.
@@ -3081,6 +3139,9 @@ static void derive_cell_auto_params(du_high_unit_base_cell_config& cell_cfg)
   if (not cell_cfg.prach_cfg.ra_resp_window.has_value()) {
     cell_cfg.prach_cfg.ra_resp_window = 10U << to_numerology_value(cell_cfg.common_scs);
   }
+
+  // Derive SSB beam parameters, if not manually set.
+  derive_ssb_beam_coordinates(cell_cfg.ssb_cfg, cell_cfg.nof_antennas_dl);
 }
 
 static void derive_auto_params(du_high_unit_config& config)

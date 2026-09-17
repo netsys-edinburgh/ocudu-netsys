@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <optional>
 
 namespace ocudu {
 
@@ -127,6 +128,25 @@ constexpr unsigned get_max_nof_beams()
   }
 
   return max_nof_beams;
+}
+
+/// \brief Gets the single-panel antenna topology defined for a number of antenna ports.
+/// \return The antenna topology, or \c std::nullopt if no topology is defined for the number of ports.
+/// \remark This function needs to be updated to support more parameters and antenna topologies.
+constexpr std::optional<antenna_topology> get_antenna_topology(unsigned nof_ports)
+{
+  switch (nof_ports) {
+    case 1:
+      return antenna_topology::one_port;
+    case 2:
+      return antenna_topology::two_port;
+    case 4:
+      return antenna_topology::single_panel_two_one;
+    case 8:
+      return antenna_topology::single_panel_four_one;
+    default:
+      return std::nullopt;
+  }
 }
 
 /// Convert the antenna topology to a constant string.

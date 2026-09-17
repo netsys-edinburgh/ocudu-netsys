@@ -13,6 +13,7 @@
 #include "ocudu/du/du_high/du_qos_config_helpers.h"
 #include "ocudu/du/du_update_config_helpers.h"
 #include "ocudu/ran/band_helper.h"
+#include "ocudu/ran/beamforming/beam_identifier_helpers.h"
 #include "ocudu/ran/duplex_mode.h"
 #include "ocudu/ran/pdcch/pdcch_candidates.h"
 #include "ocudu/ran/prach/prach_configuration.h"
@@ -728,9 +729,12 @@ std::vector<odu::du_cell_config> ocudu::generate_du_cell_config(const du_high_un
     out_cell.ran.ta_offset = band_helper::get_ta_offset(band, base_cell.eutra_coexistence);
 
     // > SSB.
+    const antenna_topology topology = get_antenna_topology(base_cell.nof_antennas_dl).value();
     out_cell.ran.ssb_cfg.ssb_beams.reset();
-    for (const auto& ssb_beam : base_cell.ssb_cfg.beams) {
-      out_cell.ran.ssb_cfg.ssb_beams.set_beam(ssb_beam.ssb_index, to_beam_id(ssb_beam.beam_id));
+    for (const auto& beam : base_cell.ssb_cfg.beams) {
+      const du_high_unit_ssb_beam_coordinates_config& coord = beam.beam_coordinates.value();
+      out_cell.ran.ssb_cfg.ssb_beams.set_beam(
+          beam.ssb_index, get_beam_id(topology, 0, coord.i_pol, coord.i_beam_dim1, coord.i_beam_dim2));
     }
     out_cell.ran.ssb_cfg.ssb_period      = static_cast<ssb_periodicity>(base_cell.ssb_cfg.ssb_period_msec);
     out_cell.ran.ssb_cfg.ssb_block_power = base_cell.ssb_cfg.ssb_block_power;

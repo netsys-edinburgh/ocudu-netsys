@@ -135,13 +135,24 @@ struct du_high_unit_drx_config {
   unsigned long_cycle = 0;
 };
 
-/// Beam assigned to one transmitted SSB candidate.
+/// Coordinates of a beam within the beam grid that the antenna topology of the cell defines.
+struct du_high_unit_ssb_beam_coordinates_config {
+  /// Beam polarization index.
+  unsigned i_pol = 0;
+  /// First dimension beam index, parameter \f$l\f$ of TS 38.214 Section 5.2.2.2.
+  unsigned i_beam_dim1 = 0;
+  /// Second dimension beam index, parameter \f$m\f$ of TS 38.214 Section 5.2.2.2.
+  unsigned i_beam_dim2 = 0;
+};
+
+/// \brief Beam assigned to one transmitted SSB candidate.
+///
+/// \remark An accepted beam is not a guarantee that the RU is able to form it.
 struct du_high_unit_ssb_beam_config {
   /// Index of the SSB candidate within the SSB burst, as per TS 38.213 Section 4.1.
   unsigned ssb_index = 0;
-  /// Beam that carries the SSB candidate.
-  /// \remark An accepted beam ID is not a guarantee that the RU is able to form that beam.
-  unsigned beam_id = 0;
+  /// Beam that carries the SSB candidate. Derived from the position of the candidate in the burst if not set.
+  std::optional<du_high_unit_ssb_beam_coordinates_config> beam_coordinates;
 };
 
 struct du_high_unit_ssb_config {

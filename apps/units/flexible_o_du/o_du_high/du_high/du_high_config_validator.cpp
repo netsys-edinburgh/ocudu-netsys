@@ -4,6 +4,7 @@
 
 #include "du_high_config_validator.h"
 #include "ocudu/adt/format.h"
+#include "ocudu/ran/antenna_topology.h"
 #include "ocudu/ran/duplex_mode.h"
 #include "ocudu/ran/frame_types.h"
 #include "ocudu/ran/nr_cell_identity.h"
@@ -1359,10 +1360,76 @@ static bool validate_tdd_ul_dl_unit_config(const du_high_unit_tdd_ul_dl_config& 
   return true;
 }
 
+/// Validates that the beams assigned to the transmitted SSB candidates fit the antenna topology and are distinct.
+static bool validate_ssb_beams(const du_high_unit_ssb_config& config, unsigned nof_antennas_dl)
+{
+  const std::optional<antenna_topology> topology = get_antenna_topology(nof_antennas_dl);
+  if (!topology.has_value()) {
+    fmt::print("Number of DL antennas {} does not define an antenna topology. Valid values are 1, 2, 4 and 8.\n",
+               nof_antennas_dl);
+    return false;
+  }
+
+  const unsigned nof_pol      = get_nof_antenna_polarizations(*topology);
+  const unsigned nof_beams_d1 = get_nof_beams_dim1(*topology);
+  const unsigned nof_beams_d2 = get_nof_beams_dim2(*topology);
+
+  for (const auto& beam : config.beams) {
+    const du_high_unit_ssb_beam_coordinates_config& coord = beam.beam_coordinates.value();
+    if (coord.i_pol >= nof_pol) {
+      fmt::print("Polarization index {} of SSB index {} is out of range. Antenna topology {} defines {} "
+                 "polarizations.\n",
+                 coord.i_pol,
+                 beam.ssb_index,
+                 to_string(*topology),
+                 nof_pol);
+      return false;
+    }
+    if (coord.i_beam_dim1 >= nof_beams_d1) {
+      fmt::print("First dimension beam index {} of SSB index {} is out of range. Antenna topology {} defines {} beams "
+                 "in the first dimension.\n",
+                 coord.i_beam_dim1,
+                 beam.ssb_index,
+                 to_string(*topology),
+                 nof_beams_d1);
+      return false;
+    }
+    if (coord.i_beam_dim2 >= nof_beams_d2) {
+      fmt::print("Second dimension beam index {} of SSB index {} is out of range. Antenna topology {} defines {} beams "
+                 "in the second dimension.\n",
+                 coord.i_beam_dim2,
+                 beam.ssb_index,
+                 to_string(*topology),
+                 nof_beams_d2);
+      return false;
+    }
+  }
+
+  for (unsigned i = 1, e = config.beams.size(); i != e; ++i) {
+    for (unsigned j = 0; j != i; ++j) {
+      const du_high_unit_ssb_beam_coordinates_config& lhs = config.beams[i].beam_coordinates.value();
+      const du_high_unit_ssb_beam_coordinates_config& rhs = config.beams[j].beam_coordinates.value();
+      if (lhs.i_pol == rhs.i_pol and lhs.i_beam_dim1 == rhs.i_beam_dim1 and lhs.i_beam_dim2 == rhs.i_beam_dim2) {
+        fmt::print("SSB indexes {} and {} are assigned the same beam (polarization {}, first dimension {}, second "
+                   "dimension {}).\n",
+                   config.beams[j].ssb_index,
+                   config.beams[i].ssb_index,
+                   lhs.i_pol,
+                   lhs.i_beam_dim1,
+                   lhs.i_beam_dim2);
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
 static bool validate_ssb_cell_unit_config(const du_high_unit_ssb_config& config,
                                           nr_band                        band,
                                           arfcn_t                        dl_arfcn,
-                                          subcarrier_spacing             ssb_scs)
+                                          subcarrier_spacing             ssb_scs,
+                                          unsigned                       nof_antennas_dl)
 {
   if (config.beams.empty()) {
     fmt::print("At least one SSB candidate must be transmitted.\n");
@@ -1388,14 +1455,11 @@ static bool validate_ssb_cell_unit_config(const du_high_unit_ssb_config& config,
       fmt::print("SSB index {} is configured more than once.\n", ssb_beam.ssb_index);
       return false;
     }
-    if (!is_beam_id_valid(to_beam_id(ssb_beam.beam_id))) {
-      fmt::print("Beam ID {} of SSB index {} is out of range. Valid range is [0, {}).\n",
-                 ssb_beam.beam_id,
-                 ssb_beam.ssb_index,
-                 max_nof_beams);
-      return false;
-    }
     transmitted_ssbs.set(ssb_beam.ssb_index);
+  }
+
+  if (!validate_ssb_beams(config, nof_antennas_dl)) {
+    return false;
   }
 
   // As per inOneGroup, ssb-PositionsInBurst, ServingCellConfigCommonSIB, TS 38.331, the non-zero groups of 8 bits must
@@ -1839,7 +1903,7 @@ static bool validate_base_cell_unit_config(const du_high_unit_base_cell_config& 
     return false;
   }
 
-  if (!validate_ssb_cell_unit_config(config.ssb_cfg, band, config.dl_f_ref_arfcn, ssb_scs)) {
+  if (!validate_ssb_cell_unit_config(config.ssb_cfg, band, config.dl_f_ref_arfcn, ssb_scs, config.nof_antennas_dl)) {
     return false;
   }
 

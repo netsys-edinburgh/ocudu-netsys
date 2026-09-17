@@ -101,13 +101,19 @@ TEST(du_multiple_ssb_beams_config_test, roundtrip)
 
   YAML::Node node = YAML::Load(yaml_text);
   YAML::Node beams;
-  for (unsigned ssb_index : {0U, 3U, 7U}) {
+  for (unsigned i_beam_dim1 : {0U, 3U, 7U}) {
+    YAML::Node coord_node;
+    coord_node["i_pol"]       = 1;
+    coord_node["i_beam_dim1"] = i_beam_dim1;
+    coord_node["i_beam_dim2"] = 0;
+
     YAML::Node beam_node;
-    beam_node["ssb_index"] = ssb_index;
-    beam_node["beam_id"]   = ssb_index * 2;
+    beam_node["ssb_index"]        = i_beam_dim1;
+    beam_node["beam_coordinates"] = coord_node;
     beams.push_back(beam_node);
   }
-  node["cell_cfg"]["ssb"]["beams"] = beams;
+  node["cell_cfg"]["ssb"]["beams"]    = beams;
+  node["cell_cfg"]["nof_antennas_dl"] = 4;
 
   assert_roundtrip(YAML::Dump(node), &load_and_emit, "du multiple SSB beams");
 }

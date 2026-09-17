@@ -138,7 +138,13 @@ static YAML::Node build_du_high_ssb_section(const du_high_unit_ssb_config& confi
   for (const auto& ssb_beam : config.beams) {
     YAML::Node beam_node;
     beam_node["ssb_index"] = ssb_beam.ssb_index;
-    beam_node["beam_id"]   = ssb_beam.beam_id;
+    if (ssb_beam.beam_coordinates.has_value()) {
+      YAML::Node coord_node;
+      coord_node["i_pol"]           = ssb_beam.beam_coordinates->i_pol;
+      coord_node["i_beam_dim1"]     = ssb_beam.beam_coordinates->i_beam_dim1;
+      coord_node["i_beam_dim2"]     = ssb_beam.beam_coordinates->i_beam_dim2;
+      beam_node["beam_coordinates"] = coord_node;
+    }
     node["beams"].push_back(beam_node);
   }
   node["ssb_period"]          = config.ssb_period_msec;
