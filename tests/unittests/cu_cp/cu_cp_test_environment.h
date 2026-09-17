@@ -5,10 +5,10 @@
 #pragma once
 
 #include "../../../lib/cu_cp/cu_cp_controller/amf_connection_manager.h"
-#include "../e1ap/common/e1ap_cu_cp_test_messages.h"
 #include "test_doubles/mock_amf.h"
 #include "test_doubles/mock_cu_up.h"
 #include "test_doubles/mock_du.h"
+#include "tests/test_doubles/e1ap/e1ap_cu_cp_test_messages.h"
 #include "tests/test_doubles/f1ap/f1ap_test_messages.h"
 #include "tests/test_doubles/rrc/rrc_test_messages.h"
 #include "tests/unittests/cu_cp/test_doubles/mock_xnc_cu_cp.h"

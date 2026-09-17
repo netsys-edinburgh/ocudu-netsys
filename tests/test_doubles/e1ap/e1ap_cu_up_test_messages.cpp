@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
-#include "e1ap_cu_up_test_messages.h"
+#include "tests/test_doubles/e1ap/e1ap_cu_up_test_messages.h"
 #include "ocudu/asn1/e1ap/common.h"
 #include "ocudu/asn1/e1ap/e1ap_pdu_contents.h"
 #include "ocudu/e1ap/common/e1ap_message.h"
