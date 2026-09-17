@@ -367,12 +367,24 @@ void ra_scheduler::handle_msg1_occasion(const rach_indication_message::occasion&
 {
   const rnti_t ra_rnti = ra_helper::get_ra_rnti(occ.slot_index, occ.start_symbol, occ.frequency_index);
 
+  // The RAR is a single PDSCH, so it can only be carried by the beam of one SS/PBCH block. The configuration validator
+  // rejects the RACH configurations that would multiplex several of them into one occasion, so any preamble resolves
+  // the SS/PBCH block of the whole occasion. Resolved before the RAR is registered, so that a pending RAR always
+  // carries the beam it has to be transmitted on, even when every preamble is later dropped.
+  const std::optional<ssb_id_t> ssb_index =
+      get_preamble_ssb_index(prach_slot_rx, occ.frequency_index, preambles.front().preamble_id);
+  if (not ssb_index.has_value()) {
+    logger.info("pci={} ra-rnti={}: Discarding PRACH occasion. Cause: It is associated with no SS/PBCH block",
+                cell_cfg.params.pci,
+                ra_rnti);
+    return;
+  }
+
   // Search for pending RAR with matching RA-RNTI and Rx Slot.
-  auto               rar_it = std::find_if(pending_rars.begin(), pending_rars.end(), [&](const pending_rar_alloc& rar) {
+  auto rar_it = std::find_if(pending_rars.begin(), pending_rars.end(), [&](const pending_rar_alloc& rar) {
     return rar.ra_rnti == ra_rnti and rar.prach_slot_rx == prach_slot_rx;
   });
-  pending_rar_alloc* rar_req = rar_it != pending_rars.end() ? &*rar_it : nullptr;
-  if (rar_req == nullptr) {
+  if (rar_it == pending_rars.end()) {
     // No match was found. Create new pending RAR.
     if (pending_rars.capacity() == pending_rars.size()) {
       logger.warning("pci={} ra-rnti={}: Discarding PRACH occasion. Cause: Pending RARs queue is full",
@@ -380,11 +392,11 @@ void ra_scheduler::handle_msg1_occasion(const rach_indication_message::occasion&
                      ra_rnti);
       return;
     }
-    pending_rars.emplace_back();
-    rar_req                = &pending_rars.back();
-    rar_req->ra_rnti       = ra_rnti;
-    rar_req->prach_slot_rx = prach_slot_rx;
+    pending_rars.emplace_back(ra_rnti, prach_slot_rx, *ssb_index);
+    rar_it = std::prev(pending_rars.end());
   }
+  pending_rar_alloc* rar_req = &*rar_it;
+  ocudu_sanity_check(rar_req->ssb_index == *ssb_index, "PRACH occasion maps to several SS/PBCH blocks");
 
   // Set RAR window. First slot after PRACH with active DL slot represents the start of the RAR window.
   if (cell_cfg.is_tdd()) {
@@ -445,16 +457,6 @@ void ra_scheduler::handle_msg1_occasion(const rach_indication_message::occasion&
   for (unsigned idx = 0; idx != preambles.size(); ++idx) {
     const auto& preamble = preambles[idx];
 
-    const std::optional<ssb_id_t> ssb_index =
-        get_preamble_ssb_index(prach_slot_rx, occ.frequency_index, preamble.preamble_id);
-    if (not ssb_index.has_value()) {
-      logger.info("pci={} ra-rnti={}: Discarding PRACH preamble. Cause: Its PRACH occasion is associated with no "
-                  "SS/PBCH block",
-                  cell_cfg.params.pci,
-                  ra_rnti);
-      continue;
-    }
-
     // Log event.
     ev_logger.enqueue(scheduler_event_logger::prach_event{
         prach_slot_rx,
@@ -473,12 +475,6 @@ void ra_scheduler::handle_msg1_occasion(const rach_indication_message::occasion&
                    ra_rnti);
       continue;
     }
-
-    // The RAR is a single PDSCH, so it can only be carried by the beam of one SS/PBCH block. The configuration
-    // validator rejects the RACH configurations that would multiplex several of them into one occasion.
-    ocudu_sanity_check(rar_req->tc_rntis.empty() or rar_req->ssb_index == *ssb_index,
-                       "PRACH occasion maps to several SS/PBCH blocks");
-    rar_req->ssb_index = *ssb_index;
 
     // Note: Checked before the RA UE context is created, so that no context is left without a RAR to be listed in.
     if (rar_req->tc_rntis.full()) {
@@ -500,6 +496,11 @@ void ra_scheduler::handle_msg1_occasion(const rach_indication_message::occasion&
 
     // Store TC-RNTI of the preamble.
     rar_req->tc_rntis.emplace_back(preamble.tc_rnti);
+  }
+
+  // No preamble was registered and no Backoff Indicator has to be sent, so the RAR would carry nothing.
+  if (rar_req->tc_rntis.empty() and not rar_req->send_backoff_indicator) {
+    pending_rars.erase(rar_it);
   }
 }
 

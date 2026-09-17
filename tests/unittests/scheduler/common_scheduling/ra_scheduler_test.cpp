@@ -800,6 +800,73 @@ TEST_F(ra_scheduler_multi_beam_test, rars_of_different_occasions_use_different_b
       << "The RARs must be carried by the beams of the SS/PBCH blocks their occasions map onto";
 }
 
+/// \brief Test suite for the beam of a RAR that carries only a Backoff Indicator.
+///
+/// Reuses the two SS/PBCH block cell, and configures an SNR threshold that drops every detected preamble, so the RAR
+/// carries no RAPID subheader and its beam cannot be inferred from a granted UE.
+class ra_scheduler_backoff_only_beam_test : public ra_scheduler_setup, public ::testing::Test
+{
+public:
+  static constexpr beam_identifier first_beam  = ra_scheduler_multi_beam_test::first_beam;
+  static constexpr beam_identifier second_beam = ra_scheduler_multi_beam_test::second_beam;
+
+  ra_scheduler_backoff_only_beam_test() :
+    ra_scheduler_setup(make_sched_cfg(),
+                       ra_scheduler_multi_beam_test::make_multi_beam_req(),
+                       /*sched_csi=*/false,
+                       /*sched_sib1=*/false)
+  {
+  }
+
+  static scheduler_expert_config make_sched_cfg()
+  {
+    scheduler_expert_config cfg               = config_helpers::make_default_scheduler_expert_config();
+    cfg.ra.backoff_indicator_snr_threshold_dB = -5.0F;
+    return cfg;
+  }
+
+  /// Creates a PRACH occasion whose single preamble is below the SNR threshold.
+  rach_indication_message create_weak_rach_indication()
+  {
+    rach_indication_message::preamble weak = create_random_preamble();
+    weak.snr_dB                            = -10.0F;
+    return test_helper::create_rach_indication(cell_cfg, next_slot_rx(), {weak});
+  }
+};
+
+/// Verifies that a RAR carrying only a Backoff Indicator is beamformed towards the SS/PBCH block of its PRACH
+/// occasion, so that the UEs told to back off can receive it.
+///
+/// The beam cannot be taken from a granted UE here, so a RAR that ignored the occasion association would fall back to
+/// the first SS/PBCH block and only ever be seen on \c first_beam.
+TEST_F(ra_scheduler_backoff_only_beam_test, backoff_only_rars_use_the_beams_of_their_occasions)
+{
+  // Each attempt drains less than one system frame, so that the next indication lands on the PRACH occasion right
+  // after the previous one. Draining a whole number of frames would keep hitting the same point of the association
+  // period and observe a single SS/PBCH block.
+  static constexpr unsigned nof_slots_drained = 8;
+
+  std::set<unsigned> observed_beams;
+  for (unsigned attempt = 0; attempt != 6 and observed_beams.size() < 2; ++attempt) {
+    handle_rach_indication(create_weak_rach_indication());
+
+    for (unsigned i = 0; i != nof_slots_drained and observed_beams.size() < 2; ++i) {
+      run_slot();
+      for (const rar_information& rar : res_grid[0].result.dl.rar_grants) {
+        ASSERT_TRUE(rar.backoff_indicator.has_value());
+        ASSERT_TRUE(rar.grants.empty());
+        const beam_identifier beam = beam_of(rar.pdsch_cfg.precoding_and_beamforming);
+        ASSERT_NE(beam, beam_identifier::invalid);
+        observed_beams.emplace(to_underlying(beam));
+      }
+    }
+  }
+
+  ASSERT_EQ(observed_beams, (std::set<unsigned>{to_underlying(first_beam), to_underlying(second_beam)}))
+      << "The backoff-only RARs must be carried by the beams of the SS/PBCH blocks their occasions map onto";
+  ASSERT_EQ(tracker.nof_msg3_newtxs(), 0U) << "No preamble should have been granted a Msg3";
+}
+
 struct two_step_test_params {
   /// MsgA PUSCH TD offset.
   uint8_t                                td_offset;
