@@ -10,7 +10,7 @@ if [ -n "$RETINA_PORTS" ]; then
   # In this mode, we expect to receive data over UDP, telling websocket ip/port of the server.
   export WS_URL=$(socat -u UDP-RECVFROM:"${RETINA_PORTS}",reuseaddr STDOUT)
 fi
-telegraf --config /etc/ocudu/telegraf.conf $TELEGRAF_CLI_EXTRA_ARGS &
+telegraf --non-strict-env-handling --config /etc/ocudu/telegraf.conf $TELEGRAF_CLI_EXTRA_ARGS &
 child=$!
 
 health_code=0

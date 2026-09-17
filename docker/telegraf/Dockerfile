@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
 
-ARG TELEGRAF_VERSION=1.35.0
+ARG TELEGRAF_VERSION=1.39.3
 FROM telegraf:${TELEGRAF_VERSION}
 RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y --no-install-recommends python3-websocket socat
 
