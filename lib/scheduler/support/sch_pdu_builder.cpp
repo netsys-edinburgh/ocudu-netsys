@@ -490,7 +490,7 @@ void ocudu::build_pdsch_f1_1_c_rnti(pdsch_information&              pdsch,
   cw.tb_size_bytes   = mcs_tbs_info.tbs;
 
   // Beamforming and precoding.
-  pdsch.precoding_and_beamforming = cs_mgr.get_precoding(pdsch_cfg.nof_layers, vrbs.length());
+  pdsch.precoding_and_beamforming = cs_mgr.get_precoding(pdsch_cfg.nof_layers);
 
   // Populate power offsets.
   if (not cell_cfg.nzp_csi_rs_list.empty()) {

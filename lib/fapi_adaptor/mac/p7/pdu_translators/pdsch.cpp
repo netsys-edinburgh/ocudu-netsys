@@ -80,19 +80,20 @@ static void fill_precoding_and_beamforming(fapi::dl_pdsch_pdu_builder&          
                                            unsigned                              nof_layers,
                                            unsigned                              cell_nof_prbs)
 {
-  // FAPI carries a single PRG per transmission.
-  ocudu_assert(mac_info.prgs.size() == 1,
-               "The PDSCH precoding and beamforming must hold a single PRG, given {}",
-               mac_info.prgs.size());
+  // FAPI does not support PDSCH beamforming outside of a Precoding Matrix Indicator.
+  ocudu_assert(std::holds_alternative<precoding_matrix_indicator>(mac_info),
+               "The PDSCH precoding and beamforming must hold a Precoding Matrix Indicator");
+  const auto& pmi = std::get<precoding_matrix_indicator>(mac_info);
 
   fapi::tx_precoding_and_beamforming_pdu_builder pm_bf_builder = builder.get_tx_precoding_and_beamforming_pdu_builder();
-  // A wideband transmission spans the complete allocation, which this interface expresses in cell PRBs.
-  pm_bf_builder.set_prg_parameters(mac_info.is_wideband() ? cell_nof_prbs : mac_info.nof_rbs_per_prg);
+  // FAPI carries a single PRG per transmission, spanning the complete allocation, which this interface expresses
+  // in cell PRBs.
+  pm_bf_builder.set_prg_parameters(cell_nof_prbs);
 
   mac_pdsch_precoding_info info;
   // A monostate PMI selects no precoding, which this interface expresses as an omnidirectional matrix.
-  if (not std::holds_alternative<std::monostate>(mac_info.prgs.front().pmi)) {
-    info.report = mac_info.prgs.front().pmi;
+  if (!std::holds_alternative<std::monostate>(pmi)) {
+    info.report = pmi;
   }
   pm_bf_builder.set_pmi(pm_mapper.map(info, nof_layers));
 }

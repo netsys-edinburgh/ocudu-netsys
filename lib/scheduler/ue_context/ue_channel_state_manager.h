@@ -49,18 +49,14 @@ public:
   unsigned get_recommended_pusch_tpmi(unsigned nof_layers) const;
 
   /// \brief Fetches the precoding codebook to be used in DL based on reported PMI and the chosen nof layers.
-  precoding_and_beamforming_info get_precoding(unsigned chosen_nof_layers, unsigned nof_rbs) const
+  precoding_and_beamforming_info get_precoding(unsigned chosen_nof_layers) const
   {
     ocudu_assert(chosen_nof_layers <= nof_dl_ports, "Invalid number of layers chosen");
     if (nof_dl_ports <= 1) {
       // In case of 1 DL port, no precoding is used.
       return make_default_precoding();
     }
-    precoding_and_beamforming_info precoding_info;
-    precoding_info.nof_rbs_per_prg = nof_rbs;
-    precoding_info.prgs.push_back(prg_precoding_and_beamforming{
-        .pmi = recommended_prg_info[nof_layers_to_index(chosen_nof_layers)], .beams = {}});
-    return precoding_info;
+    return precoding_and_beamforming_info{recommended_prg_info[nof_layers_to_index(chosen_nof_layers)]};
   }
 
   /// Update UE with the latest CSI report for a given cell.

@@ -7,20 +7,12 @@
 
 using namespace ocudu;
 
-TEST(precoding_and_beamforming_info_test, default_built_info_is_wideband_and_has_no_prg)
+TEST(precoding_and_beamforming_info_test, default_built_info_selects_no_precoding)
 {
   const precoding_and_beamforming_info info;
 
-  ASSERT_TRUE(info.is_wideband());
-  ASSERT_TRUE(info.prgs.empty());
-}
-
-TEST(precoding_and_beamforming_info_test, info_with_a_prg_size_is_not_wideband)
-{
-  precoding_and_beamforming_info info;
-  info.nof_rbs_per_prg = 4;
-
-  ASSERT_FALSE(info.is_wideband());
+  ASSERT_TRUE(std::holds_alternative<precoding_matrix_indicator>(info));
+  ASSERT_TRUE(std::holds_alternative<std::monostate>(std::get<precoding_matrix_indicator>(info)));
 }
 
 TEST(precoding_and_beamforming_info_test, single_beam_precoding_maps_the_whole_allocation_onto_one_beam)
@@ -28,20 +20,14 @@ TEST(precoding_and_beamforming_info_test, single_beam_precoding_maps_the_whole_a
   const beam_identifier                beam_id = to_beam_id(5);
   const precoding_and_beamforming_info info    = make_single_beam_precoding(beam_id);
 
-  ASSERT_TRUE(info.is_wideband());
-  ASSERT_EQ(info.prgs.size(), 1);
-  ASSERT_EQ(info.prgs[0].beams, precoding_beam_list{beam_id});
-  // A single beam carries an unprecoded transmission.
-  ASSERT_TRUE(std::holds_alternative<std::monostate>(info.prgs[0].pmi));
+  ASSERT_TRUE(std::holds_alternative<beam_identifier>(info));
+  ASSERT_EQ(std::get<beam_identifier>(info), beam_id);
 }
 
 TEST(precoding_and_beamforming_info_test, default_precoding_selects_the_default_beams)
 {
   const precoding_and_beamforming_info info = make_default_precoding();
 
-  ASSERT_TRUE(info.is_wideband());
-  ASSERT_EQ(info.prgs.size(), 1);
-  // An empty beam list selects the beams that map directly onto the antenna ports.
-  ASSERT_TRUE(info.prgs[0].beams.empty());
-  ASSERT_TRUE(std::holds_alternative<std::monostate>(info.prgs[0].pmi));
+  ASSERT_TRUE(std::holds_alternative<precoding_matrix_indicator>(info));
+  ASSERT_TRUE(std::holds_alternative<std::monostate>(std::get<precoding_matrix_indicator>(info)));
 }

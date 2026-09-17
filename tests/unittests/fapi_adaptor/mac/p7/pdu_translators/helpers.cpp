@@ -269,21 +269,17 @@ static pdsch_information fill_valid_pdsch_information(coreset_configuration& cor
 
   info.precoding_and_beamforming = make_default_precoding();
   if (nof_ports == 2) {
-    precoding_and_beamforming_info& pm = info.precoding_and_beamforming;
-    pm                                 = {};
-    pm.nof_rbs_per_prg                 = 273U;
-    auto& pmi                          = pm.prgs.emplace_back().pmi.emplace<pmi_two_antenna_port>();
-    pmi.pmi                            = 1;
+    pmi_two_antenna_port pmi;
+    pmi.pmi                        = 1;
+    info.precoding_and_beamforming = precoding_and_beamforming_info{precoding_matrix_indicator{pmi}};
   } else if (nof_ports == 4) {
-    precoding_and_beamforming_info& pm = info.precoding_and_beamforming;
-    pm                                 = {};
-    pm.nof_rbs_per_prg                 = 273U;
-    pm.prgs.emplace_back().pmi.emplace<pmi_typeI_single_panel>(pmi_typeI_single_panel{
+    precoding_matrix_indicator pmi = pmi_typeI_single_panel{
         pmi_codebook_typeI_single_panel{pmi_codebook_single_panel_config::two_one, pmi_codebook_typeI_mode::one},
         1,
         std::nullopt,
         std::nullopt,
-        1});
+        1};
+    info.precoding_and_beamforming = precoding_and_beamforming_info{pmi};
   }
 
   // By default, fill 1-port precoding matrix, which means not configuring the precoding in the 'pdsch_information'

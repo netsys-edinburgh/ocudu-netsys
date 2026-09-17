@@ -552,10 +552,10 @@ static auto make_ue_dl_msg_debug_log_entry(const dl_msg_alloc& ue_grant)
   // Capture only the fields needed for formatting instead of the entire dl_msg_alloc struct, to keep the entry
   // within the type_list_buffer_stream segment size (2048 bytes).
   std::optional<precoding_matrix_indicator> first_prg;
-  const auto&                               prgs = ue_grant.pdsch_cfg.precoding_and_beamforming.prgs;
   // A monostate PMI selects no precoding, which carries nothing worth logging.
-  if (not prgs.empty() and not std::holds_alternative<std::monostate>(prgs[0].pmi)) {
-    first_prg = prgs[0].pmi;
+  if (const auto* pmi = std::get_if<precoding_matrix_indicator>(&ue_grant.pdsch_cfg.precoding_and_beamforming);
+      pmi != nullptr and not std::holds_alternative<std::monostate>(*pmi)) {
+    first_prg = *pmi;
   }
 
   // Capture second codeword fields if present.
