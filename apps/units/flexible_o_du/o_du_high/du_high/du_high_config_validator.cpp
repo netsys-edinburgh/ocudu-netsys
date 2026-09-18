@@ -1364,7 +1364,7 @@ static bool validate_tdd_ul_dl_unit_config(const du_high_unit_tdd_ul_dl_config& 
 /// Validates that the beams of a cell fit its antenna topology and are distinct.
 static bool validate_ref_beams(const std::vector<du_high_unit_ref_beam_config>& beams, unsigned nof_antennas_dl)
 {
-  const std::optional<antenna_topology> topology = get_antenna_topology(nof_antennas_dl);
+  const std::optional<antenna_topology> topology = get_single_panel_antenna_topology(nof_antennas_dl);
   if (!topology.has_value()) {
     fmt::print("Number of DL antennas {} does not define an antenna topology. Valid values are 1, 2, 4 and 8.\n",
                nof_antennas_dl);

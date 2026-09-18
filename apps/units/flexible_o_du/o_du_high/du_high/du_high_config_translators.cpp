@@ -729,7 +729,7 @@ std::vector<odu::du_cell_config> ocudu::generate_du_cell_config(const du_high_un
     out_cell.ran.ta_offset = band_helper::get_ta_offset(band, base_cell.eutra_coexistence);
 
     // > SSB.
-    const antenna_topology topology = get_antenna_topology(base_cell.nof_antennas_dl).value();
+    const antenna_topology topology = get_single_panel_antenna_topology(base_cell.nof_antennas_dl).value();
     out_cell.ran.ssb_cfg.ssb_beams.reset();
     for (const auto& ssb_beam : base_cell.ssb_cfg.beams) {
       const auto& beam = *std::find_if(base_cell.ref_beams.begin(),

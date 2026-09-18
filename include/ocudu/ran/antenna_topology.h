@@ -17,6 +17,11 @@ namespace ocudu {
 /// An antenna topology is defined by a number of independent panels. Each panel that contain a matrix of
 /// \f$(N_1, N_2)\f$ antennas with one or two polarizations.
 ///
+/// Each topology defines a beam grid, the set of beams that its panels can form. Every antenna dimension is sampled
+/// with an oversampling factor \f$(O_1, O_2)\f$, which gives \f$N_1 O_1\f$ beams in the first dimension and
+/// \f$N_2 O_2\f$ in the second, as per TS 38.214 Section 5.2.2.2. A beam of the grid is selected by its panel, its
+/// polarization and its index in each of the two dimensions.
+///
 /// The values for each enumeration are grouped in 4 nibbles (groups of 4 bits), from MSB to LSB:
 /// - Number of panels minus one;
 /// - Number of elements on the first dimension minus one;
@@ -133,7 +138,7 @@ constexpr unsigned get_max_nof_beams()
 /// \brief Gets the single-panel antenna topology defined for a number of antenna ports.
 /// \return The antenna topology, or \c std::nullopt if no topology is defined for the number of ports.
 /// \remark This function needs to be updated to support more parameters and antenna topologies.
-constexpr std::optional<antenna_topology> get_antenna_topology(unsigned nof_ports)
+constexpr std::optional<antenna_topology> get_single_panel_antenna_topology(unsigned nof_ports)
 {
   switch (nof_ports) {
     case 1:

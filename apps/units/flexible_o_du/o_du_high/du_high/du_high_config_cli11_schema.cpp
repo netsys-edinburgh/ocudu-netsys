@@ -555,11 +555,18 @@ static void configure_cli11_ref_beam_args(CLI::App& app, du_high_unit_ref_beam_c
   add_option(app,
              "--ref_beam_id",
              beam_params.ref_beam_id,
-             "Identifier that the reference signals of the cell use to select it")
+             "Cell reference beam identifier. Used for broadcast signals such as SSB.")
       ->capture_default_str();
-  add_option(app, "--i_pol", beam_params.i_pol, "Polarization index of the beam")->capture_default_str();
-  add_option(app, "--i_beam_dim1", beam_params.i_beam_dim1, "First dimension index of the beam")->capture_default_str();
-  add_option(app, "--i_beam_dim2", beam_params.i_beam_dim2, "Second dimension index of the beam")
+  add_option(app, "--i_pol", beam_params.i_pol, "Polarization index of the beam")->capture_default_str()->range(0, 1);
+  add_option(app,
+             "--i_beam_dim1",
+             beam_params.i_beam_dim1,
+             "First dimension index of the beam. Valid values are (0, ..., O1*N1 - 1)")
+      ->capture_default_str();
+  add_option(app,
+             "--i_beam_dim2",
+             beam_params.i_beam_dim2,
+             "Second dimension index of the beam. Valid values are (0, ..., O2*N2 - 1)")
       ->capture_default_str();
 }
 
@@ -2611,13 +2618,11 @@ static void configure_cli11_common_cell_args(CLI::App& app, du_high_unit_base_ce
   CLI::App* ssb_subcmd = add_subcommand(app, "ssb", "SSB parameters");
   configure_cli11_ssb_args(*ssb_subcmd, cell_params.ssb_cfg);
 
-  add_option_object_list<du_high_unit_ref_beam_config>(
-      app,
-      "--ref_beams",
-      cell_params.ref_beams,
-      configure_cli11_ref_beam_args,
-      "Beams that the reference signals of the cell can be transmitted on. The beams that the transmitted SSB "
-      "candidates need are appended if they are not configured");
+  add_option_object_list<du_high_unit_ref_beam_config>(app,
+                                                       "--ref_beams",
+                                                       cell_params.ref_beams,
+                                                       configure_cli11_ref_beam_args,
+                                                       "List of cell reference beams for broadcasting channels.");
 
   // SIB configuration.
   CLI::App* sib_subcmd = add_subcommand(app, "sib", "SIB configuration parameters");
@@ -3064,8 +3069,9 @@ void ocudu::configure_cli11_with_du_high_config_schema(CLI::App& app, du_high_pa
   configure_cli11_test_mode_args(*test_mode_subcmd, parsed_cfg.config.test_mode_cfg);
 }
 
-// Derive the parameters set to "auto"-derived for a cell.
-/// Returns the identifier of the cell beam holding the given coordinates, appending it to the cell if it is missing.
+/// \brief Returns the identifier of the cell reference beam holding the given coordinates.
+///
+/// Appends a reference beam to \c beams if no beam matches the coordinates.
 static unsigned get_or_add_ref_beam(std::vector<du_high_unit_ref_beam_config>& beams,
                                     unsigned                                   i_pol,
                                     unsigned                                   i_beam_dim1,
@@ -3093,7 +3099,7 @@ static unsigned get_or_add_ref_beam(std::vector<du_high_unit_ref_beam_config>& b
 /// dimension and last the second dimension. The beams that the sweep needs are added to the cell.
 static void derive_ssb_beams(du_high_unit_base_cell_config& cell_cfg)
 {
-  const std::optional<antenna_topology> topology = get_antenna_topology(cell_cfg.nof_antennas_dl);
+  const std::optional<antenna_topology> topology = get_single_panel_antenna_topology(cell_cfg.nof_antennas_dl);
   if (not topology.has_value()) {
     return;
   }
@@ -3122,6 +3128,7 @@ static void derive_ssb_beams(du_high_unit_base_cell_config& cell_cfg)
   }
 }
 
+// Derive the parameters set to "auto"-derived for a cell.
 static void derive_cell_auto_params(du_high_unit_base_cell_config& cell_cfg)
 {
   // If NR band is not set, derive a valid one from the DL-ARFCN.

@@ -157,8 +157,9 @@ struct du_high_unit_ref_beam_config {
 struct du_high_unit_ssb_beam_config {
   /// Index of the SSB candidate within the SSB burst, as per TS 38.213 Section 4.1.
   unsigned ssb_index = 0;
-  /// \brief Beam that carries the SSB candidate, given as the identifier of one of the reference beams of the cell.
-  /// Derived from the position of the candidate in the burst if not set.
+  /// \brief Cell reference beam for this SSB.
+  ///
+  /// The DU assigns one automatically if not present, sweeping the beam grid over the transmitted SSB candidates.
   std::optional<unsigned> ref_beam_id;
 };
 
@@ -1374,8 +1375,9 @@ struct du_high_unit_base_cell_config {
   int q_qual_min = -20;
   /// SSB parameters.
   du_high_unit_ssb_config ssb_cfg;
-  /// \brief Beams that the reference signals of the cell can be transmitted on.
-  /// The beams that the transmitted SSB candidates need are appended if they are not configured.
+  /// \brief List of beams for transmitting the reference signals of the cell.
+  ///
+  /// Leave empty for letting the DU select the beams automatically.
   std::vector<du_high_unit_ref_beam_config> ref_beams;
   /// SIB parameters.
   du_high_unit_sib_config sib_cfg;
