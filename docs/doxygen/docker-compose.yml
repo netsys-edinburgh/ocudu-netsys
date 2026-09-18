@@ -6,13 +6,13 @@ services:
   doxygen:
     image: ${CI_REGISTRY_IMAGE}/doxygen:${DOXYGEN_VERSION}-${PLANTUML_VERSION}
     build:
-      context: ../.gitlab/ci/doxygen
+      context: ../../.gitlab/ci/doxygen
       dockerfile: Dockerfile
       args:
         DOXYGEN_VERSION: ${DOXYGEN_VERSION}
         PLANTUML_VERSION: ${PLANTUML_VERSION}
     volumes:
-      - ../:/workdir
+      - ../../:/workdir
     user: "${UID}:${GID}"
     environment:
       DOXYGEN_TARGET: ${DOXYGEN_TARGET:-doxygen}
