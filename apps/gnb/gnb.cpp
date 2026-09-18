@@ -536,7 +536,7 @@ int main(int argc, char** argv)
                                                              .io_brk      = *epoll_broker};
   {
     const auto& du_cfg = o_du_app_unit->get_o_du_high_unit_config().du_high_cfg.config;
-    const uint64_t du_id = gnb_du_id_to_int(du_cfg.gnb_du_id);
+    const uint64_t du_id = static_cast<uint64_t>(du_cfg.gnb_du_id);
     if (!du_cfg.cells_cfg.empty()) {
       o_cuup_unit_deps.du_pci_map[du_id] = du_cfg.cells_cfg.front().cell.pci;
     }

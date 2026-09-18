@@ -146,7 +146,7 @@ void to_json(nlohmann::json& json, const cu_cp_metrics_report::ue_info& ue)
   if (ue.masked_imeisv.has_value()) {
     json["masked_imeisv"] = ue.masked_imeisv.value();
   }
-  json["du_id"] = gnb_du_id_to_int(ue.du_id);
+  json["du_id"] = static_cast<uint64_t>(ue.du_id);
   json["pci"]   = ue.pci;
 }
 

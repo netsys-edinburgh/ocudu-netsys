@@ -131,11 +131,9 @@ TEST_F(cu_cp_mocn_test, when_new_f1_setup_request_is_received_and_ngs_are_setup_
   ASSERT_TRUE(ret.has_value());
   unsigned du_idx = *ret;
 
-  // Verify that DU was created but without gNB-DU-Id yet, as that value will come in the F1 Setup Request.
+  // DUs are omitted from metrics until their gNB-DU-Id arrives in the F1 Setup Request.
   report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
-  ASSERT_EQ(report.dus.size(), 1);
-  ASSERT_EQ(report.dus[0].id, gnb_du_id_t::invalid);
-  ASSERT_TRUE(report.dus[0].cells.empty());
+  ASSERT_TRUE(report.dus.empty());
 
   // Send F1 Setup Request.
   gnb_du_id_t du_id = int_to_gnb_du_id(0x55);

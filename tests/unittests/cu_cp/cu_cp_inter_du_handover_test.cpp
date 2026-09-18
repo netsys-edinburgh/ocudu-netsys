@@ -551,7 +551,7 @@ TEST_F(cu_cp_inter_du_handover_test, when_target_cell_is_deactivated_then_ho_is_
   ngap_message rejected_ngap_pdu;
   ASSERT_FALSE(this->wait_for_ngap_tx_pdu(rejected_ngap_pdu, std::chrono::milliseconds{100}));
   auto report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
-  ASSERT_EQ(report.mobility.nof_handover_executions_requested, 0U);
+  ASSERT_EQ(report.dus[0].ho_metrics.nof_handover_executions_requested, 0U);
 
   // The rejection must not leave the UE unreconfigurable: unlock the cell and the same handover now
   // runs to completion.
@@ -570,8 +570,8 @@ TEST_F(cu_cp_inter_du_handover_test, when_target_cell_is_deactivated_then_ho_is_
   ASSERT_TRUE(send_f1ap_ue_context_release_complete(source_du_idx));
 
   report = this->get_cu_cp().get_metrics_handler().request_metrics_report();
-  ASSERT_EQ(report.mobility.nof_handover_executions_requested, 1U);
-  ASSERT_EQ(report.mobility.nof_successful_handover_executions, 1U);
+  ASSERT_EQ(report.dus[0].ho_metrics.nof_handover_executions_requested, 1U);
+  ASSERT_EQ(report.dus[0].ho_metrics.nof_successful_handover_executions, 1U);
 }
 
 /// Fixture that attaches the UE with cell-change location reporting configured via Initial Context Setup.
