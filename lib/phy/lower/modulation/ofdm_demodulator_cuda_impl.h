@@ -10,6 +10,7 @@
 #include "ocudu/ocuduvec/conversion.h"
 #include "ocudu/phy/lower/modulation/ofdm_demodulator.h"
 #include <atomic>
+#include <chrono>
 #include <low_phy_puxch_rx.h>
 #include <memory>
 #include <mutex>
@@ -70,6 +71,12 @@ public:
                                           unsigned                  nof_symbols) override;
 
 private:
+  /// \brief Prepares the grid for the device mapping on the given stream.
+  ///
+  /// After the grid refuses it, which happens when a device mapping or reader holds the grid past its bounded wait,
+  /// the following attempts fail without waiting for \ref grid_busy_backoff, unless the GPU path is forced.
+  bool prepare_device_grid_mapping(resource_grid_writer& grid, void* stream);
+
   bool demodulate_gpu_ci16_ports(resource_grid_writer&     grid,
                                  span<const ci16_t* const> inputs,
                                  unsigned                  nof_samples,
@@ -103,6 +110,10 @@ private:
   bool                                     gpu_available  = false;
   ocudu_lowphy_puxch_rx_handle_t*          handle         = nullptr;
   std::mutex                               demodulator_mutex;
+  /// Time during which device mappings fail fast after the grid refused one.
+  static constexpr std::chrono::milliseconds grid_busy_backoff{2};
+  /// Device mappings fail fast until this time.
+  std::chrono::steady_clock::time_point grid_busy_until;
 };
 
 } // namespace ocudu

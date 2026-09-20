@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "../../support/resource_grid_test_doubles.h"
 #include "resource_grid_cuda_visible_impl.h"
 #include "ocudu/phy/lower/modulation/modulation_factories.h"
 #include "ocudu/phy/support/support_factories.h"
@@ -13,6 +14,7 @@
 #include <gtest/gtest.h>
 #include <limits>
 #include <random>
+#include <thread>
 
 using namespace ocudu;
 
@@ -436,4 +438,77 @@ TEST(ofdm_demodulator_cuda, forced_gpu_failure_drops_the_symbol)
   ASSERT_EQ(symbol.size(), nof_subc);
   EXPECT_TRUE(std::all_of(symbol.begin(), symbol.end(), [](cbf16_t value) { return value == cbf16_t{}; }))
       << "the dropped symbol still holds data from an earlier slot";
+}
+
+namespace {
+
+/// Writer of a CUDA-visible grid that refuses every device mapping, as a grid held past its bounded wait does.
+class busy_device_grid_writer : public resource_grid_writer_spy
+{
+public:
+  busy_device_grid_writer(unsigned nof_ports, unsigned nof_symbols, unsigned nof_prb) :
+    resource_grid_writer_spy(nof_ports, nof_symbols, nof_prb)
+  {
+    set_supports_device_grid_mapping(true);
+  }
+
+  bool prepare_device_grid_mapping(void* /**/) override
+  {
+    ++nof_prepare_calls;
+    return false;
+  }
+
+  unsigned nof_prepare_calls = 0;
+};
+
+} // namespace
+
+// Without a forced GPU path, a refused device mapping falls back to the GPU per symbol and per port before the host.
+// Those retries must not wait out the bounded wait of the grid again: they fail without touching the grid for a short
+// time, after which the grid is tried again.
+TEST(ofdm_demodulator_cuda, refused_grid_mapping_fails_retries_fast)
+{
+  int device_count = 0;
+  if ((cudaGetDeviceCount(&device_count) != cudaSuccess) || (device_count == 0)) {
+    GTEST_SKIP() << "CUDA is not available.";
+  }
+  ASSERT_EQ(unsetenv("OCUDU_LOWPHY_RX_ACCELERATION"), 0);
+  ASSERT_EQ(unsetenv("OCUDU_LOWPHY_PUXCH_DEMODULATION_ACCELERATION"), 0);
+
+  static constexpr float    input_scale  = std::numeric_limits<int16_t>::max();
+  static constexpr unsigned symbol_index = 1;
+
+  ofdm_demodulator_configuration config = {};
+  config.numerology                     = 1;
+  config.bw_rb                          = 52;
+  config.dft_size                       = 1024;
+  config.cp                             = cyclic_prefix::NORMAL;
+  config.nof_samples_window_offset      = 0;
+  config.scale                          = 1.0F / std::sqrt(static_cast<float>(config.bw_rb * NOF_SUBCARRIERS_PER_RB));
+  config.center_freq_Hz                 = 0.0;
+
+  ofdm_factory_generic_configuration common_config = {.dft_factory = make_dft_factory()};
+  ASSERT_NE(common_config.dft_factory, nullptr);
+  auto gpu_factory = create_ofdm_demodulator_factory_accelerated(common_config, "auto");
+  ASSERT_NE(gpu_factory, nullptr);
+  std::unique_ptr<ofdm_symbol_demodulator> gpu_demodulator = gpu_factory->create_ofdm_symbol_demodulator(config);
+  ASSERT_NE(gpu_demodulator, nullptr);
+
+  busy_device_grid_writer writer(1, get_nsymb_per_slot(config.cp), config.bw_rb);
+
+  subcarrier_spacing scs = to_subcarrier_spacing(config.numerology);
+  unsigned cp_len = config.cp.get_length(symbol_index, scs).to_samples(to_sampling_rate_Hz(scs, config.dft_size));
+  std::vector<ci16_t> input(cp_len + config.dft_size);
+
+  EXPECT_FALSE(gpu_demodulator->demodulate_ci16(writer, input, input_scale, 0, symbol_index));
+  ASSERT_EQ(writer.nof_prepare_calls, 1);
+
+  // An immediate retry fails without asking the grid again.
+  EXPECT_FALSE(gpu_demodulator->demodulate_ci16(writer, input, input_scale, 0, symbol_index));
+  EXPECT_EQ(writer.nof_prepare_calls, 1);
+
+  // Once the grid had time to free up, it is asked again.
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  EXPECT_FALSE(gpu_demodulator->demodulate_ci16(writer, input, input_scale, 0, symbol_index));
+  EXPECT_EQ(writer.nof_prepare_calls, 2);
 }

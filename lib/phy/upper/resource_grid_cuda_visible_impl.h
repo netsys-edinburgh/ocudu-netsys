@@ -747,7 +747,10 @@ private:
       return managed_data != nullptr;
     }
     for (void* event : pending_grid_ready_events) {
-      if (cudaStreamWaitEvent(static_cast<cudaStream_t>(stream), static_cast<cudaEvent_t>(event), 0) != cudaSuccess) {
+      const cudaError_t status =
+          cudaStreamWaitEvent(static_cast<cudaStream_t>(stream), static_cast<cudaEvent_t>(event), 0);
+      if (status != cudaSuccess) {
+        record_host_access_error(status, "cudaStreamWaitEvent on pending grid-ready events");
         return false;
       }
     }

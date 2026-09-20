@@ -269,6 +269,20 @@ bool ofdm_symbol_demodulator_cuda_impl::demodulate_ci16_symbol_batch_ports(resou
   return false;
 }
 
+bool ofdm_symbol_demodulator_cuda_impl::prepare_device_grid_mapping(resource_grid_writer& grid, void* stream)
+{
+  // Without a forced GPU path, a refused mapping falls back to the GPU per symbol, then per port, then to the CPU.
+  // Each GPU retry would wait out the bounded wait of the grid again, so they fail fast for a short time instead.
+  if (!force_gpu_path && (std::chrono::steady_clock::now() < grid_busy_until)) {
+    return false;
+  }
+  if (grid.prepare_device_grid_mapping(stream)) {
+    return true;
+  }
+  grid_busy_until = std::chrono::steady_clock::now() + grid_busy_backoff;
+  return false;
+}
+
 bool ofdm_symbol_demodulator_cuda_impl::demodulate_gpu_ci16_ports(resource_grid_writer&     grid,
                                                                   span<const ci16_t* const> inputs,
                                                                   unsigned                  nof_samples,
@@ -349,7 +363,7 @@ bool ofdm_symbol_demodulator_cuda_impl::demodulate_gpu_ci16_ports(resource_grid_
   if (timing_enabled) {
     stage_start = std::chrono::steady_clock::now();
   }
-  if (!grid.prepare_device_grid_mapping(stream)) {
+  if (!prepare_device_grid_mapping(grid, stream)) {
     return false;
   }
   if (timing_enabled) {
@@ -526,7 +540,7 @@ bool ofdm_symbol_demodulator_cuda_impl::demodulate_gpu_ci16_symbol_batch_ports(
   if (timing_enabled) {
     stage_start = std::chrono::steady_clock::now();
   }
-  if (!grid.prepare_device_grid_mapping(stream)) {
+  if (!prepare_device_grid_mapping(grid, stream)) {
     return false;
   }
   if (timing_enabled) {
