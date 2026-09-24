@@ -3,6 +3,7 @@
 
 #include "external_ul_processor_example_impl.h"
 #include "ocudu/adt/bounded_integer.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/ocuduvec/conversion.h"
 #include "ocudu/ocuduvec/fill.h"
 #include "ocudu/ocuduvec/sc_prod.h"
