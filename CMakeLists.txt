@@ -805,3 +805,8 @@ sbom_add(
     FILE    "${CMAKE_SOURCE_DIR}/LICENSE"
 )
 sbom_finalize(NO_VERIFY)
+
+########################################################################
+# OCUDU PHY TAP
+########################################################################
+add_subdirectory(ocudu_phy_tap)
