@@ -26,10 +26,10 @@ install_dependencies_debian_ubuntu() {
 
     local -a build_pkgs=(
         cmake make gcc g++ pkg-config ccache
-        libfftw3-dev libmbedtls-dev libsctp-dev libyaml-cpp-dev libgtest-dev
+        libfftw3-dev libmbedtls-dev libsctp-dev libyaml-cpp-dev libgtest-dev libzmq3-dev
     )
     local -a run_pkgs=(
-        libfftw3-dev libmbedtls-dev libsctp-dev libyaml-cpp-dev libgtest-dev libcap2-bin
+        libfftw3-dev libmbedtls-dev libsctp-dev libyaml-cpp-dev libgtest-dev libcap2-bin libzmq5
     )
     local -a extra_pkgs=(
         libzmq3-dev libuhd-dev uhd-host libboost-program-options-dev libdpdk-dev libelf-dev libdwarf-dev libdw-dev capnproto libcapnp-dev
@@ -99,10 +99,10 @@ install_dependencies_fedora() {
     local -a pkgs=()
 
     local -a build_pkgs=(
-        cmake ccache make libatomic fftw-devel lksctp-tools-devel yaml-cpp-devel mbedtls-devel gtest-devel
+        cmake ccache make libatomic fftw-devel lksctp-tools-devel yaml-cpp-devel mbedtls-devel gtest-devel zeromq-devel
     )
     local -a run_pkgs=(
-        fftw-libs-single lksctp-tools yaml-cpp mbedtls libcap
+        fftw-libs-single lksctp-tools yaml-cpp mbedtls libcap zeromq
     )
     local -a extra_pkgs=(
         boost-devel capnproto capnproto-devel cppzmq-devel dpdk-devel elfutils-devel elfutils-libelf-devel
@@ -137,10 +137,10 @@ install_dependencies_centos() {
     local -a pkgs=()
 
     local -a build_pkgs=(
-        cmake make libatomic fftw-devel lksctp-tools-devel yaml-cpp-devel mbedtls-devel gtest-devel
+        cmake make libatomic fftw-devel lksctp-tools-devel yaml-cpp-devel mbedtls-devel gtest-devel zeromq-devel
     )
     local -a run_pkgs=(
-        fftw-libs-single lksctp-tools yaml-cpp mbedtls
+        fftw-libs-single lksctp-tools yaml-cpp mbedtls zeromq
     )
     local -a extra_pkgs=(
         boost-devel capnproto capnproto-devel cppzmq-devel dpdk-devel elfutils-devel elfutils-libelf-devel
@@ -174,10 +174,10 @@ install_dependencies_ubi10() {
     local -a pkgs=()
 
     local -a build_pkgs=(
-        cmake make libatomic fftw-devel lksctp-tools-devel yaml-cpp-devel mbedtls-devel gtest-devel
+        cmake make libatomic fftw-devel lksctp-tools-devel yaml-cpp-devel mbedtls-devel gtest-devel zeromq-devel
     )
     local -a run_pkgs=(
-        fftw-libs-single lksctp-tools yaml-cpp mbedtls
+        fftw-libs-single lksctp-tools yaml-cpp mbedtls zeromq
     )
     local -a extra_pkgs=(
         boost-devel capnproto capnproto-devel cppzmq-devel dpdk-devel elfutils-devel elfutils-libelf-devel
@@ -211,10 +211,10 @@ install_dependencies_arch() {
     local -a pkgs=()
 
     local -a build_pkgs=(
-        cmake ccache fftw mbedtls3 yaml-cpp lksctp-tools gtest pkgconf
+        cmake ccache fftw mbedtls3 yaml-cpp lksctp-tools gtest pkgconf zeromq
     )
     local -a run_pkgs=(
-        fftw mbedtls3 yaml-cpp lksctp-tools gtest libcap
+        fftw mbedtls3 yaml-cpp lksctp-tools gtest libcap zeromq
     )
     local -a extra_pkgs=(
         zeromq libuhd boost dpdk libelf libdwarf elfutils capnproto
@@ -253,12 +253,12 @@ install_dependencies_rhel() {
     local -a build_pkgs=(
         cmake ccache fftw-devel lksctp-tools-devel
         gcc gcc-c++ libatomic
-        yaml-cpp-devel mbedtls-devel
+        yaml-cpp-devel mbedtls-devel cppzmq-devel
     )
     local -a run_pkgs=(
         fftw-devel lksctp-tools
         libatomic libcap
-        yaml-cpp-devel mbedtls-devel
+        yaml-cpp-devel mbedtls-devel zeromq
     )
     local -a extra_pkgs=(
         cppzmq-devel libusbx-devel boost-devel numactl-devel capnproto capnproto-devel
