@@ -55,6 +55,10 @@ add_executable(uplink_processor_test uplink_processor_test.cpp)
 target_link_libraries(uplink_processor_test ocudu_uplink_processor ocudulog GTest::gtest GTest::gtest_main)
 gtest_discover_tests(uplink_processor_test)
 
+add_executable(uplink_processor_pool_test uplink_processor_pool_test.cpp)
+target_link_libraries(uplink_processor_pool_test ocudu_upper_phy ocudulog GTest::gtest GTest::gtest_main)
+gtest_discover_tests(uplink_processor_pool_test)
+
 add_executable(uplink_request_processor_test uplink_request_processor_test.cpp)
 target_link_libraries(uplink_request_processor_test ocudu_uplink_processor ocudu_phy_support ocudulog GTest::gtest GTest::gtest_main)
 gtest_discover_tests(uplink_request_processor_test)

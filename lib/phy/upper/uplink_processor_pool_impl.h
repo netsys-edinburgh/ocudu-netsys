@@ -48,8 +48,16 @@ public:
   void stop() override;
 
 private:
-  /// Maximum number of simultaneous assigned processors.
-  static constexpr unsigned nof_assigned_processors = 16;
+  /// \brief Number of slots the processor assignation table spans.
+  ///
+  /// The table is indexed by slot, so it must span every slot from the newest UL_TTI.request to the oldest slot whose
+  /// receive symbols are still arriving: the maximum processing delay, plus the lead of the slot indications over the
+  /// air time (the transmit lead of a split-8 radio), plus the receive latency. When it spans less, a request for a
+  /// later slot overwrites the entry of a slot still being received, that slot's symbols reach a processor configured
+  /// for another slot, and its PDUs are discarded when the processor is reused. Sixteen entries are only 8 ms at 30 kHz,
+  /// which a GPU deployment with a processing delay of 8 slots exceeds. The size divides the number of slots in an SFN
+  /// period at every numerology, so the index stays continuous across the SFN wrap.
+  static constexpr unsigned nof_assigned_processors = 64;
 
   // See uplink_slot_processor_pool interface for documentation.
   uplink_slot_processor& get_slot_processor(slot_point slot) override;

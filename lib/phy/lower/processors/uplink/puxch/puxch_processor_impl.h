@@ -32,6 +32,12 @@ class puxch_processor_impl : public puxch_processor,
                              public puxch_processor_demodulator_notifier
 {
 public:
+  /// \brief Number of slots the resource grid request array spans.
+  ///
+  /// Spans 64 slots rather than the default 16 for the same reason as the upper PHY processor assignation: a request
+  /// for a slot that far ahead of the one being received must not replace the request of that slot.
+  static constexpr unsigned nof_request_slots = 64;
+
   struct configuration {
     cyclic_prefix cp;
     unsigned      nof_rx_ports;
@@ -119,8 +125,8 @@ private:
   puxch_baseband_demodulator_scoped current_demodulator;
   /// Current slot.
   slot_point current_slot;
-  /// Pool of receive requests.
-  resource_request_pool<shared_resource_grid> requests;
+  /// Pool of receive requests, indexed by slot.
+  resource_request_pool<shared_resource_grid, nof_request_slots> requests;
 };
 
 } // namespace ocudu

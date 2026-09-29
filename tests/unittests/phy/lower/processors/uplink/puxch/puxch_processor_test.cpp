@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "../../../../../../../lib/phy/lower/processors/uplink/puxch/puxch_processor_impl.h"
 #include "../../../../support/resource_grid_test_doubles.h"
 #include "../../../modulation/ofdm_demodulator_test_doubles.h"
 #include "puxch_processor_notifier_test_doubles.h"
@@ -143,7 +144,7 @@ private:
 class LowerPhyUplinkProcessorFixture : public ::testing::TestWithParam<LowerPhyUplinkProcessorParams>
 {
 protected:
-  static constexpr unsigned request_queue_size = 16;
+  static constexpr unsigned request_queue_size = puxch_processor_impl::nof_request_slots;
 
   static void SetUpTestSuite()
   {
