@@ -258,6 +258,31 @@ TEST(serving_cell_config_converter_test, test_ue_custom_pdsch_cfg_conversion)
   }
 }
 
+TEST(serving_cell_config_converter_test, test_pdsch_serving_cell_cfg_max_mimo_layers_is_encoded)
+{
+  auto src_cfg = make_initial_du_ue_resource_config();
+  src_cfg.cell_group.cells.at(SERVING_PCELL_IDX).serv_cell_cfg.pdsch_serv_cell_cfg->max_mimo_layers = 0;
+  odu::du_ue_resource_config dest_cfg{src_cfg};
+  dest_cfg.cell_group.cells.at(SERVING_PCELL_IDX).serv_cell_cfg.pdsch_serv_cell_cfg->max_mimo_layers = 1;
+
+  asn1::rrc_nr::cell_group_cfg_s rrc_cell_grp_cfg;
+  odu::calculate_cell_group_config_diff(rrc_cell_grp_cfg, src_cfg, dest_cfg);
+  const auto& pdsch_serv = rrc_cell_grp_cfg.sp_cell_cfg.sp_cell_cfg_ded.pdsch_serving_cell_cfg.setup();
+  ASSERT_TRUE(pdsch_serv.max_mimo_layers_present);
+  // maxMIMO-Layers sits in an extension group: it is only encoded if the extension bit is set.
+  ASSERT_TRUE(pdsch_serv.ext);
+
+  byte_buffer   bytes;
+  asn1::bit_ref bref{bytes};
+  ASSERT_EQ(asn1::OCUDUASN_SUCCESS, rrc_cell_grp_cfg.pack(bref));
+  asn1::rrc_nr::cell_group_cfg_s decoded;
+  asn1::cbit_ref                 cbref{bytes};
+  ASSERT_EQ(asn1::OCUDUASN_SUCCESS, decoded.unpack(cbref));
+  const auto& decoded_serv = decoded.sp_cell_cfg.sp_cell_cfg_ded.pdsch_serving_cell_cfg.setup();
+  ASSERT_TRUE(decoded_serv.max_mimo_layers_present);
+  ASSERT_EQ(decoded_serv.max_mimo_layers, 1);
+}
+
 TEST(serving_cell_config_converter_test, test_ue_pdsch_td_alloc_list_r16_conversion)
 {
   auto                       src_cfg = make_initial_du_ue_resource_config();

@@ -3185,8 +3185,6 @@ static void calculate_pdsch_serving_cell_cfg_diff(asn1::rrc_nr::pdsch_serving_ce
   } else {
     out.dl_harq_feedback_disabled_r17.reset();
   }
-  out.ext = out.dl_harq_feedback_disabled_r17.is_present() or out.nrof_harq_processes_for_pdsch_v1700_present;
-
   if (dest.pucch_cell.has_value()) {
     out.pucch_cell_present = true;
     out.pucch_cell         = dest.pucch_cell.value();
@@ -3201,6 +3199,12 @@ static void calculate_pdsch_serving_cell_cfg_diff(asn1::rrc_nr::pdsch_serving_ce
     out.processing_type2_enabled_present = true;
     out.processing_type2_enabled         = dest.processing_type_2_enabled.value();
   }
+
+  // maxMIMO-Layers and processingType2Enabled are in the first extension group of PDSCH-ServingCellConfig; without the
+  // extension bit they are silently dropped by the encoder. The UE then derives TBS_LBRM (TS 38.212 5.4.2.1) from its
+  // capability instead of the configured number of layers.
+  out.ext = out.max_mimo_layers_present or out.processing_type2_enabled_present or
+            out.dl_harq_feedback_disabled_r17.is_present() or out.nrof_harq_processes_for_pdsch_v1700_present;
 }
 
 static bool calculate_serving_cell_config_diff(asn1::rrc_nr::serving_cell_cfg_s& out,
