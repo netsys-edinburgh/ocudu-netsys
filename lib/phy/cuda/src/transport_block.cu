@@ -1304,7 +1304,7 @@ extern "C" {
 
 // Maximum sizes for pre-allocation (avoids any runtime cudaMalloc/cudaFree)
 // Based on the maximum NR TBS and coded-bit allocation supported by this backend:
-// - Max TBS: NR_MAX_TBS_BITS (~1.28Mbits); reserve 200KB with CRC and headroom
+// - Max TBS: NR_MAX_TBS_BITS (~1.57Mbits, 1024QAM 4 layers 273 PRB); reserve 200KB with CRC and headroom
 // - Max CBs: ceil((A + TB CRC) / (K_cb - CB CRC)) for BG1
 // - Max LDPC input: Kb=22 * Z=384 = 8448 bits/CB = 264 words/CB
 // - Max LDPC output: 66 * Z = 25344 bits/CB = 792 words/CB

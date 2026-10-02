@@ -1237,6 +1237,9 @@ private:
 
     // Shape change: reconfigure in place (no create, no buffer grow when RT-locked).
     if (tb_encoder_configure(resident_tb_encoder_, &tb_cfg) != NR_LDPC_SUCCESS) {
+      // A failed configure leaves the resident encoder partially reconfigured: the cached shape no longer describes
+      // it, so the next transmission must configure it again instead of hitting the exact/shape fast paths.
+      resident_cfg_valid_ = false;
       ocudulog::fetch_basic_logger("PHY").error(
           "CUDA PDSCH resident configure failed rnti=0x{:x} n_id={} Z={} F={} G={} (shape exceeds max or RT lock)",
           cfg.n_rnti,

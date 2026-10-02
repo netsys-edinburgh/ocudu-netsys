@@ -46,8 +46,11 @@
 #define NR_LDPC_MAX_ENCODED_BITS 26112    // Maximum encoded bits per CB
 
 // Transport Block parameters
-#define NR_MAX_TBS_BITS 1277992   // ~160KB max TBS
-#define NR_MAX_NUM_CBS_PER_TB 152 // Maximum code blocks per TB
+// Maximum TBS per TS 38.214 Section 5.1.3.2 for 273 PRB, 156 RE/PRB, 4 layers and the 1024QAM MCS table
+// (Table 5.1.3.1-4, MCS 26: Qm = 10, R = 948/1024): N_info = 1577091.75 -> TBS = 1573768 bits in C = 187 codeblocks.
+// (The 256QAM bound, Table 5.1.3.1-2 MCS 27, is 1277992 bits in 152 codeblocks.)
+#define NR_MAX_TBS_BITS 1573768   // ~197KB max TBS (1024QAM)
+#define NR_MAX_NUM_CBS_PER_TB 187 // Maximum code blocks per TB (1024QAM)
 #define NR_TB_CRC24A_BITS 24      // CRC-24A for large TBs
 #define NR_TB_CRC16_BITS 16       // CRC-16 for small TBs
 #define NR_CB_CRC24B_BITS 24      // CRC-24B for code blocks
