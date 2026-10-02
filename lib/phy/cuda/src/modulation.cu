@@ -1758,11 +1758,12 @@ __global__ void scramble_modulate_16qam_int8_kernel(
         scrambled_bits |= (bit << b);
     }
 
-    int i_idx = scrambled_bits & 0x3;
-    int q_idx = (scrambled_bits >> 2) & 0x3;
+    // I uses bits 0,2; Q uses bits 1,3 (TS 38.211 Section 5.1.4)
+    int i_idx = (scrambled_bits & 0x1) | ((scrambled_bits & 0x4) >> 1);
+    int q_idx = ((scrambled_bits >> 1) & 0x1) | (((scrambled_bits >> 1) & 0x4) >> 1);
 
     d_symbols_int8[idx * 2]     = QAM16_I8[i_idx];
-    d_symbols_int8[idx * 2 + 1] = QAM16_I8[q_idx];
+    d_symbols_int8[idx * 2 + 1] = QAM16_Q8[q_idx];
 }
 
 /**
@@ -2000,8 +2001,9 @@ __global__ void batch_scramble_modulate_16qam_kernel(
 
     bits ^= scr_bits;
 
-    int i_idx = (bits & 0x1) | ((bits & 0x4) >> 1);
-    int q_idx = ((bits >> 1) & 0x1) | (((bits >> 1) & 0x4) >> 1);
+    // QAM16_TABLE is indexed with the axis bits kept in place (bits 0 and 2), as in modulate_16qam_kernel.
+    int i_idx = bits & 0x5;
+    int q_idx = (bits >> 1) & 0x5;
 
     d_symbols[idx] = make_cuFloatComplex(QAM16_TABLE[i_idx], QAM16_TABLE[q_idx]);
 }

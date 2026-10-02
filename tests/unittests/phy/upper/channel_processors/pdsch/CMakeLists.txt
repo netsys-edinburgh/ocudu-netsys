@@ -21,3 +21,19 @@ target_link_libraries(pdsch_processor_validator_test
         GTest::gtest
         GTest::gtest_main)
 add_test(pdsch_processor_validator_test pdsch_processor_validator_test)
+
+if (CUDA_ACCEL_FOUND)
+  # CUDA PDSCH symbol-generation kernels versus the host rate matcher, scrambler and modulation mapper for every
+  # modulation order.
+  add_executable(pdsch_cuda_modulation_order_test pdsch_cuda_modulation_order_test.cpp)
+  target_link_libraries(pdsch_cuda_modulation_order_test
+          ocudu_ldpc_cuda
+          ocudu_channel_coding
+          ocudu_channel_modulation
+          ocudu_sequence_generators
+          ocudulog
+          GTest::gtest
+          GTest::gtest_main)
+  add_test(pdsch_cuda_modulation_order_test pdsch_cuda_modulation_order_test)
+  set_tests_properties(pdsch_cuda_modulation_order_test PROPERTIES LABELS "cuda;pdsch" RESOURCE_LOCK ocudu_cuda_device)
+endif ()
