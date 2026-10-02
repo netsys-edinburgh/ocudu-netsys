@@ -7,11 +7,14 @@
 #include "../../phy_acceleration_runtime_options.h"
 #include "cuda/cuda_rt_utils.h"
 #include "cuda/pdsch_resource_grid_mapper_cuda.h"
+#include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/phy/upper/channel_coding/ldpc/ldpc_segmenter_buffer.h"
 #include "ocudu/ran/cyclic_prefix.h"
 #include "ocudu/ran/resource_block.h"
+#include "ocudu/support/error_handling.h"
 #include "ocudu/support/ocudu_assert.h"
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -165,11 +168,20 @@ bool is_direct_grid_encode_enabled()
   return enabled;
 }
 
+/// CB batches produced by the host fallback, over all instances.
+std::atomic<uint64_t> nof_host_fallbacks = {0};
+
 } // namespace
 
-pdsch_block_processor_gpu_impl::pdsch_block_processor_gpu_impl(std::unique_ptr<pdsch_tb_encoder_gpu> tb_encoder_,
-                                                               int                                   nvcuda_device_id) :
-  tb_encoder(std::move(tb_encoder_)), device_id_(nvcuda_device_id)
+uint64_t pdsch_block_processor_gpu_impl::get_nof_host_fallbacks()
+{
+  return nof_host_fallbacks.load(std::memory_order_relaxed);
+}
+
+pdsch_block_processor_gpu_impl::pdsch_block_processor_gpu_impl(std::unique_ptr<pdsch_tb_encoder_gpu>  tb_encoder_,
+                                                               int                                    nvcuda_device_id,
+                                                               std::unique_ptr<pdsch_block_processor> host_fallback_) :
+  tb_encoder(std::move(tb_encoder_)), device_id_(nvcuda_device_id), host_fallback(std::move(host_fallback_))
 {
   ocudu_assert(tb_encoder, "Invalid GPU TB encoder.");
   ocudu_assert(tb_encoder->is_gpu_available(), "GPU not available.");
@@ -230,6 +242,7 @@ pdsch_block_processor_gpu_impl::configure_new_transmission(span<const uint8_t>  
                                                            unsigned                     cb_batch_len)
 {
   // Store configuration for deferred processing.
+  current_config  = config;
   transport_block = data;
   segment_buffer  = &segment_buffer_;
   modulation      = config.modulation;
@@ -254,6 +267,7 @@ pdsch_block_processor_gpu_impl::configure_new_transmission(span<const uint8_t>  
   current_slice_symbol_offset     = 0;
   current_slice_uses_symbol_cache = false;
   device_grid_mapping_requested   = false;
+  host_fallback_active            = false;
 
   const unsigned mod_order = get_bits_per_symbol(modulation);
   for (unsigned cb = start_i_cb; cb <= last_i_cb; ++cb) {
@@ -460,6 +474,11 @@ bool pdsch_block_processor_gpu_impl::map_ports_in_order(span<const uint32_t>    
     process_batch_gpu();
   }
 
+  // Symbols produced by the host fallback are not device resident: let the caller map them on the host.
+  if (host_fallback_active) {
+    return false;
+  }
+
   bool timing_enabled = is_gpu_mapper_timing_enabled();
   if (timing_enabled && (gpu_mapper_start_event == nullptr)) {
     cudaEvent_t start_event = nullptr;
@@ -606,6 +625,12 @@ void pdsch_block_processor_gpu_impl::process_batch_gpu()
     // Cache-disabled reference path: preserve one encode/download per configured CB batch.
     tb_encoder->set_defer_symbol_download(device_grid_mapping_requested);
     unsigned result_symbols = tb_encoder->encode(transport_block, cfg);
+    if (first_symbol_offset + total_symbols > result_symbols) {
+      cached_encode_valid = false;
+      cached_symbols_left = 0;
+      process_batch_host_fallback();
+      return;
+    }
 
     ocudu_assert(first_symbol_offset + total_symbols <= result_symbols,
                  "GPU TB encoder returned {} symbols, but requested slice [{}:{})",
@@ -627,6 +652,13 @@ void pdsch_block_processor_gpu_impl::process_batch_gpu()
     // Encode entire TB on GPU (CRC + Segment + LDPC + RM + Scramble + Modulate).
     tb_encoder->set_defer_symbol_download(device_grid_mapping_requested);
     result_symbols = tb_encoder->encode(transport_block, cfg);
+    if (first_symbol_offset + total_symbols > result_symbols) {
+      // The GPU encoder rejected the transmission (zero symbols): never serve stale symbols.
+      cached_encode_valid = false;
+      cached_symbols_left = 0;
+      process_batch_host_fallback();
+      return;
+    }
 
     cached_symbols_buffer.resize(result_symbols);
     cached_symbols_host_valid = false;
@@ -659,6 +691,50 @@ void pdsch_block_processor_gpu_impl::process_batch_gpu()
   }
 
   batch_processed = true;
+}
+
+void pdsch_block_processor_gpu_impl::process_batch_host_fallback()
+{
+  if (!host_fallback) {
+    report_fatal_error("CUDA PDSCH: GPU encoder rejected the transmission (modulation={}, tbs={} bytes, layers={}) and "
+                       "no host fallback block processor is available",
+                       to_string(modulation),
+                       transport_block.size(),
+                       nof_layers);
+  }
+
+  nof_host_fallbacks.fetch_add(1, std::memory_order_relaxed);
+
+  static std::atomic<bool> warned = {false};
+  if (!warned.exchange(true)) {
+    ocudulog::fetch_basic_logger("PHY").warning(
+        "CUDA PDSCH: GPU encoder rejected a transmission (modulation={}, tbs={} bytes, layers={}); producing its "
+        "symbols on the host. Further fallbacks are not logged.",
+        to_string(modulation),
+        transport_block.size(),
+        nof_layers);
+  }
+
+  resource_grid_mapper::symbol_buffer& host_symbols = host_fallback->configure_new_transmission(
+      transport_block, codeword_index, current_config, *segment_buffer, start_i_cb, last_i_cb - start_i_cb + 1);
+
+  symbols_buffer.resize(total_symbols);
+  unsigned offset = 0;
+  while ((offset != total_symbols) && !host_symbols.empty()) {
+    unsigned          block_size = std::min(host_symbols.get_max_block_size(), total_symbols - offset);
+    span<const ci8_t> block      = host_symbols.pop_symbols(block_size);
+    std::copy(block.begin(), block.end(), symbols_buffer.begin() + offset);
+    offset += block_size;
+  }
+  ocudu_assert(offset == total_symbols,
+               "The host fallback produced {} symbols, but the CB batch has {}.",
+               offset,
+               total_symbols);
+
+  current_slice_symbol_offset     = 0;
+  current_slice_uses_symbol_cache = false;
+  host_fallback_active            = true;
+  batch_processed                 = true;
 }
 
 span<const ci8_t> pdsch_block_processor_gpu_impl::pop_symbols(unsigned block_size)

@@ -41,6 +41,7 @@
 #include <thread>
 
 #ifdef ENABLE_CUDA
+#include "channel_processors/pdsch/pdsch_block_processor_gpu_impl.h"
 #include "cuda/pdsch_device_grid_writer_cuda.h"
 #include "cuda/pdsch_resource_grid_mapper_cuda.h"
 #include "resource_grid_cuda_visible_impl.h"
@@ -300,6 +301,17 @@ struct grid_diff_stats {
   cf_t     cpu_value      = {};
   cf_t     gpu_value      = {};
 };
+
+/// Number of CB batches the GPU block processors produced with their host fallback. The GPU-versus-CPU comparisons
+/// require it to stay unchanged: a transmission the GPU encoder rejected would otherwise match the CPU trivially.
+uint64_t get_nof_gpu_host_fallbacks()
+{
+#ifdef ENABLE_CUDA
+  return pdsch_block_processor_gpu_impl::get_nof_host_fallbacks();
+#else
+  return 0;
+#endif
+}
 
 grid_diff_stats compare_resource_grids(const resource_grid_reader& cpu_reader, const resource_grid_reader& gpu_reader)
 {
@@ -657,11 +669,13 @@ TEST_P(PdschGpuE2eFixture, CpuAndGpuResourceGridsMatch)
   pdsch_processor_notifier_adaptor cpu_notifier;
   pdsch_processor_notifier_adaptor gpu_notifier;
 
+  const uint64_t nof_fallbacks = get_nof_gpu_host_fallbacks();
   cpu_proc->process(cpu_grid->get_writer(), cpu_notifier, {shared_transport_block(tx_data)}, pdu);
   gpu_proc->process(gpu_grid->get_writer(), gpu_notifier, {shared_transport_block(tx_data)}, pdu);
 
   cpu_notifier.wait_for_completion();
   gpu_notifier.wait_for_completion();
+  ASSERT_EQ(get_nof_gpu_host_fallbacks(), nof_fallbacks) << "The GPU encoder rejected the transmission.";
 
   grid_diff_stats diff = compare_resource_grids(cpu_grid->get_reader(), gpu_grid->get_reader());
   ASSERT_EQ(diff.nof_mismatches, 0U) << "max_abs_error=" << diff.max_abs_error << " at port=" << diff.port
@@ -1221,9 +1235,11 @@ void check_device_grid_writer_matches_host(unsigned                             
   ASSERT_NE(gpu_proc, nullptr);
 
   pdsch_processor_notifier_adaptor gpu_notifier;
+  const uint64_t                   nof_fallbacks = get_nof_gpu_host_fallbacks();
   gpu_proc->process(device_writer, gpu_notifier, {shared_transport_block(tx_data)}, pdu);
   gpu_notifier.wait_for_completion();
   ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+  ASSERT_EQ(get_nof_gpu_host_fallbacks(), nof_fallbacks) << "The GPU encoder rejected the transmission.";
 
   std::vector<uint16_t> device_grid_bf16(device_writer.get_device_grid_size_bytes() / sizeof(uint16_t));
   ASSERT_TRUE(device_writer.copy_device_grid_to_host(span<uint16_t>(device_grid_bf16)));
@@ -1278,6 +1294,136 @@ TEST_P(PdschGpuDeviceGridWriter, MapsQam1024DataToWriterDeviceGrid)
                                           sch_mcs_index(mcs),
                                           std::nullopt,
                                           pdsch_mcs_table::qam1024);
+  }
+}
+
+/// GPU TB encoder double that rejects every transmission, as the CUDA encoder does for a shape above its capacity.
+class rejecting_pdsch_tb_encoder : public pdsch_tb_encoder_gpu
+{
+public:
+  unsigned encode(span<const uint8_t> /**/, const config& /**/) override { return 0; }
+  unsigned encode_to_device_grid(span<const uint8_t> /**/,
+                                 const config& /**/,
+                                 const uint32_t* /**/,
+                                 uint16_t* /**/,
+                                 unsigned /**/,
+                                 unsigned /**/,
+                                 unsigned /**/,
+                                 unsigned /**/,
+                                 unsigned /**/,
+                                 float /**/) override
+  {
+    return 0;
+  }
+  unsigned encode_to_device_grid_precoded(span<const uint8_t> /**/,
+                                          const config& /**/,
+                                          const uint32_t* /**/,
+                                          uint16_t* /**/,
+                                          unsigned /**/,
+                                          unsigned /**/,
+                                          unsigned /**/,
+                                          const pdsch_precoding_weights_t& /**/) override
+  {
+    return 0;
+  }
+  void                get_symbols(span<ci8_t> /**/, unsigned /**/, unsigned /**/) override {}
+  void                get_symbols_float(span<cf_t> /**/, unsigned /**/, unsigned /**/) override {}
+  void*               get_device_symbols() const override { return nullptr; }
+  const int8_t*       get_device_symbols_int8() const override { return nullptr; }
+  void                set_defer_symbol_download(bool /**/) override {}
+  void*               get_execution_context() const override { return nullptr; }
+  void                synchronize() override {}
+  unsigned            get_num_symbols() const override { return 0; }
+  const timing_stats& get_last_timing_stats() const override { return stats; }
+  bool                is_gpu_available() const override { return true; }
+
+private:
+  timing_stats stats = {};
+};
+
+class rejecting_gpu_block_processor_factory : public pdsch_block_processor_factory
+{
+public:
+  std::unique_ptr<pdsch_block_processor> create() override
+  {
+    return std::make_unique<pdsch_block_processor_gpu_impl>(
+        std::make_unique<rejecting_pdsch_tb_encoder>(), 0, create_cpu_pdsch_block_processor_factory()->create());
+  }
+};
+
+// A transmission the GPU encoder rejects is produced by the host fallback, identical to the CPU processor, on host and
+// device-backed writers, instead of leaving stale symbols.
+TEST(PdschGpuHostFallback, RejectedTransmissionsMatchCpu)
+{
+  if (!is_pdsch_block_processor_acceleration_available()) {
+    GTEST_SKIP() << "CUDA PDSCH GPU block processor is not available in this build/runtime.";
+  }
+
+  inline_task_executor                     executor;
+  std::shared_ptr<pdsch_processor_factory> cpu_proc_factory =
+      create_test_pdsch_processor_factory(create_cpu_pdsch_block_processor_factory(), executor);
+  std::shared_ptr<pdsch_processor_factory> gpu_proc_factory = create_test_pdsch_processor_factory(
+      std::make_shared<rejecting_gpu_block_processor_factory>(), executor, std::numeric_limits<unsigned>::max());
+  std::shared_ptr<resource_grid_factory> grid_factory = create_resource_grid_factory();
+  ASSERT_TRUE(cpu_proc_factory && gpu_proc_factory && grid_factory);
+  std::unique_ptr<pdsch_processor> cpu_proc = cpu_proc_factory->create();
+  std::unique_ptr<pdsch_processor> gpu_proc = gpu_proc_factory->create();
+  ASSERT_TRUE(cpu_proc && gpu_proc);
+
+  for (unsigned nof_layers : {1U, 2U}) {
+    for (unsigned mcs : {5U, 27U}) {
+      SCOPED_TRACE(fmt::format("layers={} qam256 mcs={}", nof_layers, mcs));
+      symbol_slot_mask    dmrs_symbol_mask = make_dmrs_symbol_mask(dmrs_profile::double_symbol);
+      sch_mcs_description mcs_descr        = pdsch_mcs_get_config(pdsch_mcs_table::qam256, sch_mcs_index(mcs));
+      unsigned            tbs = calculate_tbs(mcs_descr, 52, nof_layers, dmrs_config_type::type1, dmrs_symbol_mask, 2);
+      ASSERT_EQ(tbs % 8, 0U);
+      pdsch_processor::pdu_t pdu =
+          build_pdsch_pdu(mcs_descr, 52, nof_layers, nof_layers, 0, dmrs_config_type::type1, dmrs_symbol_mask, 2, tbs);
+
+      std::vector<uint8_t> tx_data(tbs / 8);
+      std::mt19937         rgen(0xfa11bac0U + mcs + nof_layers);
+      std::generate(tx_data.begin(), tx_data.end(), [&rgen]() { return static_cast<uint8_t>(rgen() & 0xff); });
+
+      std::unique_ptr<resource_grid> cpu_grid =
+          grid_factory->create(nof_layers, MAX_NSYMB_PER_SLOT, MAX_NOF_SUBCARRIERS);
+      std::unique_ptr<resource_grid> gpu_grid =
+          grid_factory->create(nof_layers, MAX_NSYMB_PER_SLOT, MAX_NOF_SUBCARRIERS);
+      std::unique_ptr<resource_grid> dev_grid =
+          grid_factory->create(nof_layers, MAX_NSYMB_PER_SLOT, MAX_NOF_SUBCARRIERS);
+      ASSERT_TRUE(cpu_grid && gpu_grid && dev_grid);
+
+      pdsch_processor_notifier_adaptor cpu_notifier;
+      cpu_proc->process(cpu_grid->get_writer(), cpu_notifier, {shared_transport_block(tx_data)}, pdu);
+      cpu_notifier.wait_for_completion();
+
+      uint64_t                         nof_fallbacks = get_nof_gpu_host_fallbacks();
+      pdsch_processor_notifier_adaptor gpu_notifier;
+      gpu_proc->process(gpu_grid->get_writer(), gpu_notifier, {shared_transport_block(tx_data)}, pdu);
+      gpu_notifier.wait_for_completion();
+      ASSERT_GT(get_nof_gpu_host_fallbacks(), nof_fallbacks);
+
+      grid_diff_stats diff = compare_resource_grids(cpu_grid->get_reader(), gpu_grid->get_reader());
+      ASSERT_EQ(diff.nof_mismatches, 0U) << "max_abs_error=" << diff.max_abs_error << " at port=" << diff.port
+                                         << " symbol=" << diff.symbol << " subcarrier=" << diff.subcarrier
+                                         << " cpu=" << diff.cpu_value << " gpu=" << diff.gpu_value;
+
+      // Device-backed writer: the device mapping declines and the host mapper writes the data REs.
+      dev_grid->set_all_zero();
+      pdsch_device_grid_writer_cuda device_writer(dev_grid->get_writer());
+      ASSERT_TRUE(device_writer.clear_device_grid_async());
+      ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+      nof_fallbacks = get_nof_gpu_host_fallbacks();
+      pdsch_processor_notifier_adaptor dev_notifier;
+      gpu_proc->process(device_writer, dev_notifier, {shared_transport_block(tx_data)}, pdu);
+      dev_notifier.wait_for_completion();
+      ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+      ASSERT_GT(get_nof_gpu_host_fallbacks(), nof_fallbacks);
+      diff = compare_resource_grids(cpu_grid->get_reader(), dev_grid->get_reader());
+      ASSERT_EQ(diff.nof_mismatches, 0U) << "device writer: max_abs_error=" << diff.max_abs_error
+                                         << " at port=" << diff.port << " symbol=" << diff.symbol
+                                         << " subcarrier=" << diff.subcarrier << " cpu=" << diff.cpu_value
+                                         << " gpu=" << diff.gpu_value;
+    }
   }
 }
 

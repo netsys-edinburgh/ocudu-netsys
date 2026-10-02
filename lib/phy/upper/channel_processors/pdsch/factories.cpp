@@ -515,7 +515,16 @@ namespace {
 class pdsch_block_processor_factory_accelerated : public pdsch_block_processor_factory
 {
 public:
-  explicit pdsch_block_processor_factory_accelerated(int cuda_device_id_) : nvcuda_device_id(cuda_device_id_) {}
+  explicit pdsch_block_processor_factory_accelerated(int cuda_device_id_) :
+    nvcuda_device_id(cuda_device_id_),
+    // Host chain for transmissions the GPU encoder rejects (e.g. above its preallocated capacity), so that a rejected
+    // transmission is still produced bit-exactly instead of leaving stale symbols.
+    host_fallback_factory(create_pdsch_block_processor_factory_sw(create_ldpc_encoder_factory_sw("auto"),
+                                                                  create_ldpc_rate_matcher_factory_sw(),
+                                                                  create_pseudo_random_generator_sw_factory(),
+                                                                  create_modulation_mapper_factory()))
+  {
+  }
 
   std::unique_ptr<pdsch_block_processor> create() override
   {
@@ -523,11 +532,15 @@ public:
     if (!tb_encoder || !tb_encoder->is_gpu_available()) {
       return nullptr;
     }
-    return std::make_unique<pdsch_block_processor_gpu_impl>(std::move(tb_encoder), nvcuda_device_id);
+    std::unique_ptr<pdsch_block_processor> host_fallback =
+        host_fallback_factory ? host_fallback_factory->create() : nullptr;
+    return std::make_unique<pdsch_block_processor_gpu_impl>(
+        std::move(tb_encoder), nvcuda_device_id, std::move(host_fallback));
   }
 
 private:
-  int nvcuda_device_id;
+  int                                            nvcuda_device_id;
+  std::shared_ptr<pdsch_block_processor_factory> host_fallback_factory;
 };
 
 } // namespace

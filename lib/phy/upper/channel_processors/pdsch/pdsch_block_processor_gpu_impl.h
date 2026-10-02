@@ -31,11 +31,19 @@ class pdsch_block_processor_gpu_impl : public pdsch_block_processor, private res
 public:
   /// Constructs the GPU block processor with TB-level encoder.
   ///
-  /// \param tb_encoder_ GPU-accelerated transport block encoder.
-  explicit pdsch_block_processor_gpu_impl(std::unique_ptr<pdsch_tb_encoder_gpu> tb_encoder_, int nvcuda_device_id = 0);
+  /// \param tb_encoder_    GPU-accelerated transport block encoder.
+  /// \param host_fallback_ Optional host block processor that produces the symbols of a transmission the GPU encoder
+  ///                       rejects (for example a transport block above the preallocated GPU capacity). Without it, a
+  ///                       rejected transmission is a fatal error rather than a silently wrong symbol stream.
+  explicit pdsch_block_processor_gpu_impl(std::unique_ptr<pdsch_tb_encoder_gpu>  tb_encoder_,
+                                          int                                    nvcuda_device_id = 0,
+                                          std::unique_ptr<pdsch_block_processor> host_fallback_   = nullptr);
 
   /// Frees GPU device-mapper scratch buffers.
   ~pdsch_block_processor_gpu_impl() override;
+
+  /// Returns the number of CB batches produced by the host fallback since process start (all instances).
+  static uint64_t get_nof_host_fallbacks();
 
   // See interface for documentation.
   resource_grid_mapper::symbol_buffer& configure_new_transmission(span<const uint8_t>          data,
@@ -83,6 +91,9 @@ private:
   /// Processes transport block using GPU.
   void process_batch_gpu();
 
+  /// Produces the current CB batch symbols with the host fallback processor after the GPU encoder rejected it.
+  void process_batch_host_fallback();
+
   /// Builds the full-TB encoder configuration and reports this CB batch's first symbol.
   pdsch_tb_encoder_gpu::config make_encoder_config(unsigned& first_symbol_offset, unsigned& full_nof_symbols) const;
 
@@ -92,8 +103,17 @@ private:
   /// GPU-accelerated transport block encoder.
   std::unique_ptr<pdsch_tb_encoder_gpu> tb_encoder;
 
+  /// Configuration of the current transmission, kept for the host fallback.
+  configuration current_config = {};
+
+  /// True when the current CB batch symbols come from the host fallback (no device-resident symbols).
+  bool host_fallback_active = false;
+
   /// CUDA device ID this block processor binds to.
   int device_id_ = 0;
+
+  /// Host block processor used when the GPU encoder rejects a transmission (optional).
+  std::unique_ptr<pdsch_block_processor> host_fallback;
 
   /// Pointer to the transport block data.
   span<const uint8_t> transport_block;

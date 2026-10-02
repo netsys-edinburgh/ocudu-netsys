@@ -33,6 +33,7 @@ target_link_libraries(ocudu_pdsch_processor
 if(CUDA_ACCEL_FOUND)
     target_include_directories(ocudu_pdsch_processor PRIVATE
         ${CMAKE_SOURCE_DIR}/lib/phy/upper/channel_coding/ldpc)
-    target_link_libraries(ocudu_pdsch_processor PRIVATE ocudu_ldpc_cuda)
+    # The accelerated block processor keeps a host block processor (LDPC encoder, rate matcher, scrambler) as fallback.
+    target_link_libraries(ocudu_pdsch_processor PRIVATE ocudu_ldpc_cuda ocudu_channel_coding ocudu_sequence_generators)
     target_compile_definitions(ocudu_pdsch_processor PRIVATE ENABLE_CUDA)
 endif()
