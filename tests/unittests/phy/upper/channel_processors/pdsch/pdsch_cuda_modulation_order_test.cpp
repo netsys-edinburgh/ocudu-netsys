@@ -5,7 +5,7 @@
 /// \file
 /// \brief CUDA PDSCH symbol-generation paths versus the host chain, for every PDSCH modulation order.
 ///
-/// For Qm = 2, 4, 6 and 8 the same LDPC codeblocks and configuration are fed to
+/// For Qm = 2, 4, 6, 8 and 10 (1024QAM, TS 38.211 Section 5.1.7) the same LDPC codeblocks and configuration are fed to
 /// - the host chain: ldpc_rate_matcher (bit selection TS 38.212 Section 5.4.2.1 and bit interleaving Section 5.4.2.2),
 ///   pseudo_random_generator scrambling (TS 38.211 Section 7.3.1.1) and modulation_mapper (Section 5.1); and
 /// - every CUDA entry point that has a modulation-order specialised kernel (lib/phy/cuda pdsch_fused.cu and
@@ -62,8 +62,10 @@ modulation_scheme to_modulation(unsigned qm)
       return modulation_scheme::QAM16;
     case 6:
       return modulation_scheme::QAM64;
-    default:
+    case 8:
       return modulation_scheme::QAM256;
+    default:
+      return modulation_scheme::QAM1024;
   }
 }
 
@@ -556,7 +558,7 @@ TEST_P(PdschCudaModulationOrderTest, ScrambleModulateMatchesHost)
     for (unsigned i = 0; i != total_symbols; ++i) {
       gpu[i] = {half_to_float(half[i] & 0xffffU), half_to_float(half[i] >> 16U)};
     }
-    // FP16 keeps 11 significant bits: |error| <= 2^-11 * 1.15 for the largest 256QAM level.
+    // FP16 keeps 11 significant bits: |error| <= 2^-11 * 1.19 for the largest 1024QAM level.
     check_float(gpu, ref, 1e-3F, "pdsch_fused_scramble_modulate_half");
   }
   {
@@ -624,7 +626,7 @@ TEST_P(PdschCudaModulationOrderTest, ScrambleModulateMatchesHost)
 std::vector<test_case> make_test_cases()
 {
   std::vector<test_case> cases;
-  for (unsigned qm : {2U, 4U, 6U, 8U}) {
+  for (unsigned qm : {2U, 4U, 6U, 8U, 10U}) {
     // Single codeblock, BG1 Z=384, no filler, every RV.
     for (unsigned rv : {0U, 1U, 2U, 3U}) {
       cases.push_back({qm, 1, 384, 0, rv, 1, 1, 2000, false});

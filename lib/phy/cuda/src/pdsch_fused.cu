@@ -167,6 +167,34 @@ __device__ __constant__ float PDSCH_QAM256_TABLE[16] = {
      0.076696499f, -0.076696499f,  1.150447483f, -1.150447483f
 };
 
+// 1024QAM (TS 38.211 Section 5.1.7): 32-PAM per axis with levels ±1, ±3, ..., ±31.
+//   I = (1-2b0)[16 - (1-2b2)[8 - (1-2b4)[4 - (1-2b6)[2 - (1-2b8)]]]] / sqrt(682)
+//   Q = (1-2b1)[16 - (1-2b3)[8 - (1-2b5)[4 - (1-2b7)[2 - (1-2b9)]]]] / sqrt(682)
+// The per-axis index packs the five axis bits LSB-first, as the 256QAM tables do:
+//   index = b0 | b2 << 1 | b4 << 2 | b6 << 3 | b8 << 4   (odd bits for Q).
+// The INT8 levels are the unnormalised integers, identical to the host modulation_mapper_lut_impl ci8 table; the
+// consumer applies modulation_mapper::get_modulation_scaling(QAM1024) = 1/sqrt(682) through the precoding weights.
+#define PDSCH_QAM1024_NORM 0.0382919790533742f // 1/sqrt(682)
+
+__device__ __constant__ int8_t PDSCH_QAM1024_I8[32] = {
+    11, -11, 21, -21,  5,  -5, 27, -27, 13, -13, 19, -19,  3,  -3, 29, -29,
+     9,  -9, 23, -23,  7,  -7, 25, -25, 15, -15, 17, -17,  1,  -1, 31, -31
+};
+
+/// Gathers bits 0, 2, 4, 6, 8 of a 1024QAM bit group into a 5-bit per-axis index.
+__device__ __forceinline__ int pdsch_qam1024_axis_index(uint32_t bits)
+{
+    return static_cast<int>((bits & 0x1u) | ((bits >> 1) & 0x2u) | ((bits >> 2) & 0x4u) | ((bits >> 3) & 0x8u) |
+                            ((bits >> 4) & 0x10u));
+}
+
+/// Maps ten scrambled bits (b0 in bit 0) to an unnormalised INT8 1024QAM symbol.
+__device__ __forceinline__ void pdsch_modulate_qam1024_i8(uint32_t bits, int8_t& real_i8, int8_t& imag_i8)
+{
+    real_i8 = PDSCH_QAM1024_I8[pdsch_qam1024_axis_index(bits)];
+    imag_i8 = PDSCH_QAM1024_I8[pdsch_qam1024_axis_index(bits >> 1)];
+}
+
 // ============================================================================
 // Fused Scramble + Modulate Kernels (FP16 output)
 // ============================================================================
@@ -334,6 +362,38 @@ __global__ void __launch_bounds__(256, 4) fused_scramble_256qam_half_kernel(
     int q_idx = ((scrambled >> 1) & 0x1) | (((scrambled >> 1) & 0x4) >> 1) | (((scrambled >> 1) & 0x10) >> 2) | (((scrambled >> 1) & 0x40) >> 3);
 
     d_symbols[idx] = __floats2half2_rn(PDSCH_QAM256_TABLE[i_idx], PDSCH_QAM256_TABLE[q_idx]);
+}
+
+/**
+ * @brief Fused 1024QAM scramble + modulate with FP16 output (TS 38.211 Section 5.1.7)
+ */
+__global__ void __launch_bounds__(256, 4) fused_scramble_1024qam_half_kernel(
+    const uint32_t* __restrict__ d_bits,
+    const uint32_t* __restrict__ d_scramble_seq,
+    __half2* __restrict__ d_symbols,
+    int num_symbols
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_symbols) return;
+
+    int bit_idx = idx * 10;
+    int word_idx = bit_idx / 32;
+    int bit_pos = bit_idx % 32;
+
+    // A 10-bit group straddles two words when it starts past bit 22.
+    uint32_t bits, scr;
+    if (bit_pos <= 22) {
+        bits = (d_bits[word_idx] >> bit_pos) & 0x3FF;
+        scr = (d_scramble_seq[word_idx] >> bit_pos) & 0x3FF;
+    } else {
+        bits = ((d_bits[word_idx] >> bit_pos) | (d_bits[word_idx + 1] << (32 - bit_pos))) & 0x3FF;
+        scr = ((d_scramble_seq[word_idx] >> bit_pos) | (d_scramble_seq[word_idx + 1] << (32 - bit_pos))) & 0x3FF;
+    }
+
+    int8_t real_i8, imag_i8;
+    pdsch_modulate_qam1024_i8(bits ^ scr, real_i8, imag_i8);
+    d_symbols[idx] = __floats2half2_rn(static_cast<float>(real_i8) * PDSCH_QAM1024_NORM,
+                                       static_cast<float>(imag_i8) * PDSCH_QAM1024_NORM);
 }
 
 // ============================================================================
@@ -779,6 +839,81 @@ __global__ void __launch_bounds__(256, 4) fused_rm_interleave_scramble_256qam_in
     d_symbols_int8[sym_idx * 2 + 1] = PDSCH_QAM256_I8[q_idx];
 }
 
+/**
+ * @brief Fused 1024QAM: LDPC encoded → rate match → interleave → scramble → INT8 symbols
+ *
+ * Bit interleaving per TS 38.212 Section 5.4.2.2 with Qm = 10; mapping per TS 38.211 Section 5.1.7.
+ */
+__global__ void __launch_bounds__(256, 4) fused_rm_interleave_scramble_1024qam_int8_kernel(
+    const uint32_t* __restrict__ d_encoded,
+    uint32_t c_init,
+    int8_t* __restrict__ d_symbols_int8,
+    int N_cb, int N_full, int k0, int E, int Kd, int F, int puncture_offset,
+    int num_cbs, int encoded_stride,
+    int nof_short, int E_short, int E_long,
+    int total_symbols
+) {
+    int sym_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (sym_idx >= total_symbols) return;
+
+    int out_bit_base = sym_idx * 10;
+    int short_cb_total = nof_short * E_short;
+    int cb_idx, local_base, bits_this_cb;
+
+    if (out_bit_base < short_cb_total) {
+        cb_idx = out_bit_base / E_short;
+        local_base = out_bit_base % E_short;
+        bits_this_cb = E_short;
+    } else {
+        int offset = out_bit_base - short_cb_total;
+        cb_idx = nof_short + offset / E_long;
+        local_base = offset % E_long;
+        bits_this_cb = E_long;
+    }
+
+    // On-the-fly scrambling: advance LFSR to this thread's bit position
+    uint32_t x1 = 1;
+    uint32_t x2 = c_init & 0x7FFFFFFF;
+    x1 = advance_x1_pdsch(x1, NC_SKIP + out_bit_base);
+    x2 = advance_x2_pdsch(x2, NC_SKIP + out_bit_base);
+
+    uint32_t scrambled_bits = 0;
+    int K = bits_this_cb / 10;
+
+    #pragma unroll
+    for (int b = 0; b < 10; b++) {
+        int bit_in_cb = local_base + b;
+        int j = bit_in_cb / 10;
+        int i = bit_in_cb % 10;
+        int rm_bit_in_cb = i * K + j;
+
+        int cb_pos = fused_rate_match_index(rm_bit_in_cb, Kd, F, k0, N_cb);
+        int enc_pos = cb_pos + puncture_offset;
+
+        int in_word = enc_pos / 32;
+        int bit_in_word = enc_pos % 32;
+        int byte_in_word = bit_in_word / 8;
+        int bit_in_byte = 7 - (bit_in_word % 8);
+        int in_bit_pos = byte_in_word * 8 + bit_in_byte;
+
+        uint32_t encoded_word = d_encoded[cb_idx * encoded_stride + in_word];
+        uint32_t bit = (encoded_word >> in_bit_pos) & 1u;
+
+        // Generate scrambling bit on-the-fly
+        uint32_t scr_bit = (x1 ^ x2) & 1u;
+        x1 = step_x1_pdsch(x1);
+        x2 = step_x2_pdsch(x2);
+
+        bit ^= scr_bit;
+        scrambled_bits |= (bit << b);
+    }
+
+    int8_t real_i8, imag_i8;
+    pdsch_modulate_qam1024_i8(scrambled_bits, real_i8, imag_i8);
+    d_symbols_int8[sym_idx * 2]     = real_i8;
+    d_symbols_int8[sym_idx * 2 + 1] = imag_i8;
+}
+
 __device__ __forceinline__ uint32_t pdsch_read_scramble_bit(
     const uint32_t* __restrict__ d_scramble_seq,
     int bit_idx)
@@ -814,6 +949,8 @@ __device__ __forceinline__ void pdsch_modulate_i8(uint32_t scrambled_bits,
                     (((scrambled_bits >> 1) & 0x10) >> 2);
         real_i8 = PDSCH_QAM64_I8[i_idx];
         imag_i8 = PDSCH_QAM64_I8[q_idx];
+    } else if (q_m == 10) {
+        pdsch_modulate_qam1024_i8(scrambled_bits, real_i8, imag_i8);
     } else {
         int i_idx = (scrambled_bits & 0x1) | ((scrambled_bits & 0x4) >> 1) |
                     ((scrambled_bits & 0x10) >> 2) | ((scrambled_bits & 0x40) >> 3);
@@ -907,6 +1044,11 @@ __global__ void __launch_bounds__(256, 4) fused_rm_interleave_scramble_precomput
                     (((scrambled_bits >> 1) & 0x10) >> 2) | (((scrambled_bits >> 1) & 0x40) >> 3);
         d_symbols_int8[sym_idx * 2]     = PDSCH_QAM256_I8[i_idx];
         d_symbols_int8[sym_idx * 2 + 1] = PDSCH_QAM256_I8[q_idx];
+    } else if (Q_M == 10) {
+        int8_t real_i8, imag_i8;
+        pdsch_modulate_qam1024_i8(scrambled_bits, real_i8, imag_i8);
+        d_symbols_int8[sym_idx * 2]     = real_i8;
+        d_symbols_int8[sym_idx * 2 + 1] = imag_i8;
     }
 }
 
@@ -1162,6 +1304,11 @@ __global__ void __launch_bounds__(256, 4) fused_rm_interleave_scramble_precomput
                     (((scrambled_bits >> 1) & 0x10) >> 2) | (((scrambled_bits >> 1) & 0x40) >> 3);
         d_symbols_int8[global_sym_idx * 2]     = PDSCH_QAM256_I8[i_idx];
         d_symbols_int8[global_sym_idx * 2 + 1] = PDSCH_QAM256_I8[q_idx];
+    } else if (Q_M == 10) {
+        int8_t real_i8, imag_i8;
+        pdsch_modulate_qam1024_i8(scrambled_bits, real_i8, imag_i8);
+        d_symbols_int8[global_sym_idx * 2]     = real_i8;
+        d_symbols_int8[global_sym_idx * 2 + 1] = imag_i8;
     }
 }
 
@@ -1201,6 +1348,10 @@ int pdsch_fused_scramble_modulate_half(
             break;
         case 8:  // 256QAM
             fused_scramble_256qam_half_kernel<<<num_blocks, block_size, 0, stream>>>(
+                d_bits, d_scramble_seq, d_symbols, num_symbols);
+            break;
+        case 10: // 1024QAM
+            fused_scramble_1024qam_half_kernel<<<num_blocks, block_size, 0, stream>>>(
                 d_bits, d_scramble_seq, d_symbols, num_symbols);
             break;
         default:
@@ -1294,6 +1445,14 @@ int pdsch_fused_encode_to_symbols_int8(
                 cfg->nof_short, cfg->E_short, cfg->E_long,
                 cfg->total_symbols);
             break;
+        case 10: // 1024QAM
+            fused_rm_interleave_scramble_1024qam_int8_kernel<<<num_blocks, block_size, 0, stream>>>(
+                d_encoded, c_init, d_symbols_int8,
+                cfg->N_cb, cfg->N_full, cfg->k0, E, cfg->Kd, cfg->F, cfg->puncture_offset,
+                cfg->num_cbs, cfg->encoded_stride,
+                cfg->nof_short, cfg->E_short, cfg->E_long,
+                cfg->total_symbols);
+            break;
         default:
             return -1;
     }
@@ -1342,6 +1501,14 @@ int pdsch_fused_encode_to_symbols_int8_precomputed(
             break;
         case 8:
             fused_rm_interleave_scramble_precomputed_int8_kernel<8><<<num_blocks, block_size, 0, stream>>>(
+                d_encoded, d_scramble_seq, d_symbols_int8,
+                cfg->N_cb, cfg->N_full, cfg->k0, E, cfg->Kd, cfg->F, cfg->puncture_offset,
+                cfg->num_cbs, cfg->encoded_stride,
+                cfg->nof_short, cfg->E_short, cfg->E_long,
+                cfg->total_symbols);
+            break;
+        case 10:
+            fused_rm_interleave_scramble_precomputed_int8_kernel<10><<<num_blocks, block_size, 0, stream>>>(
                 d_encoded, d_scramble_seq, d_symbols_int8,
                 cfg->N_cb, cfg->N_full, cfg->k0, E, cfg->Kd, cfg->F, cfg->puncture_offset,
                 cfg->num_cbs, cfg->encoded_stride,
@@ -1409,6 +1576,14 @@ int pdsch_fused_encode_to_bf16_grid_precomputed(
             break;
         case 8:
             fused_rm_interleave_scramble_precomputed_bf16_grid_kernel<8><<<num_blocks, block_size, 0, stream>>>(
+                d_encoded, d_scramble_seq, d_re_offsets, d_grid_bf16,
+                cfg->N_cb, cfg->N_full, cfg->k0, E, cfg->Kd, cfg->F, cfg->puncture_offset,
+                cfg->num_cbs, cfg->encoded_stride,
+                cfg->nof_short, cfg->E_short, cfg->E_long,
+                cfg->total_symbols, symbol_offset, nof_re, nof_ports, nof_layers, nof_grid_re_per_port, weight_real);
+            break;
+        case 10:
+            fused_rm_interleave_scramble_precomputed_bf16_grid_kernel<10><<<num_blocks, block_size, 0, stream>>>(
                 d_encoded, d_scramble_seq, d_re_offsets, d_grid_bf16,
                 cfg->N_cb, cfg->N_full, cfg->k0, E, cfg->Kd, cfg->F, cfg->puncture_offset,
                 cfg->num_cbs, cfg->encoded_stride,
@@ -1512,6 +1687,14 @@ int pdsch_fused_encode_to_symbols_int8_precomputed_batch(
             break;
         case 8:
             fused_rm_interleave_scramble_precomputed_batch_int8_kernel<8><<<num_blocks, block_size, 0, stream>>>(
+                d_encoded, d_scramble_seq, d_symbols_int8,
+                cfg->N_cb, cfg->N_full, cfg->k0, E, cfg->Kd, cfg->F, cfg->puncture_offset,
+                cfg->num_cbs, cfg->encoded_stride,
+                cfg->nof_short, cfg->E_short, cfg->E_long,
+                cfg->total_symbols, num_tbs);
+            break;
+        case 10:
+            fused_rm_interleave_scramble_precomputed_batch_int8_kernel<10><<<num_blocks, block_size, 0, stream>>>(
                 d_encoded, d_scramble_seq, d_symbols_int8,
                 cfg->N_cb, cfg->N_full, cfg->k0, E, cfg->Kd, cfg->F, cfg->puncture_offset,
                 cfg->num_cbs, cfg->encoded_stride,
@@ -1810,6 +1993,75 @@ __global__ void __launch_bounds__(256, 4) interleave_scramble_256qam_int8_kernel
     d_symbols_int8[sym_idx * 2 + 1] = PDSCH_QAM256_I8[q_idx];
 }
 
+/**
+ * @brief 1024QAM: Rate-matched input → interleave (Qm = 10) → scramble → INT8 symbols
+ */
+__global__ void __launch_bounds__(256, 4) interleave_scramble_1024qam_int8_kernel(
+    const uint32_t* __restrict__ d_rate_matched,
+    uint32_t c_init,
+    int8_t* __restrict__ d_symbols_int8,
+    int rm_stride,
+    int nof_short, int E_short, int E_long,
+    int total_symbols
+) {
+    int sym_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (sym_idx >= total_symbols) return;
+
+    int out_bit_base = sym_idx * 10;
+    int short_cb_total = nof_short * E_short;
+    int cb_idx, local_base, bits_this_cb;
+
+    if (out_bit_base < short_cb_total) {
+        cb_idx = out_bit_base / E_short;
+        local_base = out_bit_base % E_short;
+        bits_this_cb = E_short;
+    } else {
+        int offset = out_bit_base - short_cb_total;
+        cb_idx = nof_short + offset / E_long;
+        local_base = offset % E_long;
+        bits_this_cb = E_long;
+    }
+
+    // On-the-fly scrambling: advance LFSR to this thread's bit position
+    uint32_t x1 = 1;
+    uint32_t x2 = c_init & 0x7FFFFFFF;
+    x1 = advance_x1_pdsch(x1, NC_SKIP + out_bit_base);
+    x2 = advance_x2_pdsch(x2, NC_SKIP + out_bit_base);
+
+    uint32_t scrambled_bits = 0;
+    int K = bits_this_cb / 10;
+
+    #pragma unroll
+    for (int b = 0; b < 10; b++) {
+        int bit_in_cb = local_base + b;
+        int j = bit_in_cb / 10;
+        int i = bit_in_cb % 10;
+        int rm_bit_in_cb = i * K + j;
+
+        int in_word = rm_bit_in_cb / 32;
+        int bit_in_word = rm_bit_in_cb % 32;
+        int byte_in_word = bit_in_word / 8;
+        int bit_in_byte = 7 - (bit_in_word % 8);
+        int in_bit_pos = byte_in_word * 8 + bit_in_byte;
+
+        uint32_t rm_word = d_rate_matched[cb_idx * rm_stride + in_word];
+        uint32_t bit = (rm_word >> in_bit_pos) & 1u;
+
+        // Generate scrambling bit on-the-fly
+        uint32_t scr_bit = (x1 ^ x2) & 1u;
+        x1 = step_x1_pdsch(x1);
+        x2 = step_x2_pdsch(x2);
+
+        bit ^= scr_bit;
+        scrambled_bits |= (bit << b);
+    }
+
+    int8_t real_i8, imag_i8;
+    pdsch_modulate_qam1024_i8(scrambled_bits, real_i8, imag_i8);
+    d_symbols_int8[sym_idx * 2]     = real_i8;
+    d_symbols_int8[sym_idx * 2 + 1] = imag_i8;
+}
+
 int pdsch_fused_from_rate_matched_to_symbols_int8(
     const uint32_t* d_rate_matched,
     uint32_t c_init,
@@ -1849,6 +2101,11 @@ int pdsch_fused_from_rate_matched_to_symbols_int8(
             break;
         case 8:  // 256QAM
             interleave_scramble_256qam_int8_kernel<<<num_blocks, block_size, 0, stream>>>(
+                d_rate_matched, c_init, d_symbols_int8,
+                rm_stride, nof_short, E_short, E_long, total_symbols);
+            break;
+        case 10: // 1024QAM
+            interleave_scramble_1024qam_int8_kernel<<<num_blocks, block_size, 0, stream>>>(
                 d_rate_matched, c_init, d_symbols_int8,
                 rm_stride, nof_short, E_short, E_long, total_symbols);
             break;

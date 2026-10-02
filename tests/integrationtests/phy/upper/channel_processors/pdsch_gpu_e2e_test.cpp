@@ -1158,7 +1158,8 @@ void check_device_grid_writer_matches_host(unsigned                             
                                            unsigned                               nof_ports,
                                            unsigned                               nof_prb,
                                            sch_mcs_index                          mcs_index,
-                                           std::optional<precoding_weight_matrix> precoding)
+                                           std::optional<precoding_weight_matrix> precoding,
+                                           pdsch_mcs_table                        mcs_table = pdsch_mcs_table::qam64)
 {
   // Discrete GPUs keep the device mapper off unless the direct device grid is requested. The choice is made once per
   // process, so this only takes effect if no earlier test made it; the CTest entries running these tests on their own
@@ -1173,7 +1174,7 @@ void check_device_grid_writer_matches_host(unsigned                             
 
   symbol_slot_mask           dmrs_symbol_mask = make_dmrs_symbol_mask(dmrs_profile::double_symbol);
   constexpr dmrs_config_type dmrs_cfg_type    = dmrs_config_type::type1;
-  sch_mcs_description        mcs_descr        = pdsch_mcs_get_config(pdsch_mcs_table::qam64, mcs_index);
+  sch_mcs_description        mcs_descr        = pdsch_mcs_get_config(mcs_table, mcs_index);
   unsigned tbs = calculate_tbs(mcs_descr, nof_prb, nof_layers, dmrs_cfg_type, dmrs_symbol_mask, nof_cdm_groups);
   ASSERT_EQ(tbs % 8, 0U);
 
@@ -1258,6 +1259,26 @@ TEST_P(PdschGpuDeviceGridWriter, MapsDataToWriterDeviceGrid)
                                         (nof_layers == 3) ? 52 : 106,
                                         (nof_layers == 3) ? sch_mcs_index(10) : sch_mcs_index(20),
                                         std::nullopt);
+}
+
+// 1024QAM (TS 38.214 Table 5.1.3.1-4 MCS 23 and 26, Qm = 10) through the direct BF16 device-grid encode.
+TEST_P(PdschGpuDeviceGridWriter, MapsQam1024DataToWriterDeviceGrid)
+{
+  if (!is_pdsch_block_processor_acceleration_available()) {
+    GTEST_SKIP() << "CUDA PDSCH GPU block processor is not available in this build/runtime.";
+  }
+
+  const unsigned nof_layers = GetParam();
+  for (unsigned mcs : {23U, 26U}) {
+    SCOPED_TRACE(fmt::format("qam1024 mcs={}", mcs));
+    ASSERT_EQ(get_bits_per_symbol(pdsch_mcs_get_config(pdsch_mcs_table::qam1024, sch_mcs_index(mcs)).modulation), 10U);
+    check_device_grid_writer_matches_host(nof_layers,
+                                          (nof_layers == 1) ? 4 : nof_layers,
+                                          (nof_layers == 3) ? 52 : 106,
+                                          sch_mcs_index(mcs),
+                                          std::nullopt,
+                                          pdsch_mcs_table::qam1024);
+  }
 }
 
 /// Type I single-panel PMI on four ports: rank, \f$i_{1,1}\f$ and \f$i_2\f$.

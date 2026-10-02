@@ -8,7 +8,7 @@
  * @brief CUDA-accelerated Modulation and Soft Demodulation for 5G NR
  *
  * High-performance implementation of:
- * - BPSK, QPSK, 16QAM, 64QAM, 256QAM modulation
+ * - BPSK, QPSK, 16QAM, 64QAM, 256QAM, 1024QAM modulation (1024QAM: TX only)
  * - Soft demodulation with exact LLR computation
  * - AWGN channel simulation
  */
@@ -102,6 +102,37 @@ __device__ __constant__ int8_t QAM256_I8[16] = {
      5, -5,  11, -11,   3, -3,  13, -13,
      7, -7,   9,  -9,   1, -1,  15, -15
 };
+
+// 1024QAM (TS 38.211 Section 5.1.7): 32-PAM per axis, levels ±1, ±3, ..., ±31 (unnormalised).
+// Indexed by b0 | b2 << 1 | b4 << 2 | b6 << 3 | b8 << 4 for I (odd bits for Q), as the 256QAM table.
+// Normalised outputs scale the level by 1/sqrt(682); the values equal the host modulation_mapper_lut_impl table.
+#define QAM1024_NORM 0.0382919790533742f // 1/sqrt(682)
+__device__ __constant__ int8_t QAM1024_I8[32] = {
+    11, -11, 21, -21,  5,  -5, 27, -27, 13, -13, 19, -19,  3,  -3, 29, -29,
+     9,  -9, 23, -23,  7,  -7, 25, -25, 15, -15, 17, -17,  1,  -1, 31, -31
+};
+
+/// Gathers bits 0, 2, 4, 6, 8 of a 1024QAM bit group into a 5-bit per-axis index.
+__device__ __forceinline__ int qam1024_axis_index(uint32_t bits) {
+    return static_cast<int>((bits & 0x1u) | ((bits >> 1) & 0x2u) | ((bits >> 2) & 0x4u) | ((bits >> 3) & 0x8u) |
+                            ((bits >> 4) & 0x10u));
+}
+
+/// Normalised 1024QAM symbol for ten bits (b0 in bit 0).
+__device__ __forceinline__ cuFloatComplex qam1024_symbol(uint32_t bits) {
+    return make_cuFloatComplex(static_cast<float>(QAM1024_I8[qam1024_axis_index(bits)]) * QAM1024_NORM,
+                               static_cast<float>(QAM1024_I8[qam1024_axis_index(bits >> 1)]) * QAM1024_NORM);
+}
+
+/// Reads a 10-bit LSB-first group starting at bit_idx of a packed word buffer.
+__device__ __forceinline__ uint32_t read_bits10_lsb(const uint32_t* __restrict__ words, int bit_idx) {
+    int word_idx = bit_idx / 32;
+    int bit_pos = bit_idx % 32;
+    if (bit_pos <= 22) {
+        return (words[word_idx] >> bit_pos) & 0x3FFu;
+    }
+    return ((words[word_idx] >> bit_pos) | (words[word_idx + 1] << (32 - bit_pos))) & 0x3FFu;
+}
 
 // ============================================================================
 // CPU-Compatible Interval-Based Soft Demodulation Constants
@@ -485,6 +516,21 @@ __global__ void modulate_256qam_kernel(
     d_symbols[idx] = make_cuFloatComplex(QAM256_TABLE[i_idx], QAM256_TABLE[q_idx]);
 }
 
+/**
+ * @brief 1024QAM modulation: 10 bits -> symbol (TS 38.211 Section 5.1.7)
+ * I uses bits 0,2,4,6,8; Q uses bits 1,3,5,7,9
+ */
+__global__ void modulate_1024qam_kernel(
+    const uint32_t* __restrict__ d_bits,
+    cuFloatComplex* __restrict__ d_symbols,
+    int num_symbols
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_symbols) return;
+
+    d_symbols[idx] = qam1024_symbol(read_bits10_lsb(d_bits, idx * 10));
+}
+
 // ============================================================================
 // CUDA Kernels - INT8 Modulation (direct to ci8_t format)
 // ============================================================================
@@ -597,6 +643,22 @@ __global__ void modulate_256qam_int8_kernel(
 
     d_symbols[idx * 2]     = QAM256_I8[i_idx];
     d_symbols[idx * 2 + 1] = QAM256_I8[q_idx];
+}
+
+/**
+ * @brief 1024QAM modulation to INT8: 10 bits -> ci8_t symbol (unnormalised levels ±1..±31)
+ */
+__global__ void modulate_1024qam_int8_kernel(
+    const uint32_t* __restrict__ d_bits,
+    int8_t* __restrict__ d_symbols,
+    int num_symbols
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_symbols) return;
+
+    uint32_t bits = read_bits10_lsb(d_bits, idx * 10);
+    d_symbols[idx * 2]     = QAM1024_I8[qam1024_axis_index(bits)];
+    d_symbols[idx * 2 + 1] = QAM1024_I8[qam1024_axis_index(bits >> 1)];
 }
 
 // ============================================================================
@@ -1303,6 +1365,9 @@ int modulator_modulate(modulator_handle_t handle,
         case 8:  // 256QAM
             modulate_256qam_kernel<<<num_blocks, block_size, 0, stream>>>(d_bits, d_symbols, num_symbols);
             break;
+        case 10: // 1024QAM
+            modulate_1024qam_kernel<<<num_blocks, block_size, 0, stream>>>(d_bits, d_symbols, num_symbols);
+            break;
         default:
             return -1;
     }
@@ -1334,6 +1399,9 @@ int modulator_modulate_int8(modulator_handle_t handle,
             break;
         case 8:  // 256QAM
             modulate_256qam_int8_kernel<<<num_blocks, block_size, 0, stream>>>(d_bits, d_symbols_int8, num_symbols);
+            break;
+        case 10: // 1024QAM
+            modulate_1024qam_int8_kernel<<<num_blocks, block_size, 0, stream>>>(d_bits, d_symbols_int8, num_symbols);
             break;
         default:
             // BPSK not supported for INT8
@@ -1670,6 +1738,22 @@ __global__ void scramble_modulate_256qam_kernel(
     d_symbols[idx] = make_cuFloatComplex(QAM256_TABLE[i_idx], QAM256_TABLE[q_idx]);
 }
 
+/**
+ * @brief Fused scramble + 1024QAM modulation
+ */
+__global__ void scramble_modulate_1024qam_kernel(
+    const uint32_t* __restrict__ d_bits,
+    const uint32_t* __restrict__ d_scramble_seq,
+    cuFloatComplex* __restrict__ d_symbols,
+    int num_symbols
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_symbols) return;
+
+    uint32_t bits = read_bits10_lsb(d_bits, idx * 10) ^ read_bits10_lsb(d_scramble_seq, idx * 10);
+    d_symbols[idx] = qam1024_symbol(bits);
+}
+
 // ============================================================================
 // Fused Scramble+Modulate → INT8 Kernels (single kernel for max efficiency)
 // ============================================================================
@@ -1858,6 +1942,50 @@ __global__ void scramble_modulate_256qam_int8_kernel(
 
     d_symbols_int8[idx * 2]     = QAM256_I8[i_idx];
     d_symbols_int8[idx * 2 + 1] = QAM256_I8[q_idx];
+}
+
+/**
+ * @brief Fused scramble + 1024QAM modulation → INT8 output
+ *
+ * Same bit ordering as the 256QAM variant:
+ * - Input bits (d_bits): MSB-first within each byte (from tb_encoder)
+ * - Scramble sequence: MSB-first within each word
+ */
+__global__ void scramble_modulate_1024qam_int8_kernel(
+    const uint32_t* __restrict__ d_bits,
+    const uint32_t* __restrict__ d_scramble_seq,
+    int8_t* __restrict__ d_symbols_int8,
+    int num_symbols
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_symbols) return;
+
+    int out_bit_base = idx * 10;
+    uint32_t scrambled_bits = 0;
+
+    #pragma unroll
+    for (int b = 0; b < 10; b++) {
+        int out_bit_idx = out_bit_base + b;
+
+        // Read input bit (MSB-first within each byte)
+        int in_word = out_bit_idx / 32;
+        int in_bit_in_word = out_bit_idx % 32;
+        int in_byte_in_word = in_bit_in_word / 8;
+        int in_bit_in_byte = 7 - (in_bit_in_word % 8);
+        int in_bit_pos = in_byte_in_word * 8 + in_bit_in_byte;
+        uint32_t bit = (d_bits[in_word] >> in_bit_pos) & 1u;
+
+        // Read scrambling bit from GPU MSB-first format
+        int scr_word_idx = out_bit_idx / 32;
+        int scr_bit_pos = 31 - (out_bit_idx % 32);  // MSB-first
+        uint32_t scr_bit = (d_scramble_seq[scr_word_idx] >> scr_bit_pos) & 1u;
+
+        bit ^= scr_bit;
+        scrambled_bits |= (bit << b);
+    }
+
+    d_symbols_int8[idx * 2]     = QAM1024_I8[qam1024_axis_index(scrambled_bits)];
+    d_symbols_int8[idx * 2 + 1] = QAM1024_I8[qam1024_axis_index(scrambled_bits >> 1)];
 }
 
 // ============================================================================
@@ -2059,6 +2187,28 @@ __global__ void batch_scramble_modulate_256qam_kernel(
     d_symbols[idx] = make_cuFloatComplex(QAM256_TABLE[i_idx], QAM256_TABLE[q_idx]);
 }
 
+/**
+ * @brief Batch fused scramble + 1024QAM modulation
+ */
+__global__ void batch_scramble_modulate_1024qam_kernel(
+    const uint32_t* __restrict__ d_bits,
+    const uint32_t* __restrict__ d_scramble_seq,
+    cuFloatComplex* __restrict__ d_symbols,
+    int symbols_per_cb,
+    int words_per_cb,
+    int total_symbols
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total_symbols) return;
+
+    int cb_idx = idx / symbols_per_cb;
+    int local_sym = idx % symbols_per_cb;
+
+    uint32_t bits = read_bits10_lsb(d_bits + cb_idx * words_per_cb, local_sym * 10) ^
+                    read_bits10_lsb(d_scramble_seq, idx * 10);
+    d_symbols[idx] = qam1024_symbol(bits);
+}
+
 int modulator_scramble_and_modulate_batch(modulator_handle_t handle,
                                           const uint32_t* d_bits,
                                           const uint32_t* d_scramble_seq,
@@ -2090,6 +2240,10 @@ int modulator_scramble_and_modulate_batch(modulator_handle_t handle,
             break;
         case 8:  // 256QAM
             batch_scramble_modulate_256qam_kernel<<<num_blocks, block_size, 0, stream>>>(
+                d_bits, d_scramble_seq, d_symbols, symbols_per_cb, words_per_cb, total_symbols);
+            break;
+        case 10: // 1024QAM
+            batch_scramble_modulate_1024qam_kernel<<<num_blocks, block_size, 0, stream>>>(
                 d_bits, d_scramble_seq, d_symbols, symbols_per_cb, words_per_cb, total_symbols);
             break;
         default:
@@ -2129,6 +2283,10 @@ int modulator_scramble_and_modulate(modulator_handle_t handle,
             scramble_modulate_256qam_kernel<<<num_blocks, block_size, 0, stream>>>(
                 d_bits, d_scramble_seq, d_symbols, num_symbols);
             break;
+        case 10: // 1024QAM
+            scramble_modulate_1024qam_kernel<<<num_blocks, block_size, 0, stream>>>(
+                d_bits, d_scramble_seq, d_symbols, num_symbols);
+            break;
         default:
             // BPSK not supported for fused scramble+modulate yet
             return -1;
@@ -2165,6 +2323,10 @@ int modulator_scramble_and_modulate_int8(modulator_handle_t handle,
             break;
         case 8:  // 256QAM
             scramble_modulate_256qam_int8_kernel<<<num_blocks, block_size, 0, stream>>>(
+                d_bits, d_scramble_seq, d_symbols_int8, num_symbols);
+            break;
+        case 10: // 1024QAM
+            scramble_modulate_1024qam_int8_kernel<<<num_blocks, block_size, 0, stream>>>(
                 d_bits, d_scramble_seq, d_symbols_int8, num_symbols);
             break;
         default:

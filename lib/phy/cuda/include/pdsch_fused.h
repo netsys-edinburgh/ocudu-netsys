@@ -37,7 +37,7 @@ extern "C" {
  * @param d_scramble_seq Scrambling sequence (packed uint32)
  * @param d_symbols_half Output FP16 complex symbols (__half2*)
  * @param num_bits Number of input bits
- * @param mod_order Modulation order (2=QPSK, 4=16QAM, 6=64QAM, 8=256QAM)
+ * @param mod_order Modulation order (2=QPSK, 4=16QAM, 6=64QAM, 8=256QAM, 10=1024QAM)
  * @param stream CUDA stream
  * @return 0 on success
  */
@@ -57,9 +57,9 @@ int pdsch_fused_scramble_modulate_half(const uint32_t* d_bits,
  * @param d_scramble_seq Scrambling sequence (packed uint32)
  * @param d_symbols Output FP32 complex symbols (cuFloatComplex)
  * @param num_bits Number of input bits
- * @param mod_order Modulation order
+ * @param mod_order Modulation order (only 2=QPSK and 6=64QAM are fused)
  * @param stream CUDA stream
- * @return 0 on success
+ * @return 0 on success, -1 for any other modulation order (the caller must use separate scramble + modulate)
  */
 int pdsch_fused_scramble_modulate(const uint32_t* d_bits,
                                   const uint32_t* d_scramble_seq,
@@ -83,7 +83,7 @@ typedef struct {
   int E_short;         ///< Bits per short CB
   int E_long;          ///< Bits per long CB
   int num_cbs;         ///< Number of code blocks
-  int mod_order;       ///< Modulation order (2, 4, 6, 8)
+  int mod_order;       ///< Modulation order (2, 4, 6, 8, 10)
   int total_symbols;   ///< Total output symbols
 } pdsch_fused_tx_config_t;
 
@@ -247,7 +247,7 @@ int pdsch_fused_encode_to_symbols_int8_precomputed_batch(const uint32_t*        
  * @param nof_short Number of short CBs
  * @param E_short Bits per short CB
  * @param E_long Bits per long CB
- * @param mod_order Modulation order (2, 4, 6, 8)
+ * @param mod_order Modulation order (2, 4, 6, 8, 10)
  * @param total_symbols Total output symbols
  * @param stream CUDA stream
  * @return 0 on success

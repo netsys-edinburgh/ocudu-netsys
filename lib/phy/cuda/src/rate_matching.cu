@@ -754,8 +754,8 @@ nr_ldpc_status_t rate_matcher_interleave(rate_matcher_handle_t handle,
     }
 
     // Per 3GPP TS 38.212 Section 5.4.2.2, interleaving applies for Q_m >= 2
-    // (QPSK, 16QAM, 64QAM, 256QAM)
-    if (Q_m < 2 || Q_m > 8) {
+    // (QPSK, 16QAM, 64QAM, 256QAM, 1024QAM). The row-column transpose kernel is generic in Q_m.
+    if (Q_m < 2 || Q_m > 10) {
         return NR_LDPC_ERROR_INVALID_CONFIG;
     }
 
@@ -813,8 +813,8 @@ nr_ldpc_status_t rate_matcher_interleave_batch(rate_matcher_handle_t handle,
     }
 
     // Per 3GPP TS 38.212 Section 5.4.2.2, interleaving applies for Q_m >= 2
-    // (QPSK, 16QAM, 64QAM, 256QAM)
-    if (Q_m < 2 || Q_m > 8) {
+    // (QPSK, 16QAM, 64QAM, 256QAM, 1024QAM). The row-column transpose kernel is generic in Q_m.
+    if (Q_m < 2 || Q_m > 10) {
         return NR_LDPC_ERROR_INVALID_CONFIG;
     }
 

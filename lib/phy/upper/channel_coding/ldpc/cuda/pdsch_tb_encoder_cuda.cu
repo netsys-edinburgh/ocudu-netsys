@@ -449,6 +449,15 @@ public:
                                              8, // 256QAM
                                              stream_);
 
+        // Warmup 1024QAM (Qm=10)
+        modulator_scramble_and_modulate_int8(modulator_,
+                                             reinterpret_cast<uint32_t*>(d_coded_bits_),
+                                             d_scramble_seq,
+                                             d_symbols_int8_,
+                                             WARMUP_N_CODED_BITS,
+                                             10, // 1024QAM
+                                             stream_);
+
         // Wait for all warmup kernels to complete
         cudaStreamSynchronize(stream_);
 

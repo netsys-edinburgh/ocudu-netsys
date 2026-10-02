@@ -23,11 +23,12 @@ extern "C" {
 
 // Modulation orders
 typedef enum {
-  MOD_BPSK   = 1, // 1 bit/symbol
-  MOD_QPSK   = 2, // 2 bits/symbol
-  MOD_16QAM  = 4, // 4 bits/symbol
-  MOD_64QAM  = 6, // 6 bits/symbol
-  MOD_256QAM = 8  // 8 bits/symbol
+  MOD_BPSK    = 1, // 1 bit/symbol
+  MOD_QPSK    = 2, // 2 bits/symbol
+  MOD_16QAM   = 4, // 4 bits/symbol
+  MOD_64QAM   = 6, // 6 bits/symbol
+  MOD_256QAM  = 8, // 8 bits/symbol
+  MOD_1024QAM = 10 // 10 bits/symbol (modulation only; soft demodulation is not implemented)
 } modulation_order_t;
 
 // Modulator handle
@@ -170,7 +171,7 @@ int modulator_soft_demod_per_symbol_half(modulator_handle_t    handle,
  * @param d_bits Input bits (packed uint32_t)
  * @param d_symbols_int8 Output INT8 complex symbols (int8_t*, 2 bytes/symbol)
  * @param num_bits Number of input bits
- * @param mod_order Modulation order (2=QPSK, 4=16QAM, 6=64QAM, 8=256QAM)
+ * @param mod_order Modulation order (2=QPSK, 4=16QAM, 6=64QAM, 8=256QAM, 10=1024QAM)
  * @param stream CUDA stream
  * @return 0 on success
  */
@@ -193,7 +194,7 @@ int modulator_modulate_int8(modulator_handle_t handle,
  * @param d_scramble_seq Scrambling sequence (from scrambler_get_sequence_ptr)
  * @param d_symbols Output complex symbols
  * @param num_bits Number of bits to process
- * @param mod_order Modulation order (2=QPSK, 4=16QAM, 6=64QAM, 8=256QAM)
+ * @param mod_order Modulation order (2=QPSK, 4=16QAM, 6=64QAM, 8=256QAM, 10=1024QAM)
  * @param stream CUDA stream
  * @return 0 on success, -1 on error
  */
@@ -222,7 +223,7 @@ int modulator_scramble_and_modulate(modulator_handle_t handle,
  * @param d_scramble_seq Scrambling sequence (packed uint32)
  * @param d_symbols_int8 Output INT8 complex symbols (2 bytes per symbol)
  * @param num_bits Number of input bits
- * @param mod_order Modulation order (2=QPSK, 4=16QAM, 6=64QAM, 8=256QAM)
+ * @param mod_order Modulation order (2=QPSK, 4=16QAM, 6=64QAM, 8=256QAM, 10=1024QAM)
  * @param stream CUDA stream
  * @return 0 on success, -1 on error
  */
@@ -247,7 +248,7 @@ int modulator_scramble_and_modulate_int8(modulator_handle_t handle,
  * @param bits_per_cb Bits per code block
  * @param words_per_cb Words per CB in input buffer (stride)
  * @param num_cbs Number of code blocks
- * @param mod_order Modulation order (2=QPSK, 4=16QAM, 6=64QAM, 8=256QAM)
+ * @param mod_order Modulation order (2=QPSK, 4=16QAM, 6=64QAM, 8=256QAM, 10=1024QAM)
  * @param stream CUDA stream
  * @return 0 on success, -1 on error
  */

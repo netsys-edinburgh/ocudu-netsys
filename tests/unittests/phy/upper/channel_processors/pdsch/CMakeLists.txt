@@ -24,7 +24,7 @@ add_test(pdsch_processor_validator_test pdsch_processor_validator_test)
 
 if (CUDA_ACCEL_FOUND)
   # CUDA PDSCH symbol-generation kernels versus the host rate matcher, scrambler and modulation mapper for every
-  # modulation order.
+  # modulation order, including 1024QAM.
   add_executable(pdsch_cuda_modulation_order_test pdsch_cuda_modulation_order_test.cpp)
   target_link_libraries(pdsch_cuda_modulation_order_test
           ocudu_ldpc_cuda
