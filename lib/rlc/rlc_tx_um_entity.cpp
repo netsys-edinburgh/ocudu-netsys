@@ -355,5 +355,6 @@ rlc_buffer_state rlc_tx_um_entity::get_buffer_state()
   if (bs.pending_bytes <= MAX_DL_PDU_LENGTH) {
     suspend_bs_notif_barring = true;
   }
+  metrics_low.aurora_tap.report_tx_buffer(bs, 0);
   return bs;
 }

@@ -90,7 +90,43 @@ void rlc_rx_am_entity::handle_pdu(byte_buffer_slice buf)
   } else {
     handle_data_pdu(std::move(buf));
   }
+  aurora_report_rx_window();
   up_tracer << trace_event{"rlc_rx_pdu", rx_tp};
+}
+
+void rlc_rx_am_entity::aurora_report_rx_window()
+{
+  if (not metrics.aurora_tap.rx_report_due()) {
+    return;
+  }
+  // Pending (not yet delivered) SDUs live in [RX_Next, RX_Next_Highest).
+  uint64_t                                             bytes = 0;
+  std::optional<std::chrono::steady_clock::time_point> oldest;
+  uint32_t                                             visited = 0;
+  for (uint32_t sn = st.rx_next; sn != st.rx_next_highest and visited != rlc_aurora_tap::max_rx_scan;
+       sn          = (sn + 1) % mod, ++visited) {
+    if (not rx_window.has_sn(sn)) {
+      continue;
+    }
+    const rlc_rx_am_sdu_info& info = rx_window[sn];
+    if (const auto* full = std::get_if<byte_buffer_slice>(&info.sdu_data)) {
+      bytes += full->length();
+    } else if (const auto* segs = std::get_if<rlc_rx_am_sdu_info::segment_set_t>(&info.sdu_data)) {
+      for (const auto& seg : *segs) {
+        bytes += seg.payload.length();
+      }
+    }
+    if (not oldest.has_value() or info.time_of_arrival < *oldest) {
+      oldest = info.time_of_arrival;
+    }
+  }
+  uint32_t wait_us = 0;
+  if (oldest.has_value()) {
+    wait_us = static_cast<uint32_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - *oldest).count());
+  }
+  metrics.aurora_tap.set(aurora::rlc_gauge::rxbuf_occ_bytes, static_cast<uint32_t>(bytes));
+  metrics.aurora_tap.set(aurora::rlc_gauge::rxsdu_wt_us, wait_us);
 }
 
 void rlc_rx_am_entity::handle_control_pdu(byte_buffer_slice buf)
@@ -154,6 +190,7 @@ void rlc_rx_am_entity::handle_data_pdu(byte_buffer_slice buf)
 
   // Check whether PDU SN is within RX Window
   if (!inside_rx_window(header.sn)) {
+    metrics.aurora_tap.add(aurora::rlc_counter::rxpdu_ow_pkts, 1);
     logger.log_debug("Discarded PDU outside the RX window [{}:{}]. sn={}",
                      st.rx_next,
                      (st.rx_next + am_window_size) % mod,
@@ -163,6 +200,7 @@ void rlc_rx_am_entity::handle_data_pdu(byte_buffer_slice buf)
 
   // Section 5.2.3.2.2, discard duplicate PDUs
   if (rx_window.has_sn(header.sn) && rx_window[header.sn].fully_received) {
+    metrics.aurora_tap.add(aurora::rlc_counter::rxpdu_dd_pkts, 1);
     logger.log_debug("Discarded PDU duplicate. sn={}", header.sn);
     return;
   }

@@ -33,6 +33,7 @@ protected:
     high_metrics_timer(ue_timer_factory.create_timer()),
     metrics_coll(metrics_coll_)
   {
+    metrics.aurora_tap = rlc_aurora_tap{ue_index, rb_id};
     if (metrics_coll.get_metrics_period().count()) {
       high_metrics_timer.set(std::chrono::milliseconds(metrics_coll.get_metrics_period().count()), [this]() {
         metrics_coll.push_rx_high_metrics(metrics.get_and_reset_metrics());

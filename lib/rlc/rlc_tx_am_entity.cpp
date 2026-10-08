@@ -258,6 +258,7 @@ size_t rlc_tx_am_entity::build_new_pdu(span<uint8_t> rlc_pdu_buf)
 
   // do not build any more PDU if window is already full
   if (is_tx_window_full()) {
+    metrics_low.aurora_tap.add(aurora::rlc_counter::tx_window_stall_events, 1);
     logger.log_warning("Cannot build data PDU, tx_window is full. grant_len={}", grant_len);
     return 0;
   }
@@ -1079,6 +1080,7 @@ rlc_buffer_state rlc_tx_am_entity::get_buffer_state()
   if (bs.pending_bytes <= MAX_DL_PDU_LENGTH) {
     suspend_bs_notif_barring = true;
   }
+  metrics_low.aurora_tap.report_tx_buffer(bs, retx_queue.size());
   return bs;
 }
 

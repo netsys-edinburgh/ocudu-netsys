@@ -8,11 +8,13 @@ add_library(ocudu_f1u_cu_up
   cu_up/f1u_bearer_factory.cpp
   cu_up/f1u_metrics_aggregator.cpp
 )
+target_link_libraries(ocudu_f1u_cu_up ocudu_aurora)
 
 add_library(ocudu_f1u_du
   du/f1u_bearer_impl.cpp
   du/f1u_bearer_factory.cpp
 )
+target_link_libraries(ocudu_f1u_du ocudu_aurora)
 
 # Local connector
 add_library(ocudu_f1u_connector local_connector/f1u_local_connector.cpp)

@@ -167,5 +167,6 @@ rlc_buffer_state rlc_tx_tm_entity::get_buffer_state()
   }
 
   bs.pending_bytes = sdu_queue.get_state().n_bytes + sdu.buf.length();
+  metrics_low.aurora_tap.report_tx_buffer(bs, 0);
   return bs;
 }

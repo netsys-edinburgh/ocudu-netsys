@@ -62,6 +62,9 @@ struct rlc_rx_um_state {
 class rlc_rx_um_entity : public rlc_rx_entity
 {
 private:
+  /// AURORA: RX reassembly buffer occupancy and oldest pending SDU wait (Group 13).
+  void aurora_report_rx_window();
+
   /// Config storage
   const rlc_rx_um_config cfg;
 

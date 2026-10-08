@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "ocudu/aurora/aurora.h"
 #include "f1u_bearer_impl.h"
 #include "ocudu/support/executors/task_executor.h"
 
@@ -38,6 +39,7 @@ f1u_bearer_impl::f1u_bearer_impl(uint32_t                       ue_index,
 void f1u_bearer_impl::handle_sdu(byte_buffer_chain sdu)
 {
   logger.log_debug("F1-U bearer received SDU with size={}", sdu.length());
+  aurora::record_flow(aurora::flow::rlc_f1, sdu.length());
   nru_ul_message msg = {};
 
   // attach the SDU
@@ -105,6 +107,7 @@ void f1u_bearer_impl::handle_pdu_impl(nru_dl_message msg)
   // handle T-PDU
   if (!msg.t_pdu.empty()) {
     logger.log_debug("Delivering T-PDU. size={}", msg.t_pdu.length());
+    aurora::record_flow(aurora::flow::f1u_rlc, msg.t_pdu.length());
     rx_sdu_notifier.on_new_sdu(std::move(msg.t_pdu), msg.dl_user_data.retransmission_flag);
   }
 }

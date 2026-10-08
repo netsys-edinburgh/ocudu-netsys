@@ -49,6 +49,8 @@ protected:
     low_metrics_timer(pcell_timer_factory.create_timer()),
     metrics_coll(metrics_coll_)
   {
+    metrics_high.aurora_tap = rlc_aurora_tap{ue_index, rb_id_};
+    metrics_low.aurora_tap  = rlc_aurora_tap{ue_index, rb_id_};
     if (metrics_coll.get_metrics_period().count()) {
       high_metrics_timer.set(std::chrono::milliseconds(metrics_coll.get_metrics_period().count()), [this]() {
         metrics_coll.push_tx_high_metrics(metrics_high.get_and_reset_metrics());

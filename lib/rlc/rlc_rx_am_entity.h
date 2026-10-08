@@ -243,6 +243,8 @@ private:
   ///
   /// \param buf The data PDU to be handled (including header and payload)
   void handle_data_pdu(byte_buffer_slice buf);
+  /// AURORA: RX buffer occupancy and oldest pending SDU wait (Group 13).
+  void aurora_report_rx_window();
 
   /// Handles a received data PDU which contains an SDU, puts it into the receive window and forwards it to upper layer.
   ///

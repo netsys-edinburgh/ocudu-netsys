@@ -85,4 +85,19 @@ TEST_F(du_high_aurora_tester, ue_attach_and_dl_traffic_populate_aurora_metrics)
   EXPECT_GT(m.hist_rlc_mac.count, 0U);
   EXPECT_GT(m.mac_ue_stats[slot].dl_aggr_bytes_sdus, 0U);
   EXPECT_GT(m.hist_mac_dl_bo.count, 0U);
+
+  // F1-U -> RLC (Group 1).
+  EXPECT_EQ(m.f1u_rlc_size, uint64_t(nof_pdcp_pdus) * pdcp_pdu_size);
+  EXPECT_EQ(m.hist_f1u_rlc.count, nof_pdcp_pdus);
+
+  // RLC DRB1 (Group 13).
+  const aurora_rlc_radio_bearer_stats_t& drb1 = m.rlc_rb_stats[slot][aurora::drb_rb_index(1)];
+  EXPECT_EQ(drb1.rnti, 0x4601U);
+  EXPECT_EQ(drb1.rbid, 1);
+  EXPECT_EQ(drb1.txsdu_pkts, nof_pdcp_pdus);
+  EXPECT_EQ(drb1.txsdu_bytes, uint64_t(nof_pdcp_pdus) * pdcp_pdu_size);
+  EXPECT_GT(drb1.txpdu_pkts, 0U);
+  EXPECT_GT(drb1.txpdu_bytes, drb1.txsdu_bytes / 2);
+  // SRB1 carried the RRC setup / context setup signalling.
+  EXPECT_NE(m.rlc_rb_stats[slot][aurora::srb_rb_index(1)].rnti, 0U);
 }

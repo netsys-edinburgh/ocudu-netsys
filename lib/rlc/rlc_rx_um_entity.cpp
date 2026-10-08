@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "rlc_rx_um_entity.h"
+#include "ocudu/adt/scope_exit.h"
 
 using namespace ocudu;
 
@@ -39,6 +40,7 @@ rlc_rx_um_entity::rlc_rx_um_entity(gnb_du_id_t                       gnb_du_id,
 // TS 38.322 v16.2.0 Sec. 5.2.3.2.2
 void rlc_rx_um_entity::handle_pdu(byte_buffer_slice buf)
 {
+  auto aurora_on_exit = make_scope_exit([this]() { aurora_report_rx_window(); });
   metrics.metrics_add_pdus(1, buf.length());
   auto start = std::chrono::steady_clock::now();
   pcap.push_pdu(pcap_context, buf);
@@ -172,6 +174,7 @@ void rlc_rx_um_entity::handle_pdu(byte_buffer_slice buf)
                       (st.rx_next_highest - um_window_size) % mod,
                       st.rx_next_highest,
                       sn_upd);
+      metrics.aurora_tap.add(aurora::rlc_counter::rxpdu_ow_pkts, 1);
       if (rx_window.has_sn(sn_upd)) {
         if (not rx_window[sn_upd].fully_received) {
           // count incomplete SDUs as lost
@@ -519,4 +522,35 @@ bool rlc_rx_um_entity::sn_invalid_for_rx_buffer(const uint32_t sn)
 {
   return (rx_mod_base(st.rx_next_highest - um_window_size) <= rx_mod_base(sn) &&
           rx_mod_base(sn) < rx_mod_base(st.rx_next_reassembly));
+}
+
+void rlc_rx_um_entity::aurora_report_rx_window()
+{
+  if (not metrics.aurora_tap.rx_report_due()) {
+    return;
+  }
+  // SDUs under reassembly live in [RX_Next_Reassembly, RX_Next_Highest).
+  uint64_t                                             bytes = 0;
+  std::optional<std::chrono::steady_clock::time_point> oldest;
+  uint32_t                                             visited = 0;
+  for (uint32_t sn = st.rx_next_reassembly; sn != st.rx_next_highest and visited != rlc_aurora_tap::max_rx_scan;
+       sn          = (sn + 1) % mod, ++visited) {
+    if (not rx_window.has_sn(sn)) {
+      continue;
+    }
+    const rlc_rx_um_sdu_info& info = rx_window[sn];
+    for (const auto& seg : info.segments) {
+      bytes += seg.payload.length();
+    }
+    if (not oldest.has_value() or info.time_of_arrival < *oldest) {
+      oldest = info.time_of_arrival;
+    }
+  }
+  uint32_t wait_us = 0;
+  if (oldest.has_value()) {
+    wait_us = static_cast<uint32_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - *oldest).count());
+  }
+  metrics.aurora_tap.set(aurora::rlc_gauge::rxbuf_occ_bytes, static_cast<uint32_t>(bytes));
+  metrics.aurora_tap.set(aurora::rlc_gauge::rxsdu_wt_us, wait_us);
 }

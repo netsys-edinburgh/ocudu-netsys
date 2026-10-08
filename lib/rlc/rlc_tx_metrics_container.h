@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "rlc_aurora_tap.h"
+
 #include "ocudu/ran/rlc_mode.h"
 #include "ocudu/rlc/rlc_tx_metrics.h"
 #include "ocudu/support/ocudu_assert.h"
@@ -16,12 +18,21 @@ class rlc_tx_metrics_high_container
   bool                  enabled    = false;
 
 public:
+  /// AURORA mirror of the counters below (Group 13).
+  rlc_aurora_tap aurora_tap;
+
   rlc_tx_metrics_high_container(bool enabled_) : enabled(enabled_) {}
 
   bool is_enabled() const { return enabled; }
 
   void metrics_add_sdus(uint32_t num_sdus, size_t num_sdu_bytes)
   {
+    if (aurora_tap.valid()) {
+      // ANOMALY injection point on the RLC TX SDU path (QUEUE_TUNING jitter).
+      aurora::rlc_hook_anomaly();
+    }
+    aurora_tap.add(aurora::rlc_counter::txsdu_pkts, num_sdus);
+    aurora_tap.add(aurora::rlc_counter::txsdu_bytes, num_sdu_bytes);
     if (not enabled) {
       return;
     }
@@ -31,6 +42,8 @@ public:
 
   void metrics_add_lost_sdus(uint32_t num_sdus)
   {
+    // SDU dropped on a full TX queue: counted as a TX SDU discard (OAI txpdu_dd_pkts).
+    aurora_tap.add(aurora::rlc_counter::txpdu_dd_pkts, num_sdus);
     if (not enabled) {
       return;
     }
@@ -39,6 +52,7 @@ public:
 
   void metrics_add_discard(uint32_t num_discarded_sdus)
   {
+    aurora_tap.add(aurora::rlc_counter::txpdu_dd_pkts, num_discarded_sdus);
     if (not enabled) {
       return;
     }
@@ -90,12 +104,16 @@ class rlc_tx_metrics_low_container
   bool                 enabled    = false;
 
 public:
+  /// AURORA mirror of the counters below (Group 13).
+  rlc_aurora_tap aurora_tap;
+
   rlc_tx_metrics_low_container(bool enabled_) : enabled(enabled_) {}
 
   bool is_enabled() const { return enabled; }
 
   void metrics_set_mode(rlc_mode mode)
   {
+    aurora_tap.set_mode(mode);
     if (not enabled) {
       return;
     }
@@ -118,6 +136,8 @@ public:
 
   void metrics_add_pdus_no_segmentation(uint32_t num_pdus, size_t num_pdu_bytes)
   {
+    aurora_tap.add(aurora::rlc_counter::txpdu_pkts, num_pdus);
+    aurora_tap.add(aurora::rlc_counter::txpdu_bytes, num_pdu_bytes);
     if (not enabled) {
       return;
     }
@@ -170,6 +190,9 @@ public:
   // UM specific metrics
   void metrics_add_pdus_with_segmentation_um(uint32_t num_pdus, size_t num_pdu_bytes)
   {
+    aurora_tap.add(aurora::rlc_counter::txpdu_pkts, num_pdus);
+    aurora_tap.add(aurora::rlc_counter::txpdu_bytes, num_pdu_bytes);
+    aurora_tap.add(aurora::rlc_counter::txpdu_segmented, num_pdus);
     if (not enabled) {
       return;
     }
@@ -183,6 +206,9 @@ public:
   // AM specific metrics
   void metrics_add_pdus_with_segmentation_am(uint32_t num_pdus, size_t num_pdu_bytes)
   {
+    aurora_tap.add(aurora::rlc_counter::txpdu_pkts, num_pdus);
+    aurora_tap.add(aurora::rlc_counter::txpdu_bytes, num_pdu_bytes);
+    aurora_tap.add(aurora::rlc_counter::txpdu_segmented, num_pdus);
     if (not enabled) {
       return;
     }
@@ -195,6 +221,10 @@ public:
 
   void metrics_add_retx_pdus(uint32_t num_pdus, size_t num_pdu_bytes)
   {
+    aurora_tap.add(aurora::rlc_counter::txpdu_pkts, num_pdus);
+    aurora_tap.add(aurora::rlc_counter::txpdu_bytes, num_pdu_bytes);
+    aurora_tap.add(aurora::rlc_counter::txpdu_retx_pkts, num_pdus);
+    aurora_tap.add(aurora::rlc_counter::txpdu_retx_bytes, num_pdu_bytes);
     if (not enabled) {
       return;
     }
@@ -207,6 +237,8 @@ public:
 
   void metrics_add_ctrl_pdus(uint32_t num_pdus, size_t num_pdu_bytes)
   {
+    aurora_tap.add(aurora::rlc_counter::txpdu_pkts, num_pdus);
+    aurora_tap.add(aurora::rlc_counter::txpdu_bytes, num_pdu_bytes);
     if (not enabled) {
       return;
     }

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "rlc_aurora_tap.h"
+
 #include "ocudu/ran/rlc_mode.h"
 #include "ocudu/rlc/rlc_rx_metrics.h"
 #include "ocudu/support/ocudu_assert.h"
@@ -16,10 +18,14 @@ class rlc_rx_metrics_container
   bool           enabled = false;
 
 public:
+  /// AURORA mirror of the counters below (Group 13).
+  rlc_aurora_tap aurora_tap;
+
   rlc_rx_metrics_container(bool enabled_) : enabled(enabled_) {}
 
   void metrics_set_mode(rlc_mode mode)
   {
+    aurora_tap.set_mode(mode);
     if (not enabled) {
       return;
     }
@@ -42,6 +48,8 @@ public:
 
   void metrics_add_sdus(uint32_t num_sdus_, size_t num_sdu_bytes_)
   {
+    aurora_tap.add(aurora::rlc_counter::rxsdu_pkts, num_sdus_);
+    aurora_tap.add(aurora::rlc_counter::rxsdu_bytes, num_sdu_bytes_);
     if (not enabled) {
       return;
     }
@@ -51,6 +59,8 @@ public:
 
   void metrics_add_pdus(uint32_t num_pdus_, size_t num_pdu_bytes_)
   {
+    aurora_tap.add(aurora::rlc_counter::rxpdu_pkts, num_pdus_);
+    aurora_tap.add(aurora::rlc_counter::rxpdu_bytes, num_pdu_bytes_);
     if (not enabled) {
       return;
     }
@@ -60,6 +70,7 @@ public:
 
   void metrics_add_lost_pdus(uint32_t num_pdus_)
   {
+    aurora_tap.add(aurora::rlc_counter::rxpdu_lost_pkts, num_pdus_);
     if (not enabled) {
       return;
     }
@@ -68,6 +79,7 @@ public:
 
   void metrics_add_malformed_pdus(uint32_t num_pdus_)
   {
+    aurora_tap.add(aurora::rlc_counter::rxpdu_dd_pkts, num_pdus_);
     if (not enabled) {
       return;
     }

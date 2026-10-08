@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "ocudu/aurora/aurora.h"
 #include "f1u_bearer_impl.h"
 
 using namespace ocudu;
@@ -67,7 +68,12 @@ void f1u_bearer_impl::handle_pdu(nru_ul_message msg)
   if (stopped) {
     return;
   }
-  if (not ul_batched_queue->try_push(std::move(msg))) {
+  const size_t t_pdu_len = (msg.t_pdu.has_value() ? msg.t_pdu->length() : 0);
+  if (ul_batched_queue->try_push(std::move(msg))) {
+    if (t_pdu_len != 0) {
+      aurora::record_flow(aurora::flow::mhrx_in, t_pdu_len);
+    }
+  } else {
     if (!cfg.warn_on_drop) {
       logger.log_info("Dropped F1-U PDU, queue is full.");
     } else {
@@ -91,6 +97,7 @@ void f1u_bearer_impl::handle_pdu_impl(nru_ul_message msg)
     ue_inactivity_timer.run(); // restart inactivity timer due to UL PDU
     rx_metrics.add_sdus(1, msg.t_pdu->length());
     logger.log_debug("Delivering T-PDU of size={}", msg.t_pdu->length());
+    aurora::record_flow(aurora::flow::mhrx_out, msg.t_pdu->length());
     rx_sdu_notifier.on_new_sdu(std::move(*msg.t_pdu));
   }
 
@@ -165,6 +172,7 @@ void f1u_bearer_impl::handle_sdu(byte_buffer sdu, bool is_retx)
   }
 
   tx_metrics.add_sdus(1, sdu.length());
+  aurora::record_flow(aurora::flow::mhtx_in, sdu.length());
   logger.log_debug("F1-U bearer received SDU. size={} is_retx={}", sdu.length(), is_retx);
   nru_dl_message msg = {};
 
@@ -181,6 +189,7 @@ void f1u_bearer_impl::handle_sdu(byte_buffer sdu, bool is_retx)
   dl_notif_timer.stop();
 
   tx_metrics.add_pdus(1);
+  aurora::record_flow(aurora::flow::mhtx_out, msg.t_pdu.length());
   tx_pdu_notifier.on_new_pdu(std::move(msg));
 }
 
