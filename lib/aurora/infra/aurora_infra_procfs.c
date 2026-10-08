@@ -1137,6 +1137,14 @@ int aurora_infra_discover_container(aurora_infra_config_t *cfg)
 {
     /* Strategy 1: If container_name is given, find its PID via Docker */
     if (cfg->container_name[0] != '\0') {
+        /* The name is interpolated into a shell command: accept only Docker's container-name charset. */
+        for (const char *c = cfg->container_name; *c; c++) {
+            if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') ||
+                  *c == '_' || *c == '.' || *c == '-')) {
+                fprintf(stderr, "AURORA_INFRA: invalid container name '%s'\n", cfg->container_name);
+                return -1;
+            }
+        }
         char cmd[256];
         snprintf(cmd, sizeof(cmd),
                  "docker inspect --format '{{.State.Pid}}' '%s' 2>/dev/null",
@@ -1231,13 +1239,14 @@ int aurora_infra_auto_select_container(aurora_infra_config_t *cfg,
          * (docker/docker-compose*.yml). "-"/"_" separators both accepted. */
         int is_cucp = (strstr(name, "cu_cp") != NULL || strstr(name, "cu-cp") != NULL);
         int is_cuup = (strstr(name, "cu_up") != NULL || strstr(name, "cu-up") != NULL);
-        int is_cu   = (strstr(name, "ocudu_cu") != NULL || strstr(name, "ocudu-cu") != NULL);
-        int is_du   = (strstr(name, "ocudu_du") != NULL || strstr(name, "ocudu-du") != NULL);
+        int is_cu   = (strstr(name, "ocudu_cu") != NULL || strstr(name, "ocudu-cu") != NULL) && !is_cucp && !is_cuup;
+        int is_du   = (strstr(name, "ocudu_du") != NULL || strstr(name, "ocudu-du") != NULL) &&
+                      strstr(name, "ocudu_dummy") == NULL && strstr(name, "ocudu-dummy") == NULL;
         int is_gnb  = (strstr(name, "ocudu_gnb") != NULL || strstr(name, "ocudu-gnb") != NULL);
 
         int match = 0;
         if (!strcmp(ran_type_str, "cu")) {
-            match = is_cu && !is_cuup && !is_cucp;
+            match = is_cu;
         } else if (!strcmp(ran_type_str, "du")) {
             match = is_du;
         } else if (!strcmp(ran_type_str, "cu_cp") || !strcmp(ran_type_str, "cu-cp")) {
@@ -1245,7 +1254,8 @@ int aurora_infra_auto_select_container(aurora_infra_config_t *cfg,
         } else if (!strcmp(ran_type_str, "cu_up") || !strcmp(ran_type_str, "cu-up")) {
             match = is_cuup;
         } else {
-            match = is_gnb || is_cu || is_du;
+            /* gnb: prefer a monolithic gNB container; split deployments have no single gNB container. */
+            match = is_gnb;
         }
         if (match) {
             snprintf(best, sizeof(best), "%.*s",

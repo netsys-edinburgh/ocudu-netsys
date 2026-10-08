@@ -114,7 +114,7 @@ public:
   ///
   /// \param pdcp_sn The PDCP SN of the SDU that shall be discarded.
   /// \return True if the RLC SDU was successfully discarded, otherwise false.
-  bool try_discard(uint32_t pdcp_sn)
+  bool try_discard(uint32_t pdcp_sn, uint32_t* discarded_bytes = nullptr)
   {
     uint32_t expected_state = pdcp_sn;
     uint32_t desired_state  = STATE_DISCARDED;
@@ -142,6 +142,9 @@ public:
 
     // update totals
     state_sub(sdu_size);
+    if (discarded_bytes != nullptr) {
+      *discarded_bytes = sdu_size;
+    }
     return true;
   }
 

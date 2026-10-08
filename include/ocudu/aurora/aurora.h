@@ -49,9 +49,9 @@ struct config {
 const char* default_thread_whitelist();
 
 /// Creates the shared memory segment and starts the publisher, thread collector and anomaly server.
-/// Returns 0 on success. Safe to call once per process.
+/// Returns 0 on success. Fails if another live process is attached to a segment with the same key.
 int start(const config& cfg);
-/// Stops all AURORA threads and detaches the shared memory segment (the segment itself is kept).
+/// Stops all AURORA threads, detaches and removes the shared memory segment (as OAI aurora_cleanup()).
 void stop();
 
 namespace detail {
@@ -61,7 +61,7 @@ extern std::atomic<bool> active;
 /// True once start() succeeded. Hooks may use it to skip computing expensive arguments.
 inline bool is_active() noexcept
 {
-  return detail::active.load(std::memory_order_relaxed);
+  return detail::active.load(std::memory_order_acquire);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -107,8 +107,6 @@ struct grant_info {
 
 void on_ue_created(unsigned ue_index, uint16_t rnti) noexcept;
 void on_ue_removed(unsigned ue_index) noexcept;
-/// CU-UP UE context released: frees its PDCP bearer and GTP-U tunnel slots.
-void on_cu_up_ue_removed(unsigned ue_index) noexcept;
 void on_pdsch_grant(const grant_info& grant) noexcept;
 void on_pusch_grant(const grant_info& grant) noexcept;
 void on_dl_harq_feedback(unsigned ue_index, uint16_t rnti, unsigned harq_id, harq_ack_status status) noexcept;

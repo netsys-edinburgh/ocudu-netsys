@@ -27,23 +27,68 @@ unsigned byte_hist_bin(uint32_t val)
 
 global_state* st()
 {
-  return is_active() ? state : nullptr;
+  return is_active() ? state.load(std::memory_order_acquire) : nullptr;
+}
+
+/// True if the accumulator slot is active and currently owned by this UE index (slots are shared modulo
+/// max_nof_ues; late events of removed UEs must not resurrect or pollute a slot).
+template <typename Acc>
+bool owned_by(const Acc& acc, unsigned ue_index)
+{
+  return get(acc.active) && get(acc.owner) == ue_index;
 }
 
 mac_ue_acc* mac_ue(unsigned ue_index)
 {
   global_state* s = st();
-  return s != nullptr ? &s->mac_ues[ue_slot(ue_index)] : nullptr;
+  if (s == nullptr) {
+    return nullptr;
+  }
+  mac_ue_acc& u = s->mac_ues[ue_slot(ue_index)];
+  return owned_by(u, ue_index) ? &u : nullptr;
 }
 
-/// Marks the UE slot active. Used by grant hooks in case the creation hook was missed (e.g. AURORA started late).
+/// Zeroes every per-interval counter and gauge of a MAC UE slot.
+void reset_mac_ue(mac_ue_acc& u)
+{
+  for (auto* a : {&u.dl_tbs, &u.ul_tbs, &u.dl_sdu_bytes, &u.ul_sdu_bytes, &u.dl_prbs, &u.ul_prbs, &u.ul_failure_since_ns}) {
+    set(*a, uint64_t{0});
+  }
+  for (auto* a : {&u.dl_sdus,       &u.ul_sdus,    &u.dl_retx_prbs, &u.ul_retx_prbs, &u.dl_harq_errors, &u.ul_harq_errors,
+                  &u.ulsch_dtx,     &u.dl_ok,      &u.dl_nok,       &u.ul_ok,        &u.ul_nok,         &u.wb_cqi,
+                  &u.ri,            &u.pmi_x1,     &u.pmi_x2,       &u.dl_mcs,       &u.ul_mcs,         &u.dl_mcs_table,
+                  &u.ul_mcs_table,  &u.dl_max_mcs, &u.dl_prb_last,  &u.ul_prb_last,  &u.dl_tbs_last,    &u.ul_tbs_last,
+                  &u.bsr,           &u.frame,      &u.slot,         &u.pusch_kos,    &u.pucch_kos}) {
+    set(*a, 0U);
+  }
+  for (auto& r : u.dl_rounds) {
+    set(r, 0U);
+  }
+  for (auto& r : u.ul_rounds) {
+    set(r, 0U);
+  }
+  for (auto& c : u.cons_nack) {
+    set(c, 0U);
+  }
+  for (auto& bo : u.dl_bo) {
+    set(bo, 0U);
+  }
+  for (auto* a : {&u.ssb_rsrp, &u.csirs_rsrp, &u.phr}) {
+    set(*a, int32_t{0});
+  }
+  for (auto* a : {&u.pusch_snr, &u.pucch_snr, &u.rsrp_dbm}) {
+    set(*a, 0.0F);
+  }
+  set(u.ul_failure, false);
+  set(u.dl_granted, false);
+  set(u.ul_granted, false);
+}
+
+/// Refreshes the C-RNTI of an owned UE slot (it changes e.g. on reestablishment).
 void touch_ue(mac_ue_acc& u, uint16_t rnti)
 {
   if (rnti != 0) {
     set(u.rnti, rnti);
-  }
-  if (!get(u.active)) {
-    set(u.active, true);
   }
 }
 
@@ -61,14 +106,16 @@ void detail::hist_acc::record(uint32_t val, int shift)
 
 void detail::hist_acc::drain(aurora_hist_t& out)
 {
+  // min/max first: a concurrent record() then lands in this interval's count with, at worst, its min/max in the
+  // next interval, never with a count of zero and a sentinel min.
+  uint32_t mn = take(min_val, u32_max);
+  out.max_val = take(max_val);
   for (unsigned i = 0; i != nof_hist_bins; ++i) {
     out.bins[i] = take(bins[i]);
   }
-  out.count   = take(count);
   out.sum     = take(sum);
-  uint32_t mn = take(min_val, u32_max);
-  out.min_val = out.count != 0 ? mn : 0;
-  out.max_val = take(max_val);
+  out.count   = take(count);
+  out.min_val = (out.count != 0 && mn != u32_max) ? mn : 0;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -95,17 +142,12 @@ void aurora::on_ue_created(unsigned ue_index, uint16_t rnti) noexcept
     return;
   }
   mac_ue_acc& u = s->mac_ues[ue_slot(ue_index)];
-  for (auto& c : u.cons_nack) {
-    set(c, 0U);
-  }
-  for (auto& bo : u.dl_bo) {
-    set(bo, 0U);
-  }
-  u.dl_starvation_events = 0;
-  u.ul_starvation_events = 0;
-  set(u.ul_failure, false);
+  set(u.active, false);
+  reset_mac_ue(u);
+  set(u.reset_starvation, true);
   set(u.rnti, rnti);
-  set(u.active, true);
+  set(u.owner, uint32_t(ue_index));
+  u.active.store(true, std::memory_order_release);
   add(s->ue_attach, 1U);
 }
 
@@ -116,27 +158,16 @@ void aurora::on_ue_removed(unsigned ue_index) noexcept
     return;
   }
   unsigned slot = ue_slot(ue_index);
-  set(s->mac_ues[slot].active, false);
-  set(s->mac_ues[slot].rnti, uint16_t{0});
+  if (owned_by(s->mac_ues[slot], ue_index)) {
+    set(s->mac_ues[slot].active, false);
+    set(s->mac_ues[slot].rnti, uint16_t{0});
+  }
   for (auto& rb : s->rlc[slot]) {
-    set(rb.active, false);
+    if (owned_by(rb, ue_index)) {
+      set(rb.active, false);
+    }
   }
   add(s->ue_detach, 1U);
-}
-
-void aurora::on_cu_up_ue_removed(unsigned ue_index) noexcept
-{
-  global_state* s = st();
-  if (s == nullptr) {
-    return;
-  }
-  unsigned slot = ue_slot(ue_index);
-  for (auto& rb : s->pdcp[slot]) {
-    set(rb.active, false);
-  }
-  for (auto& t : s->gtp[slot]) {
-    set(t.active, false);
-  }
 }
 
 static void on_grant(const grant_info& g, bool is_dl)
@@ -145,7 +176,8 @@ static void on_grant(const grant_info& g, bool is_dl)
   if (s == nullptr) {
     return;
   }
-  mac_ue_acc& u = s->mac_ues[ue_slot(g.ue_index)];
+  mac_ue_acc* up = mac_ue(g.ue_index);
+  mac_ue_acc& u  = up != nullptr ? *up : s->scratch_ue;
   touch_ue(u, g.rnti);
   set(u.frame, uint32_t(g.sfn));
   set(u.slot, uint32_t(g.slot_index));
@@ -203,18 +235,24 @@ void aurora::on_dl_harq_feedback(unsigned ue_index, uint16_t rnti, unsigned harq
   if (s == nullptr) {
     return;
   }
-  mac_ue_acc& u = s->mac_ues[ue_slot(ue_index)];
-  touch_ue(u, rnti);
-  std::atomic<uint32_t>& cons = u.cons_nack[harq_id % max_harq_ids];
   if (status == harq_ack_status::ack) {
     add(s->dl_harq_ack, uint64_t{1});
-    add(u.dl_ok, 1U);
+  } else {
+    // OAI counts NACK and DTX together as "nack".
+    add(s->dl_harq_nack, uint64_t{1});
+  }
+  mac_ue_acc* u = mac_ue(ue_index);
+  if (u == nullptr) {
+    return;
+  }
+  touch_ue(*u, rnti);
+  std::atomic<uint32_t>& cons = u->cons_nack[harq_id % max_harq_ids];
+  if (status == harq_ack_status::ack) {
+    add(u->dl_ok, 1U);
     set(cons, 0U);
     return;
   }
-  // OAI counts NACK and DTX together as "nack".
-  add(s->dl_harq_nack, uint64_t{1});
-  add(u.dl_nok, 1U);
+  add(u->dl_nok, 1U);
   uint32_t n = cons.fetch_add(1, std::memory_order_relaxed) + 1;
   atomic_max(s->dl_harq_max_cons, n);
 }
@@ -225,17 +263,15 @@ void aurora::on_ul_crc(unsigned ue_index, uint16_t rnti, bool crc_ok, std::optio
   if (s == nullptr) {
     return;
   }
-  mac_ue_acc& u = s->mac_ues[ue_slot(ue_index)];
-  touch_ue(u, rnti);
-  if (crc_ok) {
-    add(s->ul_crc_ok, uint64_t{1});
-    add(u.ul_ok, 1U);
-  } else {
-    add(s->ul_crc_ko, uint64_t{1});
-    add(u.ul_nok, 1U);
+  add(crc_ok ? s->ul_crc_ok : s->ul_crc_ko, uint64_t{1});
+  mac_ue_acc* u = mac_ue(ue_index);
+  if (u == nullptr) {
+    return;
   }
+  touch_ue(*u, rnti);
+  add(crc_ok ? u->ul_ok : u->ul_nok, 1U);
   if (sinr_db.has_value() && std::isfinite(*sinr_db)) {
-    set(u.pusch_snr, *sinr_db);
+    set(u->pusch_snr, *sinr_db);
   }
 }
 
@@ -314,19 +350,19 @@ void aurora::on_dl_buffer_state(unsigned ue_index, unsigned lcid, uint32_t nof_b
 
 void aurora::on_mac_dl_sdu(unsigned ue_index, uint32_t nof_bytes) noexcept
 {
+  record_flow(flow::rlc_mac, nof_bytes);
   if (mac_ue_acc* u = mac_ue(ue_index)) {
     add(u->dl_sdu_bytes, uint64_t{nof_bytes});
     add(u->dl_sdus, 1U);
-    record_flow(flow::rlc_mac, nof_bytes);
   }
 }
 
 void aurora::on_mac_ul_sdu(unsigned ue_index, uint32_t nof_bytes) noexcept
 {
+  record_flow(flow::mac_rlc, nof_bytes);
   if (mac_ue_acc* u = mac_ue(ue_index)) {
     add(u->ul_sdu_bytes, uint64_t{nof_bytes});
     add(u->ul_sdus, 1U);
-    record_flow(flow::mac_rlc, nof_bytes);
   }
 }
 
@@ -387,15 +423,16 @@ void aurora::on_scheduler_slot(unsigned                  pci,
 
 static rc_cell_acc* rc_cell(global_state& s, uint32_t cell_id)
 {
+  std::lock_guard<std::mutex> lock(s.rc_cells_mutex);
   for (auto& c : s.rc_cells) {
     if (get(c.used) && get(c.cell_id) == cell_id) {
       return &c;
     }
   }
   for (auto& c : s.rc_cells) {
-    bool expected = false;
-    if (c.used.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+    if (!get(c.used)) {
       set(c.cell_id, cell_id);
+      c.used.store(true, std::memory_order_release);
       return &c;
     }
   }
@@ -433,8 +470,9 @@ void aurora::on_serving_cell_rsrq(float rsrq_db) noexcept
   if (s == nullptr || !std::isfinite(rsrq_db)) {
     return;
   }
-  // Single writer (CU-CP control executor); a plain load/store sum is sufficient.
-  set(s->rsrq_sum, get(s->rsrq_sum) + rsrq_db);
+  float cur = get(s->rsrq_sum);
+  while (!s->rsrq_sum.compare_exchange_weak(cur, cur + rsrq_db, std::memory_order_relaxed)) {
+  }
   add(s->rsrq_count, 1U);
 }
 
@@ -448,6 +486,7 @@ void aurora::rlc_bearer_created(unsigned ue_index, unsigned rb_index, rlc_mode m
     return;
   }
   rlc_bearer_acc& rb = s->rlc[ue_slot(ue_index)][rb_index];
+  set(rb.active, false);
   for (auto& c : rb.c) {
     set(c, uint64_t{0});
   }
@@ -455,29 +494,38 @@ void aurora::rlc_bearer_created(unsigned ue_index, unsigned rb_index, rlc_mode m
     set(g, 0U);
   }
   set(rb.mode, static_cast<uint32_t>(mode));
-  set(rb.active, true);
+  set(rb.owner, uint32_t(ue_index));
+  rb.active.store(true, std::memory_order_release);
+}
+
+static rlc_bearer_acc* rlc_bearer(unsigned ue_index, unsigned rb_index)
+{
+  global_state* s = st();
+  if (s == nullptr || rb_index >= max_rbs_per_ue) {
+    return nullptr;
+  }
+  rlc_bearer_acc& rb = s->rlc[ue_slot(ue_index)][rb_index];
+  return owned_by(rb, ue_index) ? &rb : nullptr;
 }
 
 void aurora::rlc_add(unsigned ue_index, unsigned rb_index, rlc_counter c, uint64_t value) noexcept
 {
-  global_state* s = st();
-  if (s == nullptr || rb_index >= max_rbs_per_ue || c >= rlc_counter::nof_counters) {
+  if (c >= rlc_counter::nof_counters) {
     return;
   }
-  rlc_bearer_acc& rb = s->rlc[ue_slot(ue_index)][rb_index];
-  add(rb.c[static_cast<unsigned>(c)], value);
-  if (!get(rb.active)) {
-    set(rb.active, true);
+  if (rlc_bearer_acc* rb = rlc_bearer(ue_index, rb_index)) {
+    add(rb->c[static_cast<unsigned>(c)], value);
   }
 }
 
 void aurora::rlc_set(unsigned ue_index, unsigned rb_index, rlc_gauge g, uint32_t value) noexcept
 {
-  global_state* s = st();
-  if (s == nullptr || rb_index >= max_rbs_per_ue || g >= rlc_gauge::nof_gauges) {
+  if (g >= rlc_gauge::nof_gauges) {
     return;
   }
-  set(s->rlc[ue_slot(ue_index)][rb_index].g[static_cast<unsigned>(g)], value);
+  if (rlc_bearer_acc* rb = rlc_bearer(ue_index, rb_index)) {
+    set(rb->g[static_cast<unsigned>(g)], value);
+  }
 }
 
 void aurora::rlc_hook_anomaly() noexcept
@@ -497,6 +545,7 @@ void aurora::pdcp_bearer_created(unsigned ue_index, unsigned rb_index, rlc_mode 
     return;
   }
   pdcp_bearer_acc& rb = s->pdcp[ue_slot(ue_index)][rb_index];
+  set(rb.active, false);
   for (auto& c : rb.c) {
     set(c, uint64_t{0});
   }
@@ -505,51 +554,51 @@ void aurora::pdcp_bearer_created(unsigned ue_index, unsigned rb_index, rlc_mode 
   set(rb.latency_count, 0U);
   set(rb.sojourn_count, 0U);
   set(rb.mode, static_cast<uint32_t>(mode));
-  set(rb.active, true);
+  set(rb.owner, uint32_t(ue_index));
+  rb.active.store(true, std::memory_order_release);
+}
+
+static pdcp_bearer_acc* pdcp_bearer(unsigned ue_index, unsigned rb_index)
+{
+  global_state* s = st();
+  if (s == nullptr || rb_index >= max_rbs_per_ue) {
+    return nullptr;
+  }
+  pdcp_bearer_acc& rb = s->pdcp[ue_slot(ue_index)][rb_index];
+  return owned_by(rb, ue_index) ? &rb : nullptr;
 }
 
 void aurora::pdcp_bearer_removed(unsigned ue_index, unsigned rb_index) noexcept
 {
-  global_state* s = st();
-  if (s == nullptr || rb_index >= max_rbs_per_ue) {
-    return;
+  if (pdcp_bearer_acc* rb = pdcp_bearer(ue_index, rb_index)) {
+    set(rb->active, false);
   }
-  set(s->pdcp[ue_slot(ue_index)][rb_index].active, false);
 }
 
 void aurora::pdcp_add(unsigned ue_index, unsigned rb_index, pdcp_counter c, uint64_t value) noexcept
 {
-  global_state* s = st();
-  if (s == nullptr || rb_index >= max_rbs_per_ue || c >= pdcp_counter::nof_counters) {
+  if (c >= pdcp_counter::nof_counters) {
     return;
   }
-  pdcp_bearer_acc& rb = s->pdcp[ue_slot(ue_index)][rb_index];
-  add(rb.c[static_cast<unsigned>(c)], value);
-  if (!get(rb.active)) {
-    set(rb.active, true);
+  if (pdcp_bearer_acc* rb = pdcp_bearer(ue_index, rb_index)) {
+    add(rb->c[static_cast<unsigned>(c)], value);
   }
 }
 
 void aurora::pdcp_tx_proc_latency(unsigned ue_index, unsigned rb_index, uint64_t proc_latency_ns) noexcept
 {
-  global_state* s = st();
-  if (s == nullptr || rb_index >= max_rbs_per_ue) {
-    return;
+  if (pdcp_bearer_acc* rb = pdcp_bearer(ue_index, rb_index)) {
+    add(rb->latency_sum_ns, proc_latency_ns);
+    add(rb->latency_count, 1U);
   }
-  pdcp_bearer_acc& rb = s->pdcp[ue_slot(ue_index)][rb_index];
-  add(rb.latency_sum_ns, proc_latency_ns);
-  add(rb.latency_count, 1U);
 }
 
 void aurora::pdcp_tx_sojourn(unsigned ue_index, unsigned rb_index, uint64_t sojourn_ns) noexcept
 {
-  global_state* s = st();
-  if (s == nullptr || rb_index >= max_rbs_per_ue) {
-    return;
+  if (pdcp_bearer_acc* rb = pdcp_bearer(ue_index, rb_index)) {
+    add(rb->sojourn_sum_ns, sojourn_ns);
+    add(rb->sojourn_count, 1U);
   }
-  pdcp_bearer_acc& rb = s->pdcp[ue_slot(ue_index)][rb_index];
-  add(rb.sojourn_sum_ns, sojourn_ns);
-  add(rb.sojourn_count, 1U);
 }
 
 void aurora::pdcp_hook_anomaly() noexcept
@@ -571,9 +620,11 @@ int aurora::gtp_tunnel_created(unsigned ue_index, uint32_t local_teid, uint32_t 
   for (unsigned i = 0; i != max_gtp_tunnels; ++i) {
     gtp_tunnel_acc& t        = s->gtp[ue_slot(ue_index)][i];
     bool            expected = false;
-    if (!t.active.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+    // Claim a free slot; it becomes visible to hooks/publisher only once owner and identity are set.
+    if (!t.active.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
       continue;
     }
+    set(t.owner, u32_max);
     for (auto& c : t.c) {
       set(c, uint64_t{0});
     }
@@ -582,36 +633,45 @@ int aurora::gtp_tunnel_created(unsigned ue_index, uint32_t local_teid, uint32_t 
     set(t.teid_local, local_teid);
     set(t.teid_peer, peer_teid);
     set(t.qfi, 0U);
+    t.owner.store(uint32_t(ue_index), std::memory_order_release);
     return static_cast<int>(i);
   }
   return -1;
 }
 
-void aurora::gtp_tunnel_removed(unsigned ue_index, unsigned tunnel_index) noexcept
+static gtp_tunnel_acc* gtp_tunnel(unsigned ue_index, unsigned tunnel_index)
 {
   global_state* s = st();
   if (s == nullptr || tunnel_index >= max_gtp_tunnels) {
-    return;
+    return nullptr;
   }
-  set(s->gtp[ue_slot(ue_index)][tunnel_index].active, false);
+  gtp_tunnel_acc& t = s->gtp[ue_slot(ue_index)][tunnel_index];
+  return owned_by(t, ue_index) ? &t : nullptr;
+}
+
+void aurora::gtp_tunnel_removed(unsigned ue_index, unsigned tunnel_index) noexcept
+{
+  if (gtp_tunnel_acc* t = gtp_tunnel(ue_index, tunnel_index)) {
+    set(t->owner, u32_max);
+    t->active.store(false, std::memory_order_release);
+  }
 }
 
 void aurora::gtp_set_qfi(unsigned ue_index, unsigned tunnel_index, uint8_t qfi) noexcept
 {
-  global_state* s = st();
-  if (s == nullptr || tunnel_index >= max_gtp_tunnels) {
-    return;
+  if (gtp_tunnel_acc* t = gtp_tunnel(ue_index, tunnel_index)) {
+    set(t->qfi, uint32_t(qfi));
   }
-  set(s->gtp[ue_slot(ue_index)][tunnel_index].qfi, uint32_t(qfi));
 }
 
 void aurora::gtp_add(unsigned ue_index, unsigned tunnel_index, gtp_counter c, uint64_t value) noexcept
 {
-  global_state* s = st();
-  if (s == nullptr || tunnel_index >= max_gtp_tunnels || c >= gtp_counter::nof_counters) {
+  if (c >= gtp_counter::nof_counters) {
     return;
   }
-  add(s->gtp[ue_slot(ue_index)][tunnel_index].c[static_cast<unsigned>(c)], value);
+  if (gtp_tunnel_acc* t = gtp_tunnel(ue_index, tunnel_index)) {
+    add(t->c[static_cast<unsigned>(c)], value);
+  }
 }
 
 void aurora::gtp_unknown_teid() noexcept
@@ -623,11 +683,8 @@ void aurora::gtp_unknown_teid() noexcept
 
 void aurora::gtp_tx_latency(unsigned ue_index, unsigned tunnel_index, uint64_t proc_latency_ns) noexcept
 {
-  global_state* s = st();
-  if (s == nullptr || tunnel_index >= max_gtp_tunnels) {
-    return;
+  if (gtp_tunnel_acc* t = gtp_tunnel(ue_index, tunnel_index)) {
+    add(t->latency_sum_ns, proc_latency_ns);
+    add(t->latency_count, 1U);
   }
-  gtp_tunnel_acc& t = s->gtp[ue_slot(ue_index)][tunnel_index];
-  add(t.latency_sum_ns, proc_latency_ns);
-  add(t.latency_count, 1U);
 }

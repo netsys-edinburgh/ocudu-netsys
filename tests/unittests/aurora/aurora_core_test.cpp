@@ -36,7 +36,7 @@ protected:
 
   const aurora_metrics& publish()
   {
-    detail::publish_interval(*m, *detail::state);
+    detail::publish_interval(*m, *detail::state.load());
     return *m;
   }
 
@@ -95,7 +95,7 @@ TEST(aurora_lifecycle, hooks_are_noops_when_not_started)
 
 TEST_F(aurora_core_test, shm_segment_is_created_with_role)
 {
-  aurora_metrics* attached = aurora_get_metrics_by_key(static_cast<key_t>(detail::state->cfg.shm_key));
+  aurora_metrics* attached = aurora_get_metrics_by_key(static_cast<key_t>(detail::state.load()->cfg.shm_key));
   ASSERT_NE(attached, nullptr);
   EXPECT_EQ(attached->ran_type, RAN_GNB);
   EXPECT_EQ(attached->collection_interval_ms, 3600U * 1000U);
@@ -142,6 +142,7 @@ TEST_F(aurora_core_test, dl_harq_counts_nack_and_dtx_and_max_consecutive)
 
 TEST_F(aurora_core_test, ul_crc_and_sinr)
 {
+  on_ue_created(2, 0x4602);
   on_ul_crc(2, 0x4602, true, 12.5F);
   on_ul_crc(2, 0x4602, false, std::nullopt);
   on_ul_crc(2, 0x4602, true, std::nullopt);
@@ -157,6 +158,7 @@ TEST_F(aurora_core_test, ul_crc_and_sinr)
 
 TEST_F(aurora_core_test, fapi_dl_ul_aggregates_histograms_and_per_ue_snapshot)
 {
+  on_ue_created(3, 0x4603);
   on_pdsch_grant(make_grant(3, 0x4603, 10, 5, 100));
   on_pdsch_grant(make_grant(3, 0x4603, 20, 40, 300, 1));
   on_pusch_grant(make_grant(3, 0x4603, 7, 12, 50));
@@ -316,7 +318,7 @@ TEST_F(aurora_core_test, pdcp_counters_latency_and_kpm_bitrate)
   EXPECT_EQ(r.kpm_metrics[8].value, 1000U);
   EXPECT_EQ(r.kpm_metrics[9].value, 400U);
 
-  on_cu_up_ue_removed(7);
+  pdcp_bearer_removed(7, drb_rb_index(2));
   EXPECT_EQ(publish().pdcp_rb_stats[7][5].rnti, 0U);
 }
 
@@ -360,6 +362,63 @@ TEST_F(aurora_core_test, handover_counters_are_cumulative)
   EXPECT_DOUBLE_EQ(r.rc_metrics[0].rsrq_avg, -11.0);
   EXPECT_EQ(r.du_count, 3U);
   EXPECT_EQ(publish().rc_metrics[0].handover_attempts, 2U);
+}
+
+TEST_F(aurora_core_test, events_of_unknown_or_removed_ues_do_not_create_ghost_slots)
+{
+  // Never created: global counters move, no per-UE slot appears.
+  on_pdsch_grant(make_grant(10, 0x4610, 5, 5, 50));
+  on_ul_crc(10, 0x4610, true, 3.0F);
+  rlc_add(10, drb_rb_index(1), rlc_counter::txsdu_pkts, 1);
+  pdcp_add(10, drb_rb_index(1), pdcp_counter::txsdu_pkts, 1);
+  const aurora_metrics& r = publish();
+  EXPECT_EQ(r.fapi_dl_total_pdsch_count, 1U);
+  EXPECT_EQ(r.ul_crc_total, 1U);
+  EXPECT_EQ(r.mac_ue_stats[10].rnti, 0U);
+  EXPECT_EQ(r.rlc_rb_stats[10][4].rnti, 0U);
+  EXPECT_EQ(r.pdcp_rb_stats[10][4].rnti, 0U);
+  EXPECT_EQ(r.active_ue_count, 0U);
+
+  // Removed: late events do not resurrect the slot.
+  on_ue_created(11, 0x4611);
+  rlc_bearer_created(11, drb_rb_index(1), rlc_mode::am);
+  on_ue_removed(11);
+  on_pdsch_grant(make_grant(11, 0x4611, 5, 5, 50));
+  rlc_add(11, drb_rb_index(1), rlc_counter::txsdu_pkts, 1);
+  const aurora_metrics& r2 = publish();
+  EXPECT_EQ(r2.mac_ue_stats[11].rnti, 0U);
+  EXPECT_EQ(r2.rlc_rb_stats[11][4].rnti, 0U);
+}
+
+TEST_F(aurora_core_test, aliased_ue_indexes_do_not_clobber_each_other)
+{
+  // UE 5 and UE 105 share slot 5; only the owner may update or free it.
+  on_ue_created(5, 0x4605);
+  on_ue_removed(105);
+  on_pdsch_grant(make_grant(105, 0x4699, 5, 5, 50));
+  on_pdsch_grant(make_grant(5, 0x4605, 7, 7, 70));
+  const aurora_metrics& r = publish();
+  EXPECT_EQ(r.mac_ue_stats[5].rnti, 0x4605U);
+  EXPECT_EQ(r.mac_ue_stats[5].dl_aggr_tbs, 70U);
+}
+
+TEST_F(aurora_core_test, ue_creation_resets_leftovers_of_previous_slot_owner)
+{
+  on_ue_created(6, 0x4606);
+  on_pdsch_grant(make_grant(6, 0x4606, 5, 5, 500));
+  on_ue_removed(6);
+  on_ue_created(6, 0x4607);
+  const aurora_metrics& r = publish();
+  EXPECT_EQ(r.mac_ue_stats[6].rnti, 0x4607U);
+  EXPECT_EQ(r.mac_ue_stats[6].dl_aggr_tbs, 0U);
+}
+
+TEST_F(aurora_core_test, gtp_tunnel_removal_by_another_ue_is_ignored)
+{
+  ASSERT_EQ(gtp_tunnel_created(3, 0x10, 0x20), 0);
+  gtp_tunnel_removed(103, 0);
+  gtp_add(3, 0, gtp_counter::rx_pkts, 2);
+  EXPECT_EQ(publish().gtp_tunnel_stats[3][0].rx_pkts, 2U);
 }
 
 TEST_F(aurora_core_test, rusage_and_timestamp)

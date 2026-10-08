@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstdint>
 #include <limits>
+#include <mutex>
 
 namespace ocudu {
 namespace aurora {
@@ -109,6 +110,7 @@ struct flow_acc {
 
 struct mac_ue_acc {
   std::atomic<bool>     active{false};
+  std::atomic<uint32_t> owner{u32_max}; ///< UE index owning the slot (slots are shared modulo max_nof_ues).
   std::atomic<uint16_t> rnti{0};
 
   // Interval counters.
@@ -142,13 +144,15 @@ struct mac_ue_acc {
   // DL HARQ consecutive NACK/DTX per HARQ process.
   std::array<std::atomic<uint32_t>, max_harq_ids> cons_nack{};
 
-  // Publisher-owned cumulative counters (not atomics: only the publisher touches them).
-  uint32_t dl_starvation_events = 0;
-  uint32_t ul_starvation_events = 0;
+  // Publisher-owned cumulative counters (only the publisher touches them); a new UE requests their reset.
+  uint32_t          dl_starvation_events = 0;
+  uint32_t          ul_starvation_events = 0;
+  std::atomic<bool> reset_starvation{false};
 };
 
 struct rlc_bearer_acc {
   std::atomic<bool>                                                                   active{false};
+  std::atomic<uint32_t>                                                               owner{u32_max};
   std::atomic<uint32_t>                                                               mode{0};
   std::array<std::atomic<uint64_t>, static_cast<unsigned>(rlc_counter::nof_counters)> c{};
   std::array<std::atomic<uint32_t>, static_cast<unsigned>(rlc_gauge::nof_gauges)>     g{};
@@ -156,6 +160,7 @@ struct rlc_bearer_acc {
 
 struct pdcp_bearer_acc {
   std::atomic<bool>                                                                    active{false};
+  std::atomic<uint32_t>                                                                owner{u32_max};
   std::atomic<uint32_t>                                                                mode{0};
   std::array<std::atomic<uint64_t>, static_cast<unsigned>(pdcp_counter::nof_counters)> c{};
   std::atomic<uint64_t> latency_sum_ns{0}, sojourn_sum_ns{0};
@@ -164,6 +169,7 @@ struct pdcp_bearer_acc {
 
 struct gtp_tunnel_acc {
   std::atomic<bool>                                                                   active{false};
+  std::atomic<uint32_t>                                                               owner{u32_max};
   std::atomic<uint32_t>                                                               teid_local{0}, teid_peer{0};
   std::atomic<uint32_t>                                                               qfi{0};
   std::array<std::atomic<uint64_t>, static_cast<unsigned>(gtp_counter::nof_counters)> c{};
@@ -203,16 +209,19 @@ struct global_state {
   std::atomic<float>    rsrq_sum{0};
   std::atomic<uint32_t> rsrq_count{0};
   std::array<rc_cell_acc, max_rc_cells> rc_cells;
+  std::mutex                            rc_cells_mutex; ///< Serializes RC cell slot allocation (rare events).
   std::atomic<uint64_t>                 gtp_unknown_teid{0};
 
   std::array<mac_ue_acc, max_nof_ues>                                  mac_ues;
+  /// Sink for per-UE updates of grants whose UE slot is not owned (never published).
+  mac_ue_acc scratch_ue;
   std::array<std::array<rlc_bearer_acc, max_rbs_per_ue>, max_nof_ues>  rlc;
   std::array<std::array<pdcp_bearer_acc, max_rbs_per_ue>, max_nof_ues> pdcp;
   std::array<std::array<gtp_tunnel_acc, max_gtp_tunnels>, max_nof_ues> gtp;
 };
 
-/// Process-wide state, allocated by start().
-extern global_state* state;
+/// Process-wide state, allocated by start() (release) and read by hooks (acquire).
+extern std::atomic<global_state*> state;
 /// Attached shared memory segment, set by start().
 extern aurora_metrics* shm;
 

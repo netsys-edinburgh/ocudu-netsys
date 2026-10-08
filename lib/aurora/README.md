@@ -25,6 +25,11 @@ aurora:
 
 The same options are available on the command line, for example `gnb ... aurora --enable true --shm_key 0x1234`.
 
+**Use a different `shm_key` for every process on a host** (e.g. DU, CU-CP and CU-UP).
+- AURORA refuses to start if another live process is attached to a segment with the same key, and logs an error.
+- A stale segment left behind by a crashed process is replaced.
+- The segment is created with mode `0644`; readers attach it read-only.
+
 ## Reading
 
 `build/utils/aurora_reader/aurora_reader`:

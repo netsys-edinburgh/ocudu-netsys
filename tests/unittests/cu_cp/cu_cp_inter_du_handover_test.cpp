@@ -731,7 +731,7 @@ TEST_F(cu_cp_inter_du_handover_test, when_ho_succeeds_then_aurora_handover_count
   ASSERT_TRUE(send_ue_context_modification_response_and_await_ue_context_release_command());
   ASSERT_TRUE(send_f1ap_ue_context_release_complete(source_du_idx));
 
-  aurora::detail::publish_interval(*snapshot, *aurora::detail::state);
+  aurora::detail::publish_interval(*snapshot, *aurora::detail::state.load());
   ASSERT_GE(snapshot->rc_cell_count, 1U);
   EXPECT_EQ(snapshot->rc_metrics[0].handover_attempts, 1U);
   EXPECT_EQ(snapshot->rc_metrics[0].handover_success, 1U);

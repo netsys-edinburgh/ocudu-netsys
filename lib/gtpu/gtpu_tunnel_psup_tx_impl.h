@@ -47,7 +47,7 @@ public:
     if (stopped) {
       return;
     }
-    const auto aurora_t0 = std::chrono::steady_clock::now();
+    const auto aurora_t0 = aurora_slot >= 0 ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 
     gtpu_header hdr         = {};
     hdr.flags.version       = GTPU_FLAGS_VERSION_V1;

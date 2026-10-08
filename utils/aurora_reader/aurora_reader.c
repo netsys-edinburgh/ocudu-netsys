@@ -1426,6 +1426,7 @@ static int load_aurora_yaml_section(const char *path, aurora_config_t *cfg, bool
     while (fgets(line, sizeof(line), fp)) {
         char *hash = strchr(line, '#');
         if (hash) *hash = '\0';
+        line[strcspn(line, "\r")] = '\0'; /* CRLF files */
         if (line[0] != ' ' && line[0] != '\t' && line[0] != '\n' && line[0] != '\0') {
             in_section = (strncmp(line, "aurora:", 7) == 0);
             continue;

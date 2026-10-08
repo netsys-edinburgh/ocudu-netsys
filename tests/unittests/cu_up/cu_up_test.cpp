@@ -572,7 +572,7 @@ TEST_F(cu_up_test, aurora_metrics_follow_ul_and_dl_data_flow)
   ::close(upf_info.sock_fd);
   std::this_thread::sleep_for(std::chrono::milliseconds{100});
 
-  aurora::detail::publish_interval(*snapshot, *aurora::detail::state);
+  aurora::detail::publish_interval(*snapshot, *aurora::detail::state.load());
   const aurora_metrics& m = *snapshot;
   // Group 1: backhaul flows.
   EXPECT_EQ(m.bhtx_in_size, sizeof(gtpu_ping_vec));

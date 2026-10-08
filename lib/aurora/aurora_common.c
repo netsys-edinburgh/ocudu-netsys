@@ -48,13 +48,14 @@ uint64_t aurora_get_current_timestamp_us(void)
 
 struct aurora_metrics *aurora_get_metrics_by_key(key_t shm_key)
 {
-  int id = shmget(shm_key, sizeof(struct aurora_metrics), 0666);
+  int id = shmget(shm_key, sizeof(struct aurora_metrics), 0);
   if (id < 0) {
     /* Attach to an existing segment regardless of its size. */
-    id = shmget(shm_key, 0, 0666);
+    id = shmget(shm_key, 0, 0);
     if (id < 0)
       return NULL;
   }
-  void *p = shmat(id, NULL, 0);
+  /* Consumers only read: attach read-only (the producer creates the segment with mode 0644). */
+  void *p = shmat(id, NULL, SHM_RDONLY);
   return p == (void *)-1 ? NULL : (struct aurora_metrics *)p;
 }

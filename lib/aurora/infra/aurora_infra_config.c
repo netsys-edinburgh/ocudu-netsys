@@ -39,6 +39,18 @@ static const char* const aurora_config_infra_host_sys_prefix_default  = "/host";
 #include <string.h>
 #include <stdio.h>
 
+/* Interval in ms; rejects negative / non-numeric values (atoi wrapped them to huge uint32_t values). */
+static uint32_t parse_ms(const char *s)
+{
+    char         *end = NULL;
+    unsigned long v   = strtoul(s, &end, 10);
+    if (s[0] == '-' || end == s || *end != '\0' || v > 3600000UL) {
+        fprintf(stderr, "AURORA_INFRA: invalid interval '%s', using default\n", s);
+        return 0;
+    }
+    return (uint32_t)v;
+}
+
 static int str_is_yes(const char *s)
 {
     return (strcmp(s, "yes") == 0 || strcmp(s, "1") == 0 ||
@@ -78,7 +90,8 @@ int aurora_infra_parse_cli(aurora_infra_config_t *cfg, int argc, char **argv)
             cfg->infra_shm_key = (key_t)strtol(argv[++i], NULL, 0);
             consumed += 2;
         } else if (!strcmp(argv[i], "--infra-interval") && i + 1 < argc) {
-            cfg->infra_interval_ms = (uint32_t)atoi(argv[++i]);
+            uint32_t ms = parse_ms(argv[++i]);
+            if (ms != 0) cfg->infra_interval_ms = ms; /* 0 / invalid keeps the default */
             consumed += 2;
         } else if (!strcmp(argv[i], "--infra-container") && i + 1 < argc) {
             i++;
@@ -96,29 +109,29 @@ int aurora_infra_parse_cli(aurora_infra_config_t *cfg, int argc, char **argv)
             consumed += 2;
         } else if (!strcmp(argv[i], "--infra-host-proc") && i + 1 < argc) {
             i++;
-            strncpy(cfg->host_proc_prefix, argv[i], AURORA_INFRA_PATH_LEN - 1);
+            snprintf(cfg->host_proc_prefix, AURORA_INFRA_PATH_LEN, "%s", argv[i]);
             consumed += 2;
         } else if (!strcmp(argv[i], "--infra-host-sys") && i + 1 < argc) {
             i++;
-            strncpy(cfg->host_sys_prefix, argv[i], AURORA_INFRA_PATH_LEN - 1);
+            snprintf(cfg->host_sys_prefix, AURORA_INFRA_PATH_LEN, "%s", argv[i]);
             consumed += 2;
         } else if (!strcmp(argv[i], "--infra-cpu-interval") && i + 1 < argc) {
-            cfg->intervals.cpu_interval_ms = (uint32_t)atoi(argv[++i]);
+            cfg->intervals.cpu_interval_ms = parse_ms(argv[++i]);
             consumed += 2;
         } else if (!strcmp(argv[i], "--infra-mem-interval") && i + 1 < argc) {
-            cfg->intervals.memory_interval_ms = (uint32_t)atoi(argv[++i]);
+            cfg->intervals.memory_interval_ms = parse_ms(argv[++i]);
             consumed += 2;
         } else if (!strcmp(argv[i], "--infra-net-interval") && i + 1 < argc) {
-            cfg->intervals.network_interval_ms = (uint32_t)atoi(argv[++i]);
+            cfg->intervals.network_interval_ms = parse_ms(argv[++i]);
             consumed += 2;
         } else if (!strcmp(argv[i], "--infra-disk-interval") && i + 1 < argc) {
-            cfg->intervals.disk_interval_ms = (uint32_t)atoi(argv[++i]);
+            cfg->intervals.disk_interval_ms = parse_ms(argv[++i]);
             consumed += 2;
         } else if (!strcmp(argv[i], "--infra-host-interval") && i + 1 < argc) {
-            cfg->intervals.host_interval_ms = (uint32_t)atoi(argv[++i]);
+            cfg->intervals.host_interval_ms = parse_ms(argv[++i]);
             consumed += 2;
         } else if (!strcmp(argv[i], "--infra-gpu-interval") && i + 1 < argc) {
-            cfg->intervals.gpu_interval_ms = (uint32_t)atoi(argv[++i]);
+            cfg->intervals.gpu_interval_ms = parse_ms(argv[++i]);
             consumed += 2;
         } else if (!strcmp(argv[i], "--infra-backend") && i + 1 < argc) {
             const char *b = argv[++i];

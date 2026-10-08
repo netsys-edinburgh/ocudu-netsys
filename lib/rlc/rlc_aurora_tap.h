@@ -57,6 +57,17 @@ public:
     set(aurora::rlc_gauge::retransmit_list_depth, static_cast<uint32_t>(retx_depth));
   }
 
+  /// TX window full: counts one stall event per stall episode (edge triggered), not one per MAC pull.
+  void tx_window_full() const
+  {
+    if (not tx_stalled) {
+      tx_stalled = true;
+      add(aurora::rlc_counter::tx_window_stall_events, 1);
+    }
+  }
+  /// TX window has room again: ends the current stall episode.
+  void tx_window_open() const { tx_stalled = false; }
+
   /// Rate limiter for the RX reassembly-window scan (at most one scan per 10 ms per bearer).
   bool rx_report_due() const
   {
@@ -90,6 +101,7 @@ private:
   unsigned                                      ue_index = 0;
   unsigned                                      rb_index = aurora::max_rbs_per_ue;
   mutable std::chrono::steady_clock::time_point last_rx_report{};
+  mutable bool                                  tx_stalled = false;
 };
 
 } // namespace ocudu

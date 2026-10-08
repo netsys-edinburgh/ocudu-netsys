@@ -132,24 +132,21 @@ void rlc_tx_am_entity::discard_sdu(uint32_t pdcp_sn_start, uint32_t block_size)
 
   uint32_t pdcp_sn_end = (pdcp_sn_start + block_size) & pdcp_sn_mask;
   uint32_t nof_ok      = 0;
-  const uint32_t aurora_bytes_before = sdu_queue.get_state().n_bytes;
+  uint64_t       discarded_bytes = 0;
   uint32_t nof_fail    = 0;
   logger.log_info("Discarding SDUs. pdcp_sn={}..{}", pdcp_sn_start, pdcp_sn_end - 1);
   for (uint32_t pdcp_sn = pdcp_sn_start; pdcp_sn != pdcp_sn_end; pdcp_sn = (pdcp_sn + 1) & pdcp_sn_mask) {
-    if (sdu_queue.try_discard(pdcp_sn)) {
+    uint32_t sdu_bytes = 0;
+    if (sdu_queue.try_discard(pdcp_sn, &sdu_bytes)) {
       nof_ok++;
+      discarded_bytes += sdu_bytes;
     } else {
       nof_fail++;
       logger.log_info("Could not discard SDU. pdcp_sn={}", pdcp_sn);
     }
   }
   metrics_high.metrics_add_discard(nof_ok);
-  if (nof_ok > 0) {
-    const uint32_t aurora_bytes_after = sdu_queue.get_state().n_bytes;
-    if (aurora_bytes_before > aurora_bytes_after) {
-      metrics_high.aurora_tap.add(aurora::rlc_counter::txpdu_dd_bytes, aurora_bytes_before - aurora_bytes_after);
-    }
-  }
+  metrics_high.aurora_tap.add(aurora::rlc_counter::txpdu_dd_bytes, discarded_bytes);
   metrics_high.metrics_add_discard_failure(nof_fail);
   if (nof_ok > 0) {
     handle_changed_buffer_state();
@@ -266,10 +263,11 @@ size_t rlc_tx_am_entity::build_new_pdu(span<uint8_t> rlc_pdu_buf)
 
   // do not build any more PDU if window is already full
   if (is_tx_window_full()) {
-    metrics_low.aurora_tap.add(aurora::rlc_counter::tx_window_stall_events, 1);
+    metrics_low.aurora_tap.tx_window_full();
     logger.log_warning("Cannot build data PDU, tx_window is full. grant_len={}", grant_len);
     return 0;
   }
+  metrics_low.aurora_tap.tx_window_open();
 
   // Insert newly assigned SN into window. On failure return without pulling anything from SDU queue.
   if (!tx_window.add_sn(st.tx_next)) {

@@ -100,6 +100,11 @@ static anomaly_runtime_t g_runtime = {
     .leak_total_bytes = 0,
 };
 
+/* OCUDU: the hooks run on the scheduler slot / RLC / PDCP data paths. This flag lets them return after a single
+ * relaxed load while no anomaly is armed (no clock read). Set by SET, cleared by CLEAR type=ALL / stop. Both run on
+ * the listener thread, so arming and disarming never race each other. */
+static atomic_bool g_armed = ATOMIC_VAR_INIT(false);
+
 static const uint64_t MAX_ANOMALY_DURATION_MS = 3600000ULL;
 static const size_t MAX_LEAK_TOTAL_BYTES = (size_t)512 * 1024 * 1024;
 
@@ -309,6 +314,7 @@ static void clear_type(anomaly_type_t type)
       atomic_store(&g_runtime.state.queue_until_ms, 0);
       atomic_store(&g_runtime.state.memory_until_ms, 0);
       anomaly_free_all_leaks();
+      atomic_store(&g_armed, false);
       break;
     default:
       break;
@@ -319,6 +325,7 @@ static void set_type(anomaly_type_t type, const parsed_cmd_t *cmd)
 {
   uint64_t now = anomaly_now_ms();
   uint64_t until = now + (uint64_t)anomaly_clamp_u32(cmd->duration_ms, (uint32_t)MAX_ANOMALY_DURATION_MS);
+  atomic_store(&g_armed, true);
 
   switch (type) {
     case ANOM_TYPE_L1_THREAD_CONTENTION:
@@ -721,8 +728,16 @@ static void apply_delay_if_active(atomic_uint_fast64_t *until_ms, atomic_uint_fa
   }
 }
 
+/* Returns false when no anomaly was set since the last CLEAR type=ALL. */
+static bool anomaly_hooks_armed(void)
+{
+  return atomic_load_explicit(&g_armed, memory_order_relaxed);
+}
+
 void anomaly_module_hook_mac(void)
 {
+  if (!anomaly_hooks_armed())
+    return;
   apply_delay_if_active(&g_runtime.state.l1_until_ms, &g_runtime.state.l1_delay_us);
   apply_delay_if_active(&g_runtime.state.mac_until_ms, &g_runtime.state.mac_delay_us);
 
@@ -735,6 +750,8 @@ void anomaly_module_hook_mac(void)
 
 void anomaly_module_hook_rlc(void)
 {
+  if (!anomaly_hooks_armed())
+    return;
   if (atomic_load(&g_runtime.state.queue_until_ms) > anomaly_now_ms()) {
     uint32_t max_jitter = atomic_load(&g_runtime.state.queue_jitter_us);
     uint32_t jitter = (max_jitter == 0) ? 0 : (uint32_t)(anomaly_now_ms() % (uint64_t)(max_jitter + 1));
@@ -744,6 +761,8 @@ void anomaly_module_hook_rlc(void)
 
 void anomaly_module_hook_pdcp(void)
 {
+  if (!anomaly_hooks_armed())
+    return;
   apply_delay_if_active(&g_runtime.state.pdcp_until_ms, &g_runtime.state.pdcp_delay_us);
 
   if (atomic_load(&g_runtime.state.queue_until_ms) > anomaly_now_ms()) {

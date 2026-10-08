@@ -34,7 +34,7 @@ protected:
 
   const aurora_metrics& publish()
   {
-    aurora::detail::publish_interval(*snapshot, *aurora::detail::state);
+    aurora::detail::publish_interval(*snapshot, *aurora::detail::state.load());
     return *snapshot;
   }
 

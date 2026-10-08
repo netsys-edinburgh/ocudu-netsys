@@ -494,7 +494,7 @@ struct aurora_metrics {
 void aurora_hist_record(aurora_hist_t *hist, uint32_t val);
 void aurora_hist_record_shift(aurora_hist_t *hist, uint32_t val, int shift);
 
-/* Attach (read-only consumer side) to an existing segment. Returns NULL on failure. */
+/* Attach read-only (SHM_RDONLY, consumer side) to an existing segment. Returns NULL on failure. */
 struct aurora_metrics *aurora_get_metrics_by_key(key_t shm_key);
 
 /* Wall-clock timestamp in microseconds since epoch. */

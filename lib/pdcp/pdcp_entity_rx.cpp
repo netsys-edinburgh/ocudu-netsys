@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "pdcp_entity_rx.h"
+#include <algorithm>
 #include "ocudu/instrumentation/traces/up_traces.h"
 #include "ocudu/rohc/rohc_decompressor.h"
 #include "ocudu/rohc/rohc_factory.h"
@@ -834,8 +835,12 @@ void pdcp_entity_rx::handle_t_reordering_expire()
 
   // AURORA: COUNTs below RX_REORD still missing at expiry are given up (lost).
   if (metrics.aurora_tap.valid()) {
-    uint64_t missing = 0;
-    for (uint32_t count = st.rx_deliv; count < st.rx_reord; ++count) {
+    // Wrap-safe span (COUNT is modulo 2^32), bounded so a huge reordering gap cannot stall the UL executor.
+    static constexpr uint32_t max_aurora_scan = 4096;
+    const uint32_t            span            = std::min(st.rx_reord - st.rx_deliv, max_aurora_scan);
+    uint64_t                  missing         = 0;
+    for (uint32_t i = 0; i != span; ++i) {
+      const uint32_t count = st.rx_deliv + i;
       if (not rx_window.has_sn(count) or rx_window[count].count != count) {
         ++missing;
       }

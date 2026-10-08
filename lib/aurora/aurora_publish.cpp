@@ -2,10 +2,12 @@
 // `aurora_metrics` and recompute the derived aggregates (OAI aurora_reset_thread() +
 // aurora_recompute_ue_aggregates() + aurora_update_mac_ue_all_stats()).
 //
-// Semantics difference vs OAI: OAI producers wrote the shared segment live and a separate timer zeroed it, so a
-// reader could observe a partially filled interval (and several fields raced the ~1 Hz dump_mac_stats() producer,
-// see the comments in OAI aurora.c). Here the segment always holds the last *completed* interval and
-// `timestamp_us` changes exactly once per interval.
+// Semantics difference vs OAI: OAI producers wrote the shared segment live and a separate timer zeroed it, so values
+// were partial intervals (and several fields raced the ~1 Hz dump_mac_stats() producer, see the comments in OAI
+// aurora.c). Here every field is written once per interval with the totals of the interval that just ended, and
+// `timestamp_us` is written last. As in OAI there is no lock: a reader sampling while the publisher runs (a few
+// microseconds per interval) can see a mix of two consecutive intervals; readers should poll right after
+// `timestamp_us` changes.
 
 #include "aurora_state.h"
 #include <cstring>
@@ -184,6 +186,10 @@ void publish_mac_ue(aurora_metrics& m, mac_ue_acc& u, unsigned slot, ue_totals& 
   if (!get(u.active)) {
     std::memset(&o, 0, sizeof(o));
     return;
+  }
+  if (take(u.reset_starvation, false)) {
+    u.dl_starvation_events = 0;
+    u.ul_starvation_events = 0;
   }
   uint16_t rnti = get(u.rnti);
   // The reader treats rnti == 0 as an unused slot; keep the slot visible even before the C-RNTI is known.
@@ -392,7 +398,7 @@ void publish_gtp(aurora_metrics& m, global_state& st)
     for (unsigned t = 0; t != max_gtp_tunnels; ++t) {
       gtp_tunnel_acc&            a = st.gtp[ue][t];
       aurora_gtp_tunnel_stats_t& o = m.gtp_tunnel_stats[ue][t];
-      if (!get(a.active)) {
+      if (!get(a.active) || get(a.owner) == u32_max) {
         std::memset(&o, 0, sizeof(o));
         continue;
       }

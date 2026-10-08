@@ -19,7 +19,7 @@ using namespace aurora;
 extern "C" void aurora_thread_set_interval_ms(uint32_t interval_ms);
 
 std::atomic<bool>     aurora::detail::active{false};
-detail::global_state* aurora::detail::state = nullptr;
+std::atomic<detail::global_state*> aurora::detail::state{nullptr};
 aurora_metrics*       aurora::detail::shm   = nullptr;
 
 namespace {
@@ -39,7 +39,7 @@ void publisher_loop(std::chrono::milliseconds period)
   std::unique_lock<std::mutex> lock(stop_mutex);
   while (!stop_cv.wait_until(lock, next, [] { return stop_requested; })) {
     lock.unlock();
-    detail::publish_interval(*detail::shm, *detail::state);
+    detail::publish_interval(*detail::shm, *detail::state.load(std::memory_order_acquire));
     lock.lock();
     next += period;
     // Do not try to catch up after a stall (e.g. the process was suspended).
@@ -50,16 +50,31 @@ void publisher_loop(std::chrono::milliseconds period)
   }
 }
 
+/// Segment permissions: owner read/write, everybody else read-only (readers attach with SHM_RDONLY).
+constexpr int shm_perms = 0644;
+
 aurora_metrics* create_segment(key_t key)
 {
-  shm_id = ::shmget(key, sizeof(aurora_metrics), IPC_CREAT | 0666);
-  if (shm_id < 0 && errno == EINVAL) {
-    // A stale segment with another size (e.g. from an older build) exists: remove it and retry.
-    int old = ::shmget(key, 0, 0666);
+  shm_id = ::shmget(key, sizeof(aurora_metrics), IPC_CREAT | IPC_EXCL | shm_perms);
+  if (shm_id < 0 && errno == EEXIST) {
+    // A segment with this key exists. Never take over a segment another live process is attached to (e.g. two RAN
+    // processes configured with the same aurora.shm_key): it would be wiped and later removed under its feet.
+    int        old = ::shmget(key, 0, 0);
+    shmid_ds   ds{};
+    const bool in_use = old >= 0 && ::shmctl(old, IPC_STAT, &ds) == 0 && ds.shm_nattch > 0;
+    if (in_use) {
+      std::fprintf(stderr,
+                   "AURORA: shm key 0x%x is already in use by another process (%lu attachments). Configure a unique "
+                   "aurora.shm_key per process.\n",
+                   unsigned(key),
+                   static_cast<unsigned long>(ds.shm_nattch));
+      return nullptr;
+    }
+    // Stale segment (left behind by a crashed process, possibly of another size): replace it.
     if (old >= 0) {
       ::shmctl(old, IPC_RMID, nullptr);
     }
-    shm_id = ::shmget(key, sizeof(aurora_metrics), IPC_CREAT | 0666);
+    shm_id = ::shmget(key, sizeof(aurora_metrics), IPC_CREAT | IPC_EXCL | shm_perms);
   }
   if (shm_id < 0) {
     std::fprintf(stderr, "AURORA: shmget(key=0x%x) failed: %s\n", unsigned(key), std::strerror(errno));
@@ -68,6 +83,8 @@ aurora_metrics* create_segment(key_t key)
   void* p = ::shmat(shm_id, nullptr, 0);
   if (p == reinterpret_cast<void*>(-1)) {
     std::fprintf(stderr, "AURORA: shmat failed: %s\n", std::strerror(errno));
+    ::shmctl(shm_id, IPC_RMID, nullptr);
+    shm_id = -1;
     return nullptr;
   }
   return static_cast<aurora_metrics*>(p);
@@ -122,7 +139,7 @@ int aurora::start(const config& cfg)
   }
   detail::init_shm_content(*m, owned_state->cfg);
   detail::shm   = m;
-  detail::state = owned_state.get();
+  detail::state.store(owned_state.get(), std::memory_order_release);
 
   if (owned_state->cfg.thread_metrics_enabled) {
     aurora_thread_config_t tcfg{};
@@ -142,7 +159,7 @@ int aurora::start(const config& cfg)
     std::lock_guard<std::mutex> lock(stop_mutex);
     stop_requested = false;
   }
-  detail::active.store(true);
+  detail::active.store(true, std::memory_order_release);
   publisher = std::thread(publisher_loop, cfg.collection_interval);
 
   if (cfg.anomaly_enabled) {
@@ -191,6 +208,6 @@ void aurora::stop()
     shm_id = -1;
   }
   // Producers may still be inside a hook that loaded `active == true`; keep the state alive until process exit.
-  detail::state = nullptr;
+  detail::state.store(nullptr, std::memory_order_release);
   (void)owned_state.release();
 }

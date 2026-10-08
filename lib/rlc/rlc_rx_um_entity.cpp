@@ -174,7 +174,6 @@ void rlc_rx_um_entity::handle_pdu(byte_buffer_slice buf)
                       (st.rx_next_highest - um_window_size) % mod,
                       st.rx_next_highest,
                       sn_upd);
-      metrics.aurora_tap.add(aurora::rlc_counter::rxpdu_ow_pkts, 1);
       if (rx_window.has_sn(sn_upd)) {
         if (not rx_window[sn_upd].fully_received) {
           // count incomplete SDUs as lost
