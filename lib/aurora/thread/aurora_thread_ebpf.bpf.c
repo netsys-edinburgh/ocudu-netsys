@@ -66,8 +66,8 @@ const volatile __u64 aurora_target_ns_dev = 0;
 const volatile __u64 aurora_target_ns_ino = 0;
 
 /* Kernel's __trace_sched_switch_state() returns this verbatim, ignoring task
- * state, whenever the outgoing task was preempted while still runnable —
- * the only case that counts as an involuntary context switch.
+ * state, for in-kernel preemption ("R+"); the bits below it carry the
+ * reported task state (0 = still runnable, "R").
  * Value per include/linux/sched.h: TASK_REPORT is the OR of TASK_RUNNING(0x0)
  * | TASK_INTERRUPTIBLE(0x1) | TASK_UNINTERRUPTIBLE(0x2) | __TASK_STOPPED(0x4)
  * | __TASK_TRACED(0x8) | EXIT_DEAD(0x10) | EXIT_ZOMBIE(0x20) | TASK_PARKED(0x40)
@@ -219,19 +219,15 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx)
                 aurora_bpf_record_quantum(prev_ns_tid, ns.tgid, delta, cpu);
             }
 
-            /* Kernel's __trace_sched_switch_state() (trace/events/sched.h) returns
-             * TASK_REPORT_MAX (0x100 — see AURORA_TASK_REPORT_MAX definition above,
-             * not to be confused with the unrelated TASK_STATE_MAX = 0x10000)
-             * verbatim, ignoring task state, whenever the
-             * outgoing task was preempted while still runnable — that is the only
-             * involuntary case. Every other prev_state value (0 = TASK_RUNNING via
-             * a non-preempted yield, or one of the blocked/stopped state bits) means
-             * the thread gave up the CPU on its own. Do NOT treat prev_state == 0 as
-             * involuntary — TASK_RUNNING here is the rare non-preempted-yield case,
-             * not preemption. */
+            /* OCUDU fix: classify like the kernel's own nvcsw/nivcsw accounting in __schedule(): the switch is
+             * involuntary when the outgoing task is still runnable. That is prev_state == 0 ("R"), or the
+             * TASK_REPORT_MAX bit 0x100 ("R+") for in-kernel preemption. User-space threads are preempted through
+             * schedule() on return to user mode, which reports plain "R" (verified on 6.8 with tracefs), so the OAI
+             * rule "involuntary only if prev_state == 0x100" counted every user-space preemption as voluntary.
+             * Any blocked/stopped state bit (S, D, T, t, P, I, ...) means the thread gave up the CPU itself. */
             struct aurora_bpf_thread_stats *ps = aurora_bpf_get_or_init(prev_ns_tid, ns.tgid);
             if (ps) {
-                if (ctx->prev_state == AURORA_TASK_REPORT_MAX)
+                if ((ctx->prev_state & (AURORA_TASK_REPORT_MAX - 1)) == 0)
                     __sync_fetch_and_add(&ps->involuntary_ctxsw, 1);
                 else
                     __sync_fetch_and_add(&ps->voluntary_ctxsw, 1);

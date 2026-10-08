@@ -218,6 +218,9 @@ struct global_state {
   std::array<std::array<rlc_bearer_acc, max_rbs_per_ue>, max_nof_ues>  rlc;
   std::array<std::array<pdcp_bearer_acc, max_rbs_per_ue>, max_nof_ues> pdcp;
   std::array<std::array<gtp_tunnel_acc, max_gtp_tunnels>, max_nof_ues> gtp;
+
+  /// Group 17 working buffer: the thread collector fills it, the publisher copies it to shared memory and resets it.
+  aurora_thread_stats_t thread_buf{};
 };
 
 /// Process-wide state, allocated by start() (release) and read by hooks (acquire).

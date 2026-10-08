@@ -41,11 +41,13 @@ void aurora_thread_registry_init(const aurora_thread_config_t *cfg);
 /* External: aurora_thread_proc.c */
 int  aurora_procfs_start(aurora_thread_stats_t *ts, uint32_t interval_ms);
 void aurora_procfs_stop(void);
+void aurora_procfs_collect_once(void);
 
 #ifdef AURORA_THREAD_EBPF_ENABLED
 /* External: aurora_thread_ebpf.c */
 int  aurora_ebpf_start(aurora_thread_stats_t *ts, uint32_t interval_ms);
 void aurora_ebpf_stop(void);
+void aurora_ebpf_collect_once(void);
 #endif
 
 /* ---------------------------------------------------------------
@@ -135,6 +137,20 @@ void aurora_thread_shutdown(void)
         aurora_procfs_stop();
 
     g_initialized = 0;
+}
+
+/* One collection step of the active backend (OCUDU: called by the AURORA publisher once per interval). */
+void aurora_thread_collect_now(void)
+{
+    if (!g_initialized)
+        return;
+#ifdef AURORA_THREAD_EBPF_ENABLED
+    if (g_ebpf_active) {
+        aurora_ebpf_collect_once();
+        return;
+    }
+#endif
+    aurora_procfs_collect_once();
 }
 
 /* Expose interval setter so aurora.c can pass the configured interval */

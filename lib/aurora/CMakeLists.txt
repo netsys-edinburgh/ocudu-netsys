@@ -5,9 +5,38 @@
 # the core (hooks, publisher, lifecycle) is C++.
 #
 
-find_package(PkgConfig QUIET)
-if (PKG_CONFIG_FOUND)
-    pkg_check_modules(LIBBPF QUIET libbpf)
+# libbpf >= 1.0 is required: kernels >= 6.0 publish BTF_KIND_ENUM64 in /sys/kernel/btf/vmlinux, which older libbpf
+# releases (e.g. 0.5 shipped by Ubuntu 22.04) cannot parse, so skeleton loading fails at runtime with
+# "failed to find valid kernel BTF". Point AURORA_LIBBPF_DIR at a libbpf >= 1.0 install prefix (containing
+# include/bpf/ and lib/libbpf.a or lib64/libbpf.a) to use it instead of the system one.
+set(AURORA_LIBBPF_DIR "" CACHE PATH "Install prefix of libbpf >= 1.0 used by the AURORA eBPF backends")
+if (AURORA_LIBBPF_DIR)
+    find_library(AURORA_LIBBPF_STATIC NAMES libbpf.a PATHS ${AURORA_LIBBPF_DIR}/lib ${AURORA_LIBBPF_DIR}/lib64 NO_DEFAULT_PATH)
+    find_package(PkgConfig QUIET)
+    if (PKG_CONFIG_FOUND)
+        pkg_check_modules(AURORA_LIBELF QUIET libelf)
+        pkg_check_modules(AURORA_ZLIB QUIET zlib)
+    endif ()
+    if (AURORA_LIBBPF_STATIC AND EXISTS ${AURORA_LIBBPF_DIR}/include/bpf/libbpf.h)
+        set(LIBBPF_FOUND TRUE)
+        set(LIBBPF_VERSION "from ${AURORA_LIBBPF_DIR}")
+        set(LIBBPF_INCLUDE_DIRS ${AURORA_LIBBPF_DIR}/include)
+        set(LIBBPF_LIBRARIES ${AURORA_LIBBPF_STATIC} ${AURORA_LIBELF_LIBRARIES} ${AURORA_ZLIB_LIBRARIES})
+    else ()
+        message(WARNING "AURORA: AURORA_LIBBPF_DIR=${AURORA_LIBBPF_DIR} does not contain include/bpf/libbpf.h and libbpf.a")
+    endif ()
+else ()
+    find_package(PkgConfig QUIET)
+    if (PKG_CONFIG_FOUND)
+        pkg_check_modules(LIBBPF QUIET libbpf>=1.0)
+        if (NOT LIBBPF_FOUND)
+            pkg_check_modules(AURORA_OLD_LIBBPF QUIET libbpf)
+            if (AURORA_OLD_LIBBPF_FOUND)
+                message(STATUS "AURORA: system libbpf ${AURORA_OLD_LIBBPF_VERSION} is too old (>= 1.0 required to load "
+                        "BPF programs on kernels >= 6.0); set AURORA_LIBBPF_DIR to enable the eBPF backends")
+            endif ()
+        endif ()
+    endif ()
 endif ()
 find_program(AURORA_CLANG_BPF clang DOC "clang for BPF compilation")
 find_program(AURORA_BPFTOOL bpftool PATHS /usr/sbin /sbin DOC "bpftool for BPF skeleton generation")
@@ -20,6 +49,11 @@ else ()
     message(STATUS "AURORA: eBPF backends disabled (procfs only)")
 endif ()
 
+set(AURORA_BPF_EXTRA_INCLUDES "")
+foreach (dir ${LIBBPF_INCLUDE_DIRS})
+    list(APPEND AURORA_BPF_EXTRA_INCLUDES -I${dir})
+endforeach ()
+
 # Compiles <name>.bpf.c into an object and generates <name>.skel.h with bpftool.
 function(aurora_bpf_skeleton name src_dir out_target)
     set(bpf_obj ${CMAKE_CURRENT_BINARY_DIR}/${name}.bpf.o)
@@ -27,7 +61,7 @@ function(aurora_bpf_skeleton name src_dir out_target)
     add_custom_command(
             OUTPUT ${bpf_obj}
             COMMAND ${AURORA_CLANG_BPF} -target bpf -O2 -g -D__TARGET_ARCH_x86
-            -I${src_dir} -I${CMAKE_CURRENT_SOURCE_DIR} -I${CMAKE_CURRENT_BINARY_DIR}
+            -I${src_dir} -I${CMAKE_CURRENT_SOURCE_DIR} -I${CMAKE_CURRENT_BINARY_DIR} ${AURORA_BPF_EXTRA_INCLUDES}
             -c ${src_dir}/${name}.bpf.c -o ${bpf_obj}
             DEPENDS ${src_dir}/${name}.bpf.c ${src_dir}/${name}.h ${CMAKE_CURRENT_SOURCE_DIR}/vmlinux.h
             COMMENT "Compiling BPF program ${name}.bpf.c"
@@ -56,7 +90,7 @@ target_link_libraries(ocudu_aurora_thread PUBLIC m Threads::Threads)
 if (AURORA_EBPF_AVAILABLE)
     add_dependencies(ocudu_aurora_thread aurora_thread_bpf_skel)
     target_compile_definitions(ocudu_aurora_thread PUBLIC AURORA_THREAD_EBPF_ENABLED=1)
-    target_include_directories(ocudu_aurora_thread PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${LIBBPF_INCLUDE_DIRS})
+    target_include_directories(ocudu_aurora_thread BEFORE PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${LIBBPF_INCLUDE_DIRS})
     target_link_libraries(ocudu_aurora_thread PUBLIC ${LIBBPF_LIBRARIES})
 endif ()
 
@@ -75,7 +109,7 @@ target_link_libraries(ocudu_aurora_infra PUBLIC m Threads::Threads)
 if (AURORA_EBPF_AVAILABLE)
     add_dependencies(ocudu_aurora_infra aurora_infra_bpf_skel)
     target_compile_definitions(ocudu_aurora_infra PUBLIC AURORA_INFRA_EBPF_ENABLED=1)
-    target_include_directories(ocudu_aurora_infra PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${LIBBPF_INCLUDE_DIRS})
+    target_include_directories(ocudu_aurora_infra BEFORE PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${LIBBPF_INCLUDE_DIRS})
     target_link_libraries(ocudu_aurora_infra PUBLIC ${LIBBPF_LIBRARIES})
 endif ()
 

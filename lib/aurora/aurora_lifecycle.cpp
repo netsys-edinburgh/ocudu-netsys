@@ -147,7 +147,7 @@ int aurora::start(const config& cfg)
     tcfg.backend = static_cast<aurora_thread_backend_t>(owned_state->cfg.thread_metrics_backend);
     std::snprintf(tcfg.whitelist, sizeof(tcfg.whitelist), "%s", owned_state->cfg.thread_metrics_whitelist.c_str());
     aurora_thread_set_interval_ms(uint32_t(cfg.collection_interval.count()));
-    if (aurora_thread_init(&tcfg, &m->thread_stats) == 0) {
+    if (aurora_thread_init(&tcfg, &owned_state->thread_buf) == 0) {
       thread_metrics_started = true;
     } else {
       std::fprintf(stderr, "AURORA: thread metrics collector failed to start, continuing without it\n");

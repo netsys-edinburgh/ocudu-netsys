@@ -611,7 +611,8 @@ int aurora_infra_procfs_collect_container_io(const aurora_infra_config_t *cfg,
 int aurora_infra_procfs_collect_container_proc(const aurora_infra_config_t *cfg,
                                                aurora_container_proc_t *out)
 {
-    char path[512], buf[1024];
+    /* /proc/<pid>/status is ~1.5 KB and "Threads:" sits past the first KB: OAI's 1 KB buffer never reached it. */
+    char path[512], buf[8192];
     memset(out, 0, sizeof(*out));
 
     if (cfg->target_pid <= 0) return -1;

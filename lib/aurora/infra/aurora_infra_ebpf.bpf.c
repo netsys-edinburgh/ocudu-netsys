@@ -85,7 +85,7 @@ cg_stats_get_or_init(__u64 cg)
 /* ---------------------------------------------------------------
  * sched_switch — record ctxsw + runtime
  * prev_state != TASK_RUNNING  → voluntary ctxsw
- * prev_state == TASK_RUNNING  → involuntary (preempted)
+ * prev_state == TASK_RUNNING  → involuntary (preempted; the 0x100 "R+" bit is ignored)
  * --------------------------------------------------------------- */
 SEC("tp/sched/sched_switch")
 int aurora_infra_sched_switch(struct trace_event_raw_sched_switch *ctx)
@@ -101,7 +101,9 @@ int aurora_infra_sched_switch(struct trace_event_raw_sched_switch *ctx)
     if (cg_matches_target(cg)) {
         struct aurora_infra_cg_stats *s = cg_stats_get_or_init(cg);
         if (s) {
-            if (prev_state == 0 /* TASK_RUNNING */)
+            /* Still runnable when switched out: "R" (0, user-space preemption) or "R+" (0x100 bit, in-kernel
+             * preemption) -- same rule as the kernel's nivcsw accounting. */
+            if ((prev_state & 0xFF) == 0)
                 __sync_fetch_and_add(&s->invol_ctxsw, 1);
             else
                 __sync_fetch_and_add(&s->vol_ctxsw, 1);

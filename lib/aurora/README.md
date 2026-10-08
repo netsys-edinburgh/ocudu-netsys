@@ -136,8 +136,30 @@ The injection points sit on the real data path. In OAI, the MAC/RLC/PDCP hooks r
 ## Build
 
 - The framework is always built and stays inactive until `aurora.enable: true`.
-- The eBPF backends are compiled when libbpf, clang and bpftool are found, unless `-DENABLE_AURORA_EBPF=OFF` is set.
-- Running the eBPF backends needs `CAP_BPF` + `CAP_PERFMON`, or root.
+- The eBPF backends are compiled when libbpf >= 1.0, clang and bpftool are found, unless
+  `-DENABLE_AURORA_EBPF=OFF` is set.
+- **libbpf >= 1.0 is required.** Kernels >= 6.0 publish `BTF_KIND_ENUM64` in `/sys/kernel/btf/vmlinux`, which older
+  libbpf cannot parse. Loading then fails at runtime with `failed to find valid kernel BTF`.
+- Ubuntu 22.04 ships libbpf 0.5. Build a newer one locally and point CMake at it:
+
+  ```bash
+  git clone --depth 1 --branch v1.4.0 https://github.com/libbpf/libbpf.git build/third_party/libbpf-src
+  mkdir -p build/third_party/libbpf-obj
+  make -C build/third_party/libbpf-src/src BUILD_STATIC_ONLY=1 OBJDIR=$PWD/build/third_party/libbpf-obj \
+       DESTDIR=$PWD/build/third_party/libbpf PREFIX=/ LIBDIR=/lib install
+  cmake -B build -DAURORA_LIBBPF_DIR=$PWD/build/third_party/libbpf
+  ```
+
+- Running the eBPF backends needs root, or `CAP_BPF` + `CAP_PERFMON` (plus `CAP_SYS_ADMIN` for the infra cgroup
+  lookup).
+- The thread collectors (procfs or eBPF) are driven by the publisher once per interval, so every published interval is
+  complete. OAI used a free-running collector thread that raced the reset and could destroy the BPF skeleton while still
+  reading its maps.
+- **eBPF voluntary/involuntary context switches** follow the kernel's `nvcsw`/`nivcsw` rule: a switch is involuntary
+  when the task was still runnable (`prev_state` "R" or "R+").
+  - OAI counted only "R+" (`0x100`) as involuntary.
+  - User-space threads are preempted on return to user mode and report plain "R", so OAI counted every preemption as
+    voluntary.
 
 ## Tests
 

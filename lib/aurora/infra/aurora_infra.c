@@ -201,13 +201,16 @@ static void collect_container_disk(uint64_t now)
 
 static void collect_container_proc(uint64_t now)
 {
-    /* Collect proc/FD at same interval as CPU (lightweight). */
+    /* Collect proc/FD at same interval as CPU (lightweight). OCUDU fix: uses its own poll timestamp -- OAI gated on
+     * last_cpu_poll_us, which collect_container_cpu() had just refreshed, so these metrics were never collected. */
+    static uint64_t last_proc_poll_us = 0;
     uint32_t iv = resolve_interval(g_cfg.intervals.cpu_interval_ms,
                                    g_cfg.infra_interval_ms);
-    if (!should_poll(g_infra_shm->last_cpu_poll_us, iv, now))
+    if (!should_poll(last_proc_poll_us, iv, now))
         return;
 
     aurora_infra_procfs_collect_container_proc(&g_cfg, &g_infra_shm->container.proc);
+    last_proc_poll_us = now;
 }
 
 static void collect_host_metrics(uint64_t now)

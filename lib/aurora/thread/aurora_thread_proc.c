@@ -242,35 +242,26 @@ static void collect_thread_metrics(aurora_thread_metrics_t *m, pid_t pid)
 }
 
 /* ---------------------------------------------------------------
- * Collector thread main loop
+ * One collection step (OCUDU: driven synchronously by the AURORA
+ * publisher once per interval instead of a free-running thread).
  * --------------------------------------------------------------- */
-
-static void *aurora_procfs_collector_thread(void *arg)
+void aurora_procfs_collect_once(void)
 {
-    (void)arg;
-    pthread_setname_np(pthread_self(), "aurora_thr_proc");
+    if (!g_ts || g_proc_stop)
+        return;
 
     pid_t pid = getpid();
-    g_hz = sysconf(_SC_CLK_TCK);
-    if (g_hz <= 0)
-        g_hz = 100; /* Safe default */
 
-    while (!g_proc_stop) {
-        usleep(g_interval_ms * 1000);
+    /* Discover new threads */
+    aurora_thread_discover(g_ts);
 
-        /* Discover new threads */
-        aurora_thread_discover(g_ts);
+    /* Collect metrics for all registered threads */
+    uint32_t n = atomic_load_explicit(&g_ts->num_threads, memory_order_relaxed);
+    for (uint32_t i = 0; i < n && i < AURORA_MAX_MONITORED_THREADS; i++)
+        collect_thread_metrics(&g_ts->threads[i], pid);
 
-        /* Collect metrics for all registered threads */
-        uint32_t n = atomic_load_explicit(&g_ts->num_threads, memory_order_relaxed);
-        for (uint32_t i = 0; i < n && i < AURORA_MAX_MONITORED_THREADS; i++)
-            collect_thread_metrics(&g_ts->threads[i], pid);
-
-        /* Recompute derived statistics */
-        aurora_thread_compute_all_stats(g_ts);
-    }
-
-    return NULL;
+    /* Recompute derived statistics */
+    aurora_thread_compute_all_stats(g_ts);
 }
 
 /* ---------------------------------------------------------------
@@ -282,12 +273,9 @@ int aurora_procfs_start(aurora_thread_stats_t *ts, uint32_t interval_ms)
     g_ts          = ts;
     g_interval_ms = interval_ms;
     g_proc_stop   = 0;
-
-    int ret = pthread_create(&g_proc_tid, NULL, aurora_procfs_collector_thread, NULL);
-    if (ret != 0)
-        return -1;
-
-    pthread_detach(g_proc_tid);
+    g_hz          = sysconf(_SC_CLK_TCK);
+    if (g_hz <= 0)
+        g_hz = 100; /* Safe default */
     return 0;
 }
 

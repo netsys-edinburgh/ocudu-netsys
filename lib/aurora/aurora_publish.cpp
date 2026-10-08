@@ -595,7 +595,10 @@ void detail::publish_interval(aurora_metrics& m, global_state& st)
   publish_rusage(m);
 
   if (st.cfg.thread_metrics_enabled) {
-    aurora_thread_reset_interval_stats(&m.thread_stats);
+    // Collect the interval that just ended, publish it whole, then start the next one.
+    aurora_thread_collect_now();
+    std::memcpy(&m.thread_stats, &st.thread_buf, sizeof(m.thread_stats));
+    aurora_thread_reset_interval_stats(&st.thread_buf);
   }
   m.timestamp_us = aurora_get_current_timestamp_us();
 }

@@ -180,6 +180,9 @@ int aurora_thread_init(const aurora_thread_config_t *cfg, aurora_thread_stats_t 
  */
 void aurora_thread_shutdown(void);
 
+/* OCUDU: run one collection step of the active backend into the stats buffer given to aurora_thread_init(). */
+void aurora_thread_collect_now(void);
+
 /**
  * aurora_thread_reset_interval_stats — zero per-interval counters and histograms.
  * Called by aurora_reset_thread() each collection interval.

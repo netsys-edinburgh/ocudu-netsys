@@ -64,8 +64,6 @@ void aurora_thread_discover(aurora_thread_stats_t *ts);
 /* ---------------------------------------------------------------
  * Module-private state
  * --------------------------------------------------------------- */
-static volatile int                    g_ebpf_stop = 0;
-static pthread_t                       g_ebpf_tid;
 static aurora_thread_stats_t          *g_ts = NULL;
 static uint32_t                        g_interval_ms = 100;
 static struct aurora_thread_ebpf_bpf  *g_skel = NULL;
@@ -184,30 +182,27 @@ static void ebpf_read_and_merge(void)
 }
 
 /* ---------------------------------------------------------------
- * eBPF collector thread
+ * One collection step (OCUDU: driven synchronously by the AURORA
+ * publisher once per interval instead of a free-running thread, so the
+ * published interval is complete and the BPF skeleton is never destroyed
+ * while a collector thread still reads its maps).
  * --------------------------------------------------------------- */
-static void *aurora_ebpf_collector_thread(void *arg)
+void aurora_ebpf_collect_once(void)
 {
-    (void)arg;
-    pthread_setname_np(pthread_self(), "aurora_thr_ebpf");
+    if (!g_skel)
+        return;
 
-    while (!g_ebpf_stop) {
-        usleep(g_interval_ms * 1000);
+    /* Discover new threads */
+    aurora_thread_discover(g_ts);
 
-        /* Discover new threads */
-        aurora_thread_discover(g_ts);
+    /* Update TID filter for newly discovered threads */
+    ebpf_update_tid_filter();
 
-        /* Update TID filter for newly discovered threads */
-        ebpf_update_tid_filter();
+    /* Merge BPF map data into the stats buffer */
+    ebpf_read_and_merge();
 
-        /* Merge BPF map data into shared memory */
-        ebpf_read_and_merge();
-
-        /* Recompute derived statistics */
-        aurora_thread_compute_all_stats(g_ts);
-    }
-
-    return NULL;
+    /* Recompute derived statistics */
+    aurora_thread_compute_all_stats(g_ts);
 }
 
 /* ---------------------------------------------------------------
@@ -260,21 +255,11 @@ int aurora_ebpf_start(aurora_thread_stats_t *ts, uint32_t interval_ms)
     /* Populate initial TID filter */
     ebpf_update_tid_filter();
 
-    /* Start collector thread */
-    g_ebpf_stop = 0;
-    ret = pthread_create(&g_ebpf_tid, NULL, aurora_ebpf_collector_thread, NULL);
-    if (ret != 0) {
-        aurora_thread_ebpf_bpf__destroy(g_skel);
-        g_skel = NULL;
-        return -1;
-    }
-    pthread_detach(g_ebpf_tid);
     return 0;
 }
 
 void aurora_ebpf_stop(void)
 {
-    g_ebpf_stop = 1;
     if (g_skel) {
         aurora_thread_ebpf_bpf__destroy(g_skel);
         g_skel = NULL;
