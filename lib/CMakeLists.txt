@@ -6,6 +6,7 @@
 set_directory_properties(PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
 add_subdirectory(asn1)
+add_subdirectory(aurora)
 if (ENABLE_CUDA)
     add_subdirectory(cuda)
 endif (ENABLE_CUDA)

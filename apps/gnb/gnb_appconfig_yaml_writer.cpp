@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "apps/services/aurora/aurora_config_yaml_writer.h"
 #include "gnb_appconfig_yaml_writer.h"
 #include "apps/helpers/logger/logger_appconfig_yaml_writer.h"
 #include "apps/helpers/tracing/tracer_appconfig_yaml_writer.h"
@@ -59,6 +60,7 @@ void ocudu::fill_gnb_appconfig_in_yaml_schema(YAML::Node& node, const gnb_appcon
   node["ran_node_name"]     = config.ran_node_name;
 
   app_services::fill_app_resource_usage_config_in_yaml_schema(node, config.metrics_cfg.rusage_config);
+  app_services::fill_aurora_config_in_yaml_schema(node, config.aurora_cfg);
   app_services::fill_metrics_appconfig_in_yaml_schema(node, config.metrics_cfg.metrics_service_cfg);
   app_services::fill_app_exec_metrics_config_in_yaml_schema(node, config.metrics_cfg.executors_metrics_cfg);
   node["metrics"]["autostart_stdout_metrics"] = config.metrics_cfg.autostart_stdout_metrics;

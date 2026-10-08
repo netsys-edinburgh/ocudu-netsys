@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "apps/services/aurora/aurora_config_cli11_schema.h"
 #include "cu_up_appconfig_cli11_schema.h"
 #include "apps/helpers/f1u/f1u_cli11_schema.h"
 #include "apps/helpers/logger/logger_appconfig_cli11_schema.h"
@@ -69,6 +70,7 @@ void ocudu::configure_cli11_with_cu_appconfig_schema(CLI::App& app, cu_up_appcon
 
   // Metrics section.
   app_services::configure_cli11_with_app_resource_usage_config_schema(app, cu_up_cfg.metrics_cfg.rusage_config);
+  app_services::configure_cli11_with_aurora_config_schema(app, cu_up_cfg.aurora_cfg);
   app_services::configure_cli11_with_metrics_appconfig_schema(app, cu_up_cfg.metrics_cfg.metrics_service_cfg);
   app_services::configure_cli11_with_executor_metrics_appconfig_schema(app,
                                                                        cu_up_cfg.metrics_cfg.executors_metrics_cfg);

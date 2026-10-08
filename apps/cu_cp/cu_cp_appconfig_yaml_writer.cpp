@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "apps/services/aurora/aurora_config_yaml_writer.h"
 #include "cu_cp_appconfig_yaml_writer.h"
 #include "apps/helpers/logger/logger_appconfig_yaml_writer.h"
 #include "apps/helpers/network/sctp_config_yaml_writer.h"
@@ -63,6 +64,7 @@ static void fill_cu_cp_appconfig_f1ap_section(YAML::Node node, const ocucp::f1ap
 void ocudu::fill_cu_cp_appconfig_in_yaml_schema(YAML::Node& node, const cu_cp_appconfig& config)
 {
   app_services::fill_app_resource_usage_config_in_yaml_schema(node, config.metrics_cfg.rusage_config);
+  app_services::fill_aurora_config_in_yaml_schema(node, config.aurora_cfg);
   app_services::fill_metrics_appconfig_in_yaml_schema(node, config.metrics_cfg.metrics_service_cfg);
   app_services::fill_app_exec_metrics_config_in_yaml_schema(node, config.metrics_cfg.executors_metrics_cfg);
   app_services::fill_buffer_pool_config_in_yaml_schema(node, config.buffer_pool_config);

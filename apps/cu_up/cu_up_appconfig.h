@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "apps/services/aurora/aurora_appconfig.h"
 #include "apps/helpers/f1u/f1u_appconfig.h"
 #include "apps/helpers/logger/logger_appconfig.h"
 #include "apps/helpers/network/sctp_appconfig.h"
@@ -61,6 +62,8 @@ struct cu_up_appconfig {
   app_services::buffer_pool_appconfig buffer_pool_config;
   /// Remote control configuration.
   remote_control_appconfig remote_control_config;
+  /// AURORA shared-memory metrics framework configuration.
+  app_services::aurora_appconfig aurora_cfg;
   /// Metrics configuration.
   ocuup::metrics_appconfig metrics_cfg;
   /// Dryrun mode enabled flag.

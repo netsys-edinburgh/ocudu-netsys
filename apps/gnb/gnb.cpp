@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "apps/services/aurora/aurora_service.h"
 #include "apps/helpers/config/config_yaml_schema.h"
 #include "apps/helpers/e2/e2_config_translators.h"
 #include "apps/helpers/metrics/metrics_helpers.h"
@@ -389,6 +390,10 @@ int main(int argc, char** argv)
   worker_manager_cfg.app_timers                    = &app_timers;
   worker_manager_cfg.exec_metrics_channel_registry = exec_metrics_service.channel_registry;
   worker_manager workers{worker_manager_cfg};
+
+  // AURORA shared-memory metrics framework (+ anomaly injection). Started before the RAN units so that UE and
+  // bearer creation hooks are observed.
+  app_services::aurora_service aurora_svc(gnb_cfg.aurora_cfg, aurora::ran_type::gnb);
 
   // Create IO broker.
   const auto&                main_pool_cpu_mask = gnb_cfg.expert_execution_cfg.affinities.main_pool_cpu_cfg.mask;

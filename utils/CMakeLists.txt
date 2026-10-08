@@ -5,3 +5,5 @@
 if (ENABLE_TRX_DRIVER)
     add_subdirectory(trx_ocudu)
 endif (ENABLE_TRX_DRIVER)
+
+add_subdirectory(aurora_reader)

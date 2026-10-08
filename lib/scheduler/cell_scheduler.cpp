@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "cell_scheduler.h"
+#include "logging/aurora_sched_tap.h"
 
 using namespace ocudu;
 
@@ -163,6 +164,9 @@ void cell_scheduler::run_slot(slot_point_extended sl_tx_ext)
 
   // > Push the scheduler results to the metrics handler.
   metrics.push_result(sl_tx_ext, last_result(), slot_dur);
+
+  // > Feed the AURORA metrics framework.
+  aurora_report_slot_result(cell_cfg, sl_tx, last_result(), slot_dur);
 }
 
 void cell_scheduler::handle_error_indication(slot_point sl_tx, scheduler_slot_handler::error_outcome event)

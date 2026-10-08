@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "apps/services/aurora/aurora_config_cli11_schema.h"
 #include "gnb_appconfig_cli11_schema.h"
 #include "apps/helpers/hal/hal_cli11_schema.h"
 #include "apps/helpers/logger/logger_appconfig_cli11_schema.h"
@@ -66,6 +67,7 @@ void ocudu::configure_cli11_with_gnb_appconfig_schema(CLI::App& app, gnb_appconf
   configure_cli11_metrics_args(*metrics_subcmd, gnb_cfg.metrics_cfg);
   app_services::configure_cli11_with_executor_metrics_appconfig_schema(app, gnb_cfg.metrics_cfg.executors_metrics_cfg);
   app_services::configure_cli11_with_app_resource_usage_config_schema(app, gnb_cfg.metrics_cfg.rusage_config);
+  app_services::configure_cli11_with_aurora_config_schema(app, gnb_cfg.aurora_cfg);
   app_services::configure_cli11_with_metrics_appconfig_schema(app, gnb_cfg.metrics_cfg.metrics_service_cfg);
 
 #ifdef DPDK_FOUND

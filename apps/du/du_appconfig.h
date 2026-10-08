@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "apps/services/aurora/aurora_appconfig.h"
 #include "apps/helpers/f1u/f1u_appconfig.h"
 #include "apps/helpers/hal/hal_appconfig.h"
 #include "apps/helpers/logger/logger_appconfig.h"
@@ -72,6 +73,8 @@ struct du_appconfig {
   std::optional<hal_appconfig> hal_config;
   /// Remote control configuration.
   remote_control_appconfig remote_control_config;
+  /// AURORA shared-memory metrics framework configuration.
+  app_services::aurora_appconfig aurora_cfg;
   /// Dryrun mode enabled flag.
   bool enable_dryrun = false;
 };

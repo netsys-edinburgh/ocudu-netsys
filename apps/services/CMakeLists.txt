@@ -8,6 +8,7 @@ set_directory_properties(PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
 add_subdirectory(app_execution_metrics)
 add_subdirectory(app_resource_usage)
+add_subdirectory(aurora)
 add_subdirectory(buffer_pool)
 add_subdirectory(cmdline)
 add_subdirectory(metrics)
@@ -17,6 +18,7 @@ add_subdirectory(worker_manager)
 add_library(ocudu_app_services INTERFACE)
 target_link_libraries(ocudu_app_services INTERFACE
         ocudu_exec_metrics_app_service
+        ocudu_aurora_app_service
         ocudu_buffer_pool_app_service
         ocudu_cmdline_app_service
         ocudu_metrics_app_service
