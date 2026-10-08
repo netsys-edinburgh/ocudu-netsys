@@ -84,6 +84,8 @@ private:
   bool close_socket();
 
   udp_network_gateway_config                   config; // configuration
+  /// AURORA: this gateway carries the N3 (NG-U) backhaul (bhrx_in / bhrx_out flows).
+  const bool aurora_is_ngu;
   network_gateway_data_notifier_with_src_addr& data_notifier;
   ocudulog::basic_logger&                      logger;
   task_executor&                               io_tx_executor;

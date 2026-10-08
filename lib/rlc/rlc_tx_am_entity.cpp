@@ -108,6 +108,7 @@ void rlc_tx_am_entity::handle_sdu(byte_buffer sdu_buf, bool is_retx)
                        sdu.is_retx,
                        sdu_queue.get_state());
     metrics_high.metrics_add_lost_sdus(1);
+    metrics_high.aurora_tap.add(aurora::rlc_counter::txpdu_dd_bytes, sdu_length);
   }
 }
 
@@ -131,6 +132,7 @@ void rlc_tx_am_entity::discard_sdu(uint32_t pdcp_sn_start, uint32_t block_size)
 
   uint32_t pdcp_sn_end = (pdcp_sn_start + block_size) & pdcp_sn_mask;
   uint32_t nof_ok      = 0;
+  const uint32_t aurora_bytes_before = sdu_queue.get_state().n_bytes;
   uint32_t nof_fail    = 0;
   logger.log_info("Discarding SDUs. pdcp_sn={}..{}", pdcp_sn_start, pdcp_sn_end - 1);
   for (uint32_t pdcp_sn = pdcp_sn_start; pdcp_sn != pdcp_sn_end; pdcp_sn = (pdcp_sn + 1) & pdcp_sn_mask) {
@@ -142,6 +144,12 @@ void rlc_tx_am_entity::discard_sdu(uint32_t pdcp_sn_start, uint32_t block_size)
     }
   }
   metrics_high.metrics_add_discard(nof_ok);
+  if (nof_ok > 0) {
+    const uint32_t aurora_bytes_after = sdu_queue.get_state().n_bytes;
+    if (aurora_bytes_before > aurora_bytes_after) {
+      metrics_high.aurora_tap.add(aurora::rlc_counter::txpdu_dd_bytes, aurora_bytes_before - aurora_bytes_after);
+    }
+  }
   metrics_high.metrics_add_discard_failure(nof_fail);
   if (nof_ok > 0) {
     handle_changed_buffer_state();

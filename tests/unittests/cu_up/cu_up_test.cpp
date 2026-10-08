@@ -3,6 +3,9 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "cu_up_test_helpers.h"
+#include "lib/aurora/aurora_state.h"
+#include "ocudu/aurora/aurora.h"
+#include <thread>
 #include "lib/cu_up/cu_up_impl.h"
 #include "lib/e1ap/cu_up/e1ap_cu_up_asn1_helpers.h"
 #include "lib/gtpu/gtpu_teid_pool_impl.h"
@@ -134,6 +137,7 @@ protected:
     // Set default UDP configs
     cu_up_udp_cfg.bind_port    = 0;           // Random free port selected by the OS.
     cu_up_udp_cfg.bind_address = "127.0.0.2"; // NG-U bind address
+    cu_up_udp_cfg.if_name      = "NG-U";      // Same interface name as the application builder.
   }
 
   cu_up_config get_default_cu_up_config()
@@ -502,4 +506,100 @@ int main(int argc, char** argv)
 {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
+}
+
+/// AURORA: a real N3 UDP socket, GTP-U PSUP tunnel and PDCP DRB populate Groups 1, 14 and 15.
+TEST_F(cu_up_test, aurora_metrics_follow_ul_and_dl_data_flow)
+{
+  aurora::config acfg;
+  acfg.enabled                = true;
+  acfg.type                   = aurora::ran_type::cu_up;
+  acfg.collection_interval    = std::chrono::milliseconds{3600 * 1000};
+  acfg.shm_key                = 0x7e000000U | (static_cast<uint32_t>(::getpid()) & 0xffffffU);
+  acfg.thread_metrics_enabled = false;
+  acfg.anomaly_enabled        = false;
+  ASSERT_EQ(aurora::start(acfg), 0);
+  auto snapshot = std::make_unique<aurora_metrics>();
+  aurora::detail::init_shm_content(*snapshot, acfg);
+
+  cu_up_config cfg     = get_default_cu_up_config();
+  upf_info_t   upf_info = init_upf();
+  ASSERT_GE(upf_info.sock_fd, 0);
+  cfg.ngu_cfg.upf_port = ntohs(upf_info.upf_addr.sin_port);
+  init(cfg, get_default_cu_up_dependencies());
+  create_drb();
+
+  // UL: F1-U -> PDCP -> SDAP -> GTP-U -> N3 UDP.
+  const uint8_t t_pdu_arr[] = {
+      0x80, 0x00, 0x00, 0x45, 0x00, 0x00, 0x54, 0xe8, 0x83, 0x40, 0x00, 0x40, 0x01, 0xfa, 0x00, 0xac, 0x10, 0x00,
+      0x03, 0xac, 0x10, 0x00, 0x01, 0x08, 0x00, 0x2c, 0xbe, 0xb4, 0xa4, 0x00, 0x01, 0xd3, 0x45, 0x61, 0x63, 0x00,
+      0x00, 0x00, 0x00, 0x1a, 0x20, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
+      0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,
+      0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37};
+  nru_ul_message              nru_msg = {};
+  nru_msg.t_pdu                       = byte_buffer_chain::create(byte_buffer::create(span<const uint8_t>{t_pdu_arr}).value())
+                      .value();
+  nru_dl_data_delivery_status ddds = {};
+  ddds.desired_buffer_size_for_drb = 1 << 20;
+  nru_msg.data_delivery_status     = ddds;
+  f1u_bearer.handle_pdu(std::move(nru_msg));
+  std::array<uint8_t, 256> rx_buf;
+  ASSERT_GT(::recv(upf_info.sock_fd, rx_buf.data(), rx_buf.size(), 0), 0);
+
+  // DL: N3 UDP -> GTP-U demux -> PSUP tunnel -> SDAP -> PDCP -> F1-U.
+  sockaddr_in cu_up_addr;
+  cu_up_addr.sin_family      = AF_INET;
+  cu_up_addr.sin_port        = htons(cu_up->get_ngu_bind_port().value());
+  cu_up_addr.sin_addr.s_addr = inet_addr(cu_up_udp_cfg.bind_address.c_str());
+  const uint8_t gtpu_ping_vec[] = {
+      0x34, 0xff, 0x00, 0x5c, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x85, 0x01, 0x00, 0x01, 0x00, 0x45,
+      0x00, 0x00, 0x54, 0x9b, 0xfb, 0x00, 0x00, 0x40, 0x01, 0x56, 0x5a, 0xc0, 0xa8, 0x04, 0x01, 0xc0, 0xa8,
+      0x03, 0x02, 0x00, 0x00, 0xb8, 0xc0, 0x00, 0x02, 0x00, 0x01, 0x5d, 0x26, 0x77, 0x64, 0x00, 0x00, 0x00,
+      0x00, 0xb1, 0xde, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+      0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,
+      0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37};
+  ASSERT_GE(sendto(upf_info.sock_fd, gtpu_ping_vec, sizeof(gtpu_ping_vec), 0, (sockaddr*)&cu_up_addr, sizeof(cu_up_addr)),
+            0);
+  // Unknown TEID (0x99).
+  uint8_t unknown_teid_vec[sizeof(gtpu_ping_vec)];
+  std::copy(std::begin(gtpu_ping_vec), std::end(gtpu_ping_vec), unknown_teid_vec);
+  unknown_teid_vec[7] = 0x99;
+  ASSERT_GE(sendto(upf_info.sock_fd, unknown_teid_vec, sizeof(unknown_teid_vec), 0, (sockaddr*)&cu_up_addr,
+                   sizeof(cu_up_addr)),
+            0);
+  nru_dl_message sdu = f1u_bearer.wait_tx_sdu();
+  ASSERT_FALSE(sdu.t_pdu.empty());
+  ::close(upf_info.sock_fd);
+  std::this_thread::sleep_for(std::chrono::milliseconds{100});
+
+  aurora::detail::publish_interval(*snapshot, *aurora::detail::state);
+  const aurora_metrics& m = *snapshot;
+  // Group 1: backhaul flows.
+  EXPECT_EQ(m.bhtx_in_size, sizeof(gtpu_ping_vec));
+  EXPECT_EQ(m.bhtx_out_size, sizeof(gtpu_ping_vec));
+  EXPECT_GT(m.bhrx_in_size, 0U);
+  EXPECT_EQ(m.bhrx_out_size, m.bhrx_in_size);
+
+  // Group 15: GTP-U tunnel of UE 0.
+  const aurora_gtp_tunnel_stats_t& t = m.gtp_tunnel_stats[0][0];
+  EXPECT_EQ(t.rnti, 1U);
+  EXPECT_NE(t.teidgnb, 0U);
+  EXPECT_EQ(t.rx_pkts, 1U);
+  EXPECT_EQ(t.rx_bytes, sizeof(gtpu_ping_vec));
+  EXPECT_EQ(t.tx_pkts, 1U);
+  // NG-U also carried the GTP-U Error Indication answering the unknown TEID.
+  EXPECT_GT(m.bhrx_in_size, t.tx_bytes);
+  EXPECT_EQ(t.qfi, 1);
+  EXPECT_EQ(t.rx_unkwn_teid_pkts, 1U);
+
+  // Group 14: PDCP DRB4 (created by create_drb()) of UE 0.
+  const aurora_pdcp_radio_bearer_stats_t& p = m.pdcp_rb_stats[0][aurora::drb_rb_index(4)];
+  EXPECT_EQ(p.rbid, 4);
+  EXPECT_EQ(p.txsdu_pkts, 1U);
+  EXPECT_EQ(p.txpdu_pkts, 1U);
+  EXPECT_EQ(p.rxpdu_pkts, 1U);
+  EXPECT_EQ(p.rxsdu_pkts, 1U);
+  EXPECT_EQ(m.kpm_metrics[8].value, p.txsdu_bytes);
+
+  aurora::stop();
 }

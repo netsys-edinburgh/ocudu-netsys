@@ -9,7 +9,8 @@ include_directories(${CMAKE_SOURCE_DIR})
 
 add_executable(cu_up_test cu_up_test.cpp)
 target_link_libraries(cu_up_test ocudu_cu_up ocudu_e1ap_cu_up ocudu_support ocudulog e1ap_asn1 GTest::gtest gtest_main)
-target_include_directories(cu_up_test PRIVATE ${CMAKE_SOURCE_DIR})
+target_include_directories(cu_up_test PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/lib/aurora)
+target_link_libraries(cu_up_test ocudu_aurora)
 gtest_discover_tests(cu_up_test)
 
 add_executable(cu_up_ue_manager_test ue_manager_test.cpp)

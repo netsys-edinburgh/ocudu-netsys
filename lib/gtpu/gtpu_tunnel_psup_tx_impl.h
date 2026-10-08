@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <chrono>
+
 #include "gtpu_pdu.h"
 #include "gtpu_tunnel_base_tx.h"
 #include "ocudu/adt/byte_buffer.h"
@@ -45,6 +47,7 @@ public:
     if (stopped) {
       return;
     }
+    const auto aurora_t0 = std::chrono::steady_clock::now();
 
     gtpu_header hdr         = {};
     hdr.flags.version       = GTPU_FLAGS_VERSION_V1;
@@ -64,6 +67,7 @@ public:
     pack_ok &= encoder.pack(to_underlying(qfi), 7); // QFI
 
     if (!pack_ok) {
+      aurora_add(aurora::gtp_counter::tx_err_pkts, 1);
       logger.log_error(
           "Dropped SDU, error writing GTP-U extension header. teid={} ext_len={}", hdr.teid, ext_buf.length());
       return;
@@ -78,11 +82,22 @@ public:
     bool write_ok = gtpu_write_header(buf, hdr, logger);
 
     if (!write_ok) {
+      aurora_add(aurora::gtp_counter::tx_err_pkts, 1);
       logger.log_error("Dropped SDU, error writing GTP-U header. teid={}", hdr.teid);
       return;
     }
     logger.log_info(buf.begin(), buf.end(), "TX PDU. pdu_len={} teid={} qfi={}", buf.length(), hdr.teid, qfi);
+    const size_t pdu_len = buf.length();
     send_pdu(std::move(buf), peer_sockaddr);
+    if (aurora_slot >= 0) {
+      aurora_add(aurora::gtp_counter::tx_pkts, 1);
+      aurora_add(aurora::gtp_counter::tx_bytes, pdu_len);
+      aurora::gtp_set_qfi(aurora_ue, static_cast<unsigned>(aurora_slot), to_underlying(qfi));
+      aurora::gtp_tx_latency(
+          aurora_ue,
+          static_cast<unsigned>(aurora_slot),
+          std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - aurora_t0).count());
+    }
   }
 
   void update_tx_endpoint(const std::string& new_addr, uint16_t new_port, uint32_t new_teid) override

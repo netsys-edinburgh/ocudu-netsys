@@ -233,15 +233,18 @@ enum class pdcp_counter : unsigned {
 };
 
 void pdcp_bearer_created(unsigned ue_index, unsigned rb_index, rlc_mode mode) noexcept;
+void pdcp_bearer_removed(unsigned ue_index, unsigned rb_index) noexcept;
 void pdcp_add(unsigned ue_index, unsigned rb_index, pdcp_counter c, uint64_t value = 1) noexcept;
-/// One TX SDU fully processed: time from SDU arrival to PDU handed to lower layers, and the part of it spent
-/// waiting before processing started (queueing).
-void pdcp_tx_latency(unsigned ue_index, unsigned rb_index, uint64_t proc_latency_ns, uint64_t queue_wait_ns) noexcept;
+/// TX processing cost of one PDU (header + ciphering + integrity), OAI tx_proc_latency_us.
+void pdcp_tx_proc_latency(unsigned ue_index, unsigned rb_index, uint64_t proc_latency_ns) noexcept;
+/// TX sojourn of one SDU: arrival at PDCP until the PDU is handed to the lower layers. AURORA reports
+/// txsdu_wt_us = avg sojourn - avg processing cost (i.e. queueing in the crypto / UE executors).
+void pdcp_tx_sojourn(unsigned ue_index, unsigned rb_index, uint64_t sojourn_ns) noexcept;
 /// ANOMALY injection point on the PDCP data path (PDCP_CONTENTION delay, QUEUE_TUNING jitter).
 void pdcp_hook_anomaly() noexcept;
 
 // ---------------------------------------------------------------------------------------------------------------------
-// GTP-U N3 tunnel hooks (gNB, CU, CU-UP). Group 15. Tunnel slot = PDU session index within the UE.
+// GTP-U N3 tunnel hooks (gNB, CU, CU-UP). Group 15. Each tunnel occupies one of the UE's max_rbs_per_ue slots.
 // ---------------------------------------------------------------------------------------------------------------------
 
 enum class gtp_counter : unsigned {
@@ -255,7 +258,9 @@ enum class gtp_counter : unsigned {
   nof_counters
 };
 
-void gtp_tunnel_created(unsigned ue_index, unsigned tunnel_index, uint32_t local_teid, uint32_t peer_teid) noexcept;
+/// Allocates a free tunnel slot of the UE. Returns the slot index, or -1 if AURORA is inactive or the UE has no free
+/// slot left.
+int gtp_tunnel_created(unsigned ue_index, uint32_t local_teid, uint32_t peer_teid) noexcept;
 void gtp_tunnel_removed(unsigned ue_index, unsigned tunnel_index) noexcept;
 void gtp_set_qfi(unsigned ue_index, unsigned tunnel_index, uint8_t qfi) noexcept;
 void gtp_add(unsigned ue_index, unsigned tunnel_index, gtp_counter c, uint64_t value = 1) noexcept;

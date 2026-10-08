@@ -40,6 +40,7 @@ pdcp_entity_tx::pdcp_entity_tx(uint32_t                        ue_index,
   metrics(metrics_agg_.get_metrics_period().count()),
   metrics_agg(metrics_agg_)
 {
+  metrics.aurora_tap = pdcp_aurora_tap{ue_index, rb_id_, cfg.rlc_mode};
   if (metrics_agg.get_metrics_period().count()) {
     metrics_timer = ue_ctrl_timer_factory.create_timer();
     metrics_timer.set(std::chrono::milliseconds(metrics_agg.get_metrics_period().count()), [this]() {
@@ -106,6 +107,7 @@ pdcp_entity_tx::pdcp_entity_tx(uint32_t                        ue_index,
 pdcp_entity_tx::~pdcp_entity_tx()
 {
   stop();
+  metrics.aurora_tap.removed();
 }
 
 void pdcp_entity_tx::stop()

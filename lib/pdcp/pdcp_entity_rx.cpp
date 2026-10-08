@@ -37,6 +37,7 @@ pdcp_entity_rx::pdcp_entity_rx(uint32_t                        ue_index,
   metrics(metrics_agg_.get_metrics_period().count()),
   metrics_agg(metrics_agg_)
 {
+  metrics.aurora_tap = pdcp_aurora_tap{ue_index, rb_id_, cfg.rlc_mode};
   if (metrics_agg.get_metrics_period().count()) {
     metrics_timer = ue_ul_timer_factory.create_timer();
     metrics_timer.set(std::chrono::milliseconds(metrics_agg.get_metrics_period().count()), [this]() {
@@ -489,6 +490,11 @@ void pdcp_entity_rx::apply_reordering(pdcp_rx_pdu_info pdu_info)
     rx_window.remove_sn(rcvd_count);
   }
 
+  // AURORA: PDU not received in COUNT order (a gap precedes it, or it fills an earlier gap).
+  if (rcvd_count != st.rx_next) {
+    metrics.aurora_tap.add(aurora::pdcp_counter::rxpdu_oo_pkts, 1);
+  }
+
   // Store PDU in Rx window
   pdcp_rx_sdu_info& sdu_info  = rx_window.add_sn(rcvd_count);
   sdu_info.buf                = std::move(pdu_info.buf);
@@ -825,6 +831,17 @@ void pdcp_entity_rx::configure_security(security::sec_128_as_config sec_cfg,
 void pdcp_entity_rx::handle_t_reordering_expire()
 {
   metrics.add_t_reordering_timeouts(1);
+
+  // AURORA: COUNTs below RX_REORD still missing at expiry are given up (lost).
+  if (metrics.aurora_tap.valid()) {
+    uint64_t missing = 0;
+    for (uint32_t count = st.rx_deliv; count < st.rx_reord; ++count) {
+      if (not rx_window.has_sn(count) or rx_window[count].count != count) {
+        ++missing;
+      }
+    }
+    metrics.aurora_tap.add(aurora::pdcp_counter::rxpdu_lost_pkts, missing);
+  }
 
   // Deliver all PDCP SDU(s) with associated COUNT value(s) < RX_REORD
   advance_rx_window(st.rx_reord, false);

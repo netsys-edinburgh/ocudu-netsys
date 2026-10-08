@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "pdcp_aurora_tap.h"
+
 #include "ocudu/pdcp/pdcp_tx_metrics.h"
 #include "ocudu/support/ocudu_assert.h"
 
@@ -15,12 +17,21 @@ class pdcp_tx_metrics
   bool                      enabled = false;
 
 public:
+  /// AURORA mirror of the counters below (Group 14).
+  pdcp_aurora_tap aurora_tap;
+
   pdcp_tx_metrics(bool enabled_) : enabled(enabled_) {}
 
   bool is_enabled() const { return enabled; }
 
   void add_sdus(uint32_t num_sdus_, size_t num_sdu_bytes_)
   {
+    if (aurora_tap.valid()) {
+      // ANOMALY injection point on the PDCP TX SDU path (PDCP_CONTENTION delay, QUEUE_TUNING jitter).
+      aurora::pdcp_hook_anomaly();
+    }
+    aurora_tap.add(aurora::pdcp_counter::txsdu_pkts, num_sdus_);
+    aurora_tap.add(aurora::pdcp_counter::txsdu_bytes, num_sdu_bytes_);
     if (not enabled) {
       return;
     }
@@ -38,6 +49,8 @@ public:
 
   void add_pdus(uint32_t num_pdus_, size_t num_pdu_bytes_)
   {
+    aurora_tap.add(aurora::pdcp_counter::txpdu_pkts, num_pdus_);
+    aurora_tap.add(aurora::pdcp_counter::txpdu_bytes, num_pdu_bytes_);
     if (not enabled) {
       return;
     }
@@ -77,6 +90,7 @@ public:
 
   void add_pdu_latency_ns(uint32_t sdu_latency_ns)
   {
+    aurora_tap.sojourn(sdu_latency_ns);
     if (not enabled) {
       return;
     }
@@ -94,6 +108,7 @@ public:
 
   void add_crypto_processing_latency(uint32_t crypto_processing_latency)
   {
+    aurora_tap.proc_latency(crypto_processing_latency);
     if (not enabled) {
       return;
     }

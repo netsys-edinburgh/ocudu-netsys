@@ -370,11 +370,15 @@ void publish_pdcp(aurora_metrics& m, global_state& st, uint64_t& tx_sdu_bytes, u
       o.rxpdu_lost_pkts = c(pdcp_counter::rxpdu_lost_pkts);
       o.rxpdu_dd_pkts   = c(pdcp_counter::rxpdu_dd_pkts);
       o.rxpdu_oo_pkts   = c(pdcp_counter::rxpdu_oo_pkts);
-      uint32_t n        = take(a.latency_count);
-      uint64_t lat      = take(a.latency_sum_ns);
-      uint64_t wait     = take(a.queue_wait_sum_ns);
-      o.tx_proc_latency_us = n != 0 ? uint32_t(lat / n / 1000U) : 0;
-      o.txsdu_wt_us        = n != 0 ? uint32_t(wait / n / 1000U) : 0;
+      uint32_t n           = take(a.latency_count);
+      uint64_t lat         = take(a.latency_sum_ns);
+      uint32_t ns          = take(a.sojourn_count);
+      uint64_t soj         = take(a.sojourn_sum_ns);
+      uint64_t avg_proc_ns = n != 0 ? lat / n : 0;
+      uint64_t avg_soj_ns  = ns != 0 ? soj / ns : 0;
+      o.tx_proc_latency_us = uint32_t(avg_proc_ns / 1000U);
+      // OAI: always 0 (no PDCP TX queue). OCUDU queues SDUs in the crypto / UE executors.
+      o.txsdu_wt_us = avg_soj_ns > avg_proc_ns ? uint32_t((avg_soj_ns - avg_proc_ns) / 1000U) : 0;
       tx_sdu_bytes += o.txsdu_bytes;
       rx_sdu_bytes += o.rxsdu_bytes;
     }

@@ -300,8 +300,9 @@ TEST_F(aurora_core_test, pdcp_counters_latency_and_kpm_bitrate)
   pdcp_add(7, drb_rb_index(2), pdcp_counter::txsdu_bytes, 1000);
   pdcp_add(7, drb_rb_index(2), pdcp_counter::rxsdu_bytes, 400);
   pdcp_add(7, drb_rb_index(2), pdcp_counter::rxpdu_oo_pkts, 2);
-  pdcp_tx_latency(7, drb_rb_index(2), 3000, 1000);
-  pdcp_tx_latency(7, drb_rb_index(2), 5000, 3000);
+  pdcp_tx_proc_latency(7, drb_rb_index(2), 3000);
+  pdcp_tx_proc_latency(7, drb_rb_index(2), 5000);
+  pdcp_tx_sojourn(7, drb_rb_index(2), 6000);
   const aurora_metrics& r = publish();
   const aurora_pdcp_radio_bearer_stats_t& p = r.pdcp_rb_stats[7][5];
   EXPECT_EQ(p.rnti, 8U);
@@ -319,7 +320,9 @@ TEST_F(aurora_core_test, pdcp_counters_latency_and_kpm_bitrate)
 
 TEST_F(aurora_core_test, gtp_tunnel_counters_loss_and_unknown_teid)
 {
-  gtp_tunnel_created(9, 0, 0x100, 0x200);
+  ASSERT_EQ(gtp_tunnel_created(9, 0x100, 0x200), 0);
+  EXPECT_EQ(gtp_tunnel_created(9, 0x101, 0x201), 1);
+  gtp_tunnel_removed(9, 1);
   gtp_set_qfi(9, 0, 5);
   gtp_add(9, 0, gtp_counter::tx_pkts, 9);
   gtp_add(9, 0, gtp_counter::tx_err_pkts, 1);

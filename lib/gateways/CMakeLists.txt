@@ -19,7 +19,7 @@ add_library(ocudu_gateway
 
 if (OPENSSL_HAS_DTLS_SCTP)
 	target_compile_definitions(ocudu_gateway PRIVATE OCUDU_HAVE_OPENSSL_DTLS=1)
-	target_link_libraries(ocudu_gateway ocudu_support ocudulog OpenSSL::SSL OpenSSL::Crypto ${SCTP_LIBRARIES})
+	target_link_libraries(ocudu_gateway ocudu_support ocudulog OpenSSL::SSL OpenSSL::Crypto ${SCTP_LIBRARIES} ocudu_aurora)
 else ()
-	target_link_libraries(ocudu_gateway ocudu_support ocudulog ${SCTP_LIBRARIES})
+	target_link_libraries(ocudu_gateway ocudu_support ocudulog ${SCTP_LIBRARIES} ocudu_aurora)
 endif()

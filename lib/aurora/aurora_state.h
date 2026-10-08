@@ -158,8 +158,8 @@ struct pdcp_bearer_acc {
   std::atomic<bool>                                                                    active{false};
   std::atomic<uint32_t>                                                                mode{0};
   std::array<std::atomic<uint64_t>, static_cast<unsigned>(pdcp_counter::nof_counters)> c{};
-  std::atomic<uint64_t> latency_sum_ns{0}, queue_wait_sum_ns{0};
-  std::atomic<uint32_t> latency_count{0};
+  std::atomic<uint64_t> latency_sum_ns{0}, sojourn_sum_ns{0};
+  std::atomic<uint32_t> latency_count{0}, sojourn_count{0};
 };
 
 struct gtp_tunnel_acc {

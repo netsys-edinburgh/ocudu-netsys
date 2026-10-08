@@ -501,10 +501,20 @@ void aurora::pdcp_bearer_created(unsigned ue_index, unsigned rb_index, rlc_mode 
     set(c, uint64_t{0});
   }
   set(rb.latency_sum_ns, uint64_t{0});
-  set(rb.queue_wait_sum_ns, uint64_t{0});
+  set(rb.sojourn_sum_ns, uint64_t{0});
   set(rb.latency_count, 0U);
+  set(rb.sojourn_count, 0U);
   set(rb.mode, static_cast<uint32_t>(mode));
   set(rb.active, true);
+}
+
+void aurora::pdcp_bearer_removed(unsigned ue_index, unsigned rb_index) noexcept
+{
+  global_state* s = st();
+  if (s == nullptr || rb_index >= max_rbs_per_ue) {
+    return;
+  }
+  set(s->pdcp[ue_slot(ue_index)][rb_index].active, false);
 }
 
 void aurora::pdcp_add(unsigned ue_index, unsigned rb_index, pdcp_counter c, uint64_t value) noexcept
@@ -520,10 +530,7 @@ void aurora::pdcp_add(unsigned ue_index, unsigned rb_index, pdcp_counter c, uint
   }
 }
 
-void aurora::pdcp_tx_latency(unsigned ue_index,
-                             unsigned rb_index,
-                             uint64_t proc_latency_ns,
-                             uint64_t queue_wait_ns) noexcept
+void aurora::pdcp_tx_proc_latency(unsigned ue_index, unsigned rb_index, uint64_t proc_latency_ns) noexcept
 {
   global_state* s = st();
   if (s == nullptr || rb_index >= max_rbs_per_ue) {
@@ -531,8 +538,18 @@ void aurora::pdcp_tx_latency(unsigned ue_index,
   }
   pdcp_bearer_acc& rb = s->pdcp[ue_slot(ue_index)][rb_index];
   add(rb.latency_sum_ns, proc_latency_ns);
-  add(rb.queue_wait_sum_ns, queue_wait_ns);
   add(rb.latency_count, 1U);
+}
+
+void aurora::pdcp_tx_sojourn(unsigned ue_index, unsigned rb_index, uint64_t sojourn_ns) noexcept
+{
+  global_state* s = st();
+  if (s == nullptr || rb_index >= max_rbs_per_ue) {
+    return;
+  }
+  pdcp_bearer_acc& rb = s->pdcp[ue_slot(ue_index)][rb_index];
+  add(rb.sojourn_sum_ns, sojourn_ns);
+  add(rb.sojourn_count, 1U);
 }
 
 void aurora::pdcp_hook_anomaly() noexcept
@@ -545,25 +562,29 @@ void aurora::pdcp_hook_anomaly() noexcept
 // ---------------------------------------------------------------------------------------------------------------------
 // GTP-U.
 
-void aurora::gtp_tunnel_created(unsigned ue_index,
-                                unsigned tunnel_index,
-                                uint32_t local_teid,
-                                uint32_t peer_teid) noexcept
+int aurora::gtp_tunnel_created(unsigned ue_index, uint32_t local_teid, uint32_t peer_teid) noexcept
 {
   global_state* s = st();
-  if (s == nullptr || tunnel_index >= max_gtp_tunnels) {
-    return;
+  if (s == nullptr) {
+    return -1;
   }
-  gtp_tunnel_acc& t = s->gtp[ue_slot(ue_index)][tunnel_index];
-  for (auto& c : t.c) {
-    set(c, uint64_t{0});
+  for (unsigned i = 0; i != max_gtp_tunnels; ++i) {
+    gtp_tunnel_acc& t        = s->gtp[ue_slot(ue_index)][i];
+    bool            expected = false;
+    if (!t.active.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+      continue;
+    }
+    for (auto& c : t.c) {
+      set(c, uint64_t{0});
+    }
+    set(t.latency_sum_ns, uint64_t{0});
+    set(t.latency_count, 0U);
+    set(t.teid_local, local_teid);
+    set(t.teid_peer, peer_teid);
+    set(t.qfi, 0U);
+    return static_cast<int>(i);
   }
-  set(t.latency_sum_ns, uint64_t{0});
-  set(t.latency_count, 0U);
-  set(t.teid_local, local_teid);
-  set(t.teid_peer, peer_teid);
-  set(t.qfi, 0U);
-  set(t.active, true);
+  return -1;
 }
 
 void aurora::gtp_tunnel_removed(unsigned ue_index, unsigned tunnel_index) noexcept

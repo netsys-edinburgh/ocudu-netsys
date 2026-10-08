@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
+#include "ocudu/aurora/aurora.h"
 #include "udp_network_gateway_impl.h"
 #include "ocudu/adt/span.h"
 #include "ocudu/gateways/addr_info.h"
@@ -20,6 +21,7 @@ udp_network_gateway_impl::udp_network_gateway_impl(udp_network_gateway_config   
                                                    task_executor&                               io_tx_executor_,
                                                    task_executor&                               io_rx_executor_) :
   config(std::move(config_)),
+  aurora_is_ngu(config.if_name == "NG-U"),
   data_notifier(data_notifier_),
   logger(ocudulog::fetch_basic_logger("UDP-GW")),
   io_tx_executor(io_tx_executor_),
@@ -63,7 +65,12 @@ bool udp_network_gateway_impl::subscribe_to(io_broker& broker)
 
 void udp_network_gateway_impl::handle_pdu(byte_buffer pdu, const sockaddr_storage& dest_addr)
 {
-  if (not batched_queue.try_push(udp_tx_pdu_t{std::move(pdu), dest_addr})) {
+  const size_t aurora_len = pdu.length();
+  if (batched_queue.try_push(udp_tx_pdu_t{std::move(pdu), dest_addr})) {
+    if (aurora_is_ngu) {
+      aurora::record_flow(aurora::flow::bhrx_in, aurora_len);
+    }
+  } else {
     if (!config.warn_on_drop) {
       logger.info("Dropped PDU, queue is full.");
     } else {
@@ -126,6 +133,10 @@ void udp_network_gateway_impl::handle_pdu_impl(span<udp_tx_pdu_t> pdus)
   int ret = ::sendmmsg(sock_fd.value(), tx_ctx.mmsg.data(), msg_index, 0);
   if (ret < 0) {
     logger.error("Could not send {} packets to socket. ret={} error={}", msg_index, ret, ::strerror(errno));
+  } else if (aurora_is_ngu and aurora::is_active()) {
+    for (int i = 0; i != ret; ++i) {
+      aurora::record_flow(aurora::flow::bhrx_out, pdus[i].pdu.length());
+    }
   }
 }
 

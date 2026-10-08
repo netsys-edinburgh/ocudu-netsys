@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ocudu/aurora/aurora.h"
 #include "gtpu_tunnel_logger.h"
 #include "ocudu/gtpu/gtpu_tunnel_common_tx.h"
 #include "ocudu/pcap/dlt_pcap.h"
@@ -17,6 +18,13 @@ namespace ocudu {
 class gtpu_tunnel_base_tx
 {
 public:
+  /// Binds this tunnel to an AURORA per-UE tunnel slot (Group 15).
+  void set_aurora_slot(unsigned ue_index, int slot)
+  {
+    aurora_ue   = ue_index;
+    aurora_slot = slot;
+  }
+
   gtpu_tunnel_base_tx(gtpu_tunnel_log_prefix                      log_prefix,
                       dlt_pcap&                                   gtpu_pcap_,
                       gtpu_tunnel_common_tx_upper_layer_notifier& upper_dn_) :
@@ -42,6 +50,16 @@ public:
 
 protected:
   gtpu_tunnel_logger logger;
+
+  void aurora_add(aurora::gtp_counter c, uint64_t value) const
+  {
+    if (aurora_slot >= 0) {
+      aurora::gtp_add(aurora_ue, static_cast<unsigned>(aurora_slot), c, value);
+    }
+  }
+
+  unsigned aurora_ue   = 0;
+  int      aurora_slot = -1;
 
   void send_pdu(byte_buffer buf, const ::sockaddr_storage& peer_sockaddr)
   {

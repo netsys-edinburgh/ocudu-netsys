@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ocudu/aurora/aurora.h"
 #include "gtpu_pdu.h"
 #include "gtpu_tunnel_logger.h"
 #include "ocudu/adt/byte_buffer.h"
@@ -33,6 +34,7 @@ public:
     } else {
       bool read_ok = gtpu_dissect_pdu(dissected_pdu, std::move(buf), logger);
       if (!read_ok) {
+        aurora_add(aurora::gtp_counter::rx_err_pkts, 1);
         logger.log_error("Dropped PDU, error reading GTP-U header. pdu_len={}", dissected_pdu.buf.length());
         return;
       }
@@ -41,8 +43,25 @@ public:
     handle_pdu(std::move(dissected_pdu), src_addr);
   }
 
+  /// Binds this tunnel to an AURORA per-UE tunnel slot (Group 15).
+  void set_aurora_slot(unsigned ue_index, int slot)
+  {
+    aurora_ue   = ue_index;
+    aurora_slot = slot;
+  }
+
 protected:
   virtual void handle_pdu(gtpu_dissected_pdu&& pdu, const sockaddr_storage& src_addr) = 0;
+
+  void aurora_add(aurora::gtp_counter c, uint64_t value) const
+  {
+    if (aurora_slot >= 0) {
+      aurora::gtp_add(aurora_ue, static_cast<unsigned>(aurora_slot), c, value);
+    }
+  }
+
+  unsigned aurora_ue   = 0;
+  int      aurora_slot = -1;
 
   gtpu_tunnel_logger logger;
   bool               test_mode;

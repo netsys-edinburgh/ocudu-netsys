@@ -13,4 +13,4 @@ set(SOURCES gtpu_tunnel_psup_factory.cpp
             gtpu_gateway.cpp)
 
 add_library(ocudu_gtpu STATIC ${SOURCES})
-target_link_libraries(ocudu_gtpu ocudu_nru ocudu_psup ocudu_support ocudu_gateway)
+target_link_libraries(ocudu_gtpu ocudu_nru ocudu_psup ocudu_support ocudu_gateway ocudu_aurora)

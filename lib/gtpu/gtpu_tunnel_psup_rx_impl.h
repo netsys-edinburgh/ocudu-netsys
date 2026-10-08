@@ -87,9 +87,12 @@ protected:
     if (stopped) {
       return;
     }
+    aurora_add(aurora::gtp_counter::rx_pkts, 1);
+    aurora_add(aurora::gtp_counter::rx_bytes, pdu.buf.length());
 
     // Limit UE to AMBR.
     if (not config.ignore_ue_ambr && not config.ue_ambr_limiter->consume(pdu.buf.length())) {
+      aurora_add(aurora::gtp_counter::rx_err_pkts, 1);
       if (not config.warn_on_drop) {
         logger.log_info("Dropped GTP-U PDU. UE went over UE-AMBR");
       } else {
@@ -135,7 +138,12 @@ protected:
           teid);
       // As per TS 29.281 Sec. 5.2.2.7 the (...) PDU Session Container (...) shall be transmitted in a G-PDU over the
       // N3 and N9 user plane interfaces (...).
+      aurora_add(aurora::gtp_counter::rx_err_pkts, 1);
       return;
+    }
+    if (aurora_slot >= 0) {
+      aurora::gtp_set_qfi(
+          aurora_ue, static_cast<unsigned>(aurora_slot), to_underlying(pdu_session_info.qos_flow_id));
     }
 
     logger.log_debug(pdu.buf.begin(), pdu.buf.end(), "RX PDU. pdu_len={} rx_state=[{}]", pdu_len, rx_state);
@@ -192,6 +200,7 @@ protected:
 
     // Check if PDU has been received
     if (rx_window.has_sn(sn)) {
+      aurora_add(aurora::gtp_counter::rx_err_pkts, 1);
       logger.log_warning("Duplicate PDU dropped. sn={} pdu_len={}", sn, pdu_len);
       return;
     }

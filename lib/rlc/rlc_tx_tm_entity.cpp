@@ -58,6 +58,7 @@ void rlc_tx_tm_entity::handle_sdu(byte_buffer sdu_buf, bool is_retx)
   } else {
     logger.log_info("Dropped SDU. sdu_len={} {}", sdu_len, sdu_queue.get_state());
     metrics_high.metrics_add_lost_sdus(1);
+    metrics_high.aurora_tap.add(aurora::rlc_counter::txpdu_dd_bytes, sdu_len);
   }
 }
 

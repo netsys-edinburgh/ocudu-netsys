@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "pdcp_aurora_tap.h"
+
 #include "ocudu/pdcp/pdcp_rx_metrics.h"
 #include "ocudu/support/ocudu_assert.h"
 #include <atomic>
@@ -15,12 +17,17 @@ class pdcp_rx_metrics
   bool                      enabled = false;
 
 public:
+  /// AURORA mirror of the counters below (Group 14).
+  pdcp_aurora_tap aurora_tap;
+
   pdcp_rx_metrics(bool enabled_) : enabled(enabled_) {}
 
   bool is_enabled() const { return enabled; }
 
   void add_sdus(uint32_t num_sdus_, size_t num_sdu_bytes_)
   {
+    aurora_tap.add(aurora::pdcp_counter::rxsdu_pkts, num_sdus_);
+    aurora_tap.add(aurora::pdcp_counter::rxsdu_bytes, num_sdu_bytes_);
     if (not enabled) {
       return;
     }
@@ -30,6 +37,8 @@ public:
 
   void add_pdus(uint32_t num_pdus_, size_t num_pdu_bytes_)
   {
+    aurora_tap.add(aurora::pdcp_counter::rxpdu_pkts, num_pdus_);
+    aurora_tap.add(aurora::pdcp_counter::rxpdu_bytes, num_pdu_bytes_);
     if (not enabled) {
       return;
     }
@@ -48,6 +57,8 @@ public:
 
   void add_lost_pdus(uint32_t num_pdus_)
   {
+    // Integrity / deciphering failures: PDU unusable, counted as lost.
+    aurora_tap.add(aurora::pdcp_counter::rxpdu_lost_pkts, num_pdus_);
     if (not enabled) {
       return;
     }
@@ -56,6 +67,7 @@ public:
 
   void add_dropped_pdus(uint32_t num_pdus_)
   {
+    aurora_tap.add(aurora::pdcp_counter::rxpdu_dd_pkts, num_pdus_);
     if (not enabled) {
       return;
     }

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "ocudu/aurora/aurora.h"
 #include "gtpu_demux_impl.h"
 #include <arpa/inet.h>
 
@@ -104,9 +105,17 @@ void gtpu_demux_impl::handle_pdu(byte_buffer pdu, const sockaddr_storage& src_ad
       }
     }
     logger.info("Dropped GTP-U PDU, tunnel not found. teid={} err_ind={}", teid, err_ind);
+    if (cfg.lif == gtpu_logical_interface::ngu) {
+      aurora::gtp_unknown_teid();
+    }
     return;
   }
-  if (!it->second.batched_queue.try_push(gtpu_demux_pdu_ctx_t{std::move(pdu), src_addr})) {
+  const size_t aurora_len = pdu.length();
+  if (it->second.batched_queue.try_push(gtpu_demux_pdu_ctx_t{std::move(pdu), src_addr})) {
+    if (cfg.lif == gtpu_logical_interface::ngu) {
+      aurora::record_flow(aurora::flow::bhtx_in, aurora_len);
+    }
+  } else {
     if (!cfg.warn_on_drop) {
       logger.info("Dropped GTP-U PDU, queue is full. teid={}", teid);
     } else {
@@ -158,6 +167,9 @@ void gtpu_demux_impl::handle_pdu_impl(gtpu_teid_t teid, gtpu_demux_pdu_ctx_t pdu
       return;
     }
     tunnel = it->second.tunnel;
+  }
+  if (cfg.lif == gtpu_logical_interface::ngu) {
+    aurora::record_flow(aurora::flow::bhtx_out, pdu_ctx.pdu.length());
   }
   // Forward entire PDU to the tunnel.
   // As removal happens in the same thread as handling the PDU, we no longer need the lock.

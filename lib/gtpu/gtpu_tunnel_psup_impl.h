@@ -27,8 +27,17 @@ public:
   {
     rx = std::make_unique<gtpu_tunnel_psup_rx_impl>(ue_index, cfg.rx, rx_lower, ue_ctrl_timer_factory);
     tx = std::make_unique<gtpu_tunnel_psup_tx_impl>(ue_index, cfg.tx, gtpu_pcap, tx_upper);
+    aurora_ue   = static_cast<unsigned>(ue_index);
+    aurora_slot = aurora::gtp_tunnel_created(aurora_ue, cfg.rx.local_teid.value(), cfg.tx.peer_teid.value());
+    rx->set_aurora_slot(aurora_ue, aurora_slot);
+    tx->set_aurora_slot(aurora_ue, aurora_slot);
   }
-  ~gtpu_tunnel_psup_impl() override = default;
+  ~gtpu_tunnel_psup_impl() override
+  {
+    if (aurora_slot >= 0) {
+      aurora::gtp_tunnel_removed(aurora_ue, static_cast<unsigned>(aurora_slot));
+    }
+  }
 
   void stop() final
   {
@@ -40,6 +49,8 @@ public:
 
 private:
   ocudulog::basic_logger& logger;
+  unsigned                aurora_ue   = 0;
+  int                     aurora_slot = -1;
 
   std::unique_ptr<gtpu_tunnel_psup_rx_impl> rx = {};
   std::unique_ptr<gtpu_tunnel_psup_tx_impl> tx = {};
