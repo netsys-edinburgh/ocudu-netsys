@@ -1510,8 +1510,13 @@ int main(int argc, char **argv)
             if (batch_size < 1) batch_size = 1;
         } else if (!strcmp(argv[i], "--once")) {
             print_once = true;
-        } else if (!config_file) {
+        } else if (!strncmp(argv[i], "--infra-", 8)) {
+            /* Parsed later by aurora_infra_parse_cli(); skip the flag and its value. */
+            if (i + 1 < argc) i++;
+        } else if (argv[i][0] != '-' && !config_file) {
             config_file = argv[i];
+        } else {
+            fprintf(stderr, "aurora_reader: ignoring unknown option '%s'\n", argv[i]);
         }
     }
 

@@ -1,0 +1,13 @@
+# Example AURORA section. Combine with any application config, e.g.:
+#   gnb -c gnb_rf_b200_tdd_n78_20mhz.yml -c aurora.yml
+# Read it with: aurora_reader aurora.yml --output metrics.csv
+
+aurora:
+  enable: true                    # Enable the AURORA shared-memory metrics framework.
+  collection_interval_ms: 100     # Publication period of the shared-memory snapshot.
+  shm_key: 0xDEADBEEF             # SysV key; use a different key for every process on the host.
+  ran_type: auto                  # auto | gnb | du | cu | cu_cp | cu_up
+  thread_metrics_enabled: true    # Per-thread runtime distribution metrics.
+  thread_metrics_backend: auto    # auto (eBPF, fallback procfs) | ebpf | procfs
+  thread_metrics_whitelist: ""    # Empty selects the OCUDU default thread list.
+  anomaly_enabled: true           # Anomaly-injection TCP server on 127.0.0.1:(47010 + ran_type).
