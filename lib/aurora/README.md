@@ -47,6 +47,30 @@ aurora_reader [app_config.yml] [--shm-key HEX] [--ran-type gnb|du|cu|cu_cp|cu_up
 - Container auto-discovery for the infra sidecar matches the OCUDU docker-compose names: `ocudu_gnb`, `ocudu_cu`,
   `ocudu_du`, `ocudu_cu_cp` and `ocudu_cu_up`.
 
+## OCUDU extension (`struct aurora_metrics_ext`)
+
+The extension is appended as the last member of `struct aurora_metrics`, so the OAI prefix stays byte-identical.
+Check `ext.version` (`AURORA_EXT_VERSION`) and `ext.size` before using it.
+
+| Field | Content |
+|-------|---------|
+| `ext.csi[100]` | Full last CSI report per UE, with interval report counters (total / invalid). It carries every quantity OCUDU's CSI decoder supports (`csi_report_data`). |
+| `ext.ho_du[16]` | Handover executions per source gNB-DU ID: interval and cumulative attempts/successes, plus the success rate. |
+| `ext.ho_prep_*` | N2 handover preparations (CU-CP level). |
+
+The CSI quantities in `ext.csi[100]` are:
+- CRI/SSBRI and L1-RSRP lists;
+- RI, LI;
+- wideband CQI for TB1 and TB2;
+- subband differential CQIs;
+- PMI for the two-port, Type-I single-panel (i1,1, i1,2, i1,3, i2) and Type-II (i1,1, i1,2, and per layer i1,3, i1,4,
+  i2,1, i2,2) codebooks.
+
+Quantities missing from the last report read `0xFF` (`AURORA_CSI_NOT_REPORTED`).
+
+RC cell 0 `handover_*` is the total over all DUs. `aurora_reader` appends the extension CSV columns (`csi_*`,
+`ul_failure_*`, `ho_*`) after all OAI columns, and prints both tables with `--once`.
+
 ## Semantics vs. OAI
 
 OAI producers wrote the segment live, and a separate thread zeroed it every interval. A reader could therefore observe
@@ -86,7 +110,7 @@ The following stay the same as OAI:
 | 5, 6, 7 FAPI | `lib/scheduler/logging/aurora_sched_tap.cpp`: every PDSCH/PUSCH UE grant of each slot result |
 | 4, 8, 11, 12 aggregates | publisher (`aurora_publish.cpp`) from per-UE MAC state |
 | 11 sched loop / PRB use | `cell_scheduler::run_slot` decision latency, real cell PRB count and DL/UL slot count (OAI assumed 106 PRBs) |
-| 11 handover | CU-CP `mobility_manager_metrics_aggregator`, keyed by source gNB-DU ID |
+| 11 handover | CU-CP `mobility_manager_metrics_aggregator`: per source gNB-DU ID in `ext.ho_du[]` (totals in RC cell 0); N2 preparations in `ext.ho_prep_*` |
 | 11 du_count | CU-CP `du_processor_repository` add/remove |
 | 11 rsrq_avg | CU-CP serving-cell SS-RSRQ from measurement reports (always 0 in OAI) |
 | 12 per-UE MAC | scheduler events (CSI, BSR, PHR, PUCCH SNR, UE create/remove), HARQ manager failures, MAC RLF detector |

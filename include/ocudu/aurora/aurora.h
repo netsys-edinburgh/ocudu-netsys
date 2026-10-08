@@ -11,6 +11,8 @@
 
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -118,14 +120,60 @@ void on_ul_dtx(unsigned ue_index) noexcept;
 void on_harq_max_retx_failure(unsigned ue_index, bool is_dl) noexcept;
 void on_pucch_snr(unsigned ue_index, float snr_db) noexcept;
 
+/// Full content of one decoded UE CSI report (OCUDU csi_report_data: CRI/RI/LI/PMI/CQI and L1-RSRP quantities).
 struct csi_info {
-  std::optional<unsigned> wb_cqi;
-  std::optional<unsigned> ri;
-  std::optional<unsigned> pmi_i1;
-  std::optional<unsigned> pmi_i2;
-  std::optional<float>    l1_rsrp_dbm;
-  /// True if L1-RSRP refers to an SSB resource, false for CSI-RS.
+  static constexpr unsigned max_rs        = 4;  ///< csi_max_nof_reported_rs.
+  static constexpr unsigned max_subbands  = 18; ///< csi_max_nof_subbands.
+  static constexpr unsigned max_t2_layers = 2;  ///< max_nof_typeII_layers.
+  static constexpr unsigned max_t2_coeffs = 8;  ///< max_nof_typeII_coefficients.
+
+  enum class pmi_kind : uint8_t { none = 0, two_port = 1, typeI_single_panel = 2, typeII = 3 };
+
+  /// False if the report could not be decoded (counted, content ignored).
+  bool valid = true;
+
+  // CRI / SSBRI and L1-RSRP of each reported resource.
+  unsigned                      nof_rs = 0;
+  std::array<uint8_t, max_rs>   cri{};
+  std::array<int16_t, max_rs>   l1_rsrp_dbm{};
+  /// True if the reported resources are SSBs (ssb-Index-RSRP), false for CSI-RS (cri-RSRP).
   bool rsrp_from_ssb = false;
+
+  std::optional<unsigned> ri;
+  std::optional<unsigned> li;
+  std::optional<unsigned> wb_cqi;     ///< First TB.
+  std::optional<unsigned> wb_cqi_tb2; ///< Second TB.
+  unsigned                               nof_subbands_tb1 = 0;
+  unsigned                               nof_subbands_tb2 = 0;
+  std::array<uint8_t, max_subbands>      sb_cqi_diff_tb1{};
+  std::array<uint8_t, max_subbands>      sb_cqi_diff_tb2{};
+
+  pmi_kind                pmi = pmi_kind::none;
+  unsigned                pmi_two_port = 0;
+  std::optional<unsigned> pmi_i1;  ///< i1,1 (Type-I SP / Type-II).
+  std::optional<unsigned> pmi_i12; ///< Type-I SP i1,2.
+  std::optional<unsigned> pmi_i13; ///< Type-I SP i1,3.
+  std::optional<unsigned> pmi_i2;  ///< Type-I SP i2 (two-port PMI for the two-port codebook).
+  unsigned                t2_i12        = 0;
+  unsigned                t2_nof_layers = 0;
+  std::array<uint8_t, max_t2_layers>                             t2_i13{};
+  std::array<uint8_t, max_t2_layers>                             t2_nof_coeffs{};
+  std::array<std::array<uint8_t, max_t2_coeffs>, max_t2_layers> t2_i14{};
+  std::array<std::array<uint8_t, max_t2_coeffs>, max_t2_layers> t2_i21{};
+  std::array<std::array<uint8_t, max_t2_coeffs>, max_t2_layers> t2_i22{};
+
+  /// Strongest reported L1-RSRP, if any.
+  std::optional<float> l1_rsrp_best_dbm() const
+  {
+    if (nof_rs == 0) {
+      return std::nullopt;
+    }
+    int16_t best = l1_rsrp_dbm[0];
+    for (unsigned i = 1; i < nof_rs && i < max_rs; ++i) {
+      best = std::max(best, l1_rsrp_dbm[i]);
+    }
+    return static_cast<float>(best);
+  }
 };
 void on_csi_report(unsigned ue_index, const csi_info& csi) noexcept;
 void on_bsr(unsigned ue_index, uint32_t nof_bytes) noexcept;
@@ -154,8 +202,13 @@ void on_scheduler_slot(unsigned pci,
 // CU-CP hooks. Group 11.
 // ---------------------------------------------------------------------------------------------------------------------
 
-void on_handover_attempt(uint32_t cell_id) noexcept;
-void on_handover_success(uint32_t cell_id) noexcept;
+/// Handover execution requested / successful, keyed by source gNB-DU ID (per-DU table in the OCUDU extension; the
+/// totals also fill RC cell 0 handover counters).
+void on_handover_attempt(uint64_t source_gnb_du_id) noexcept;
+void on_handover_success(uint64_t source_gnb_du_id) noexcept;
+/// N2 (inter-gNB) handover preparation requested / successful on the source side. Not attributable to a DU.
+void on_handover_preparation_attempt() noexcept;
+void on_handover_preparation_success() noexcept;
 void on_du_count(unsigned nof_dus) noexcept;
 /// L3 RSRQ (dB) from a UE measurement report of the serving cell.
 void on_serving_cell_rsrq(float rsrq_db) noexcept;

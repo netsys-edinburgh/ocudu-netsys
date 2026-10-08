@@ -98,6 +98,11 @@ TEST_F(du_high_aurora_tester, ue_attach_and_dl_traffic_populate_aurora_metrics)
   EXPECT_EQ(drb1.txsdu_bytes, uint64_t(nof_pdcp_pdus) * pdcp_pdu_size);
   EXPECT_GT(drb1.txpdu_pkts, 0U);
   EXPECT_GT(drb1.txpdu_bytes, drb1.txsdu_bytes / 2);
+  // OCUDU extension: CSI reports decoded by the scheduler during the traffic phase.
+  EXPECT_EQ(m.ext.version, unsigned(AURORA_EXT_VERSION));
+  EXPECT_EQ(m.ext.csi[slot].rnti, 0x4601U);
+  EXPECT_GT(m.ext.csi[slot].nof_reports, 0U);
+
   // SRB1 carried the RRC setup / context setup signalling.
   EXPECT_NE(m.rlc_rb_stats[slot][aurora::srb_rb_index(1)].rnti, 0U);
 }

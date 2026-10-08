@@ -82,6 +82,14 @@ void reset_mac_ue(mac_ue_acc& u)
   set(u.ul_failure, false);
   set(u.dl_granted, false);
   set(u.ul_granted, false);
+  set(u.csi_reports, 0U);
+  set(u.csi_invalid_reports, 0U);
+  // No CSI report received yet: every reportable quantity "not reported".
+  aurora_csi_ue_stats_t none{};
+  none.ri = none.li = none.wb_cqi_tb1 = none.wb_cqi_tb2 = AURORA_CSI_NOT_REPORTED;
+  none.pmi_two_port = none.pmi_i11 = none.pmi_i12 = none.pmi_i13 = none.pmi_i2 = AURORA_CSI_NOT_REPORTED;
+  std::lock_guard<std::mutex> lock(u.csi_mutex);
+  u.csi_snapshot = none;
 }
 
 /// Refreshes the C-RNTI of an owned UE slot (it changes e.g. on reestablishment).
@@ -302,6 +310,13 @@ void aurora::on_csi_report(unsigned ue_index, const csi_info& csi) noexcept
   if (u == nullptr) {
     return;
   }
+  add(u->csi_reports, 1U);
+  if (!csi.valid) {
+    add(u->csi_invalid_reports, 1U);
+    return;
+  }
+
+  // OAI-layout fields (Group 12).
   if (csi.wb_cqi) {
     set(u->wb_cqi, uint32_t(*csi.wb_cqi));
   }
@@ -314,10 +329,53 @@ void aurora::on_csi_report(unsigned ue_index, const csi_info& csi) noexcept
   if (csi.pmi_i2) {
     set(u->pmi_x2, uint32_t(*csi.pmi_i2));
   }
-  if (csi.l1_rsrp_dbm && std::isfinite(*csi.l1_rsrp_dbm)) {
-    set(u->rsrp_dbm, *csi.l1_rsrp_dbm);
-    set(csi.rsrp_from_ssb ? u->ssb_rsrp : u->csirs_rsrp, int32_t(std::lround(*csi.l1_rsrp_dbm)));
+  std::optional<float> best = csi.l1_rsrp_best_dbm();
+  if (best) {
+    set(u->rsrp_dbm, *best);
+    set(csi.rsrp_from_ssb ? u->ssb_rsrp : u->csirs_rsrp, int32_t(std::lround(*best)));
   }
+
+  // Full report (OCUDU extension).
+  constexpr uint8_t     nr = AURORA_CSI_NOT_REPORTED;
+  aurora_csi_ue_stats_t c{};
+  c.nof_rs        = uint8_t(std::min(csi.nof_rs, csi_info::max_rs));
+  c.rsrp_from_ssb = csi.rsrp_from_ssb ? 1 : 0;
+  for (unsigned i = 0; i != c.nof_rs; ++i) {
+    c.cri[i]         = csi.cri[i];
+    c.l1_rsrp_dbm[i] = csi.l1_rsrp_dbm[i];
+  }
+  c.l1_rsrp_best_dbm = best ? int16_t(std::lround(*best)) : 0;
+  c.ri               = csi.ri ? uint8_t(*csi.ri) : nr;
+  c.li               = csi.li ? uint8_t(*csi.li) : nr;
+  c.wb_cqi_tb1       = csi.wb_cqi ? uint8_t(*csi.wb_cqi) : nr;
+  c.wb_cqi_tb2       = csi.wb_cqi_tb2 ? uint8_t(*csi.wb_cqi_tb2) : nr;
+  c.nof_subbands_tb1 = uint8_t(std::min(csi.nof_subbands_tb1, csi_info::max_subbands));
+  c.nof_subbands_tb2 = uint8_t(std::min(csi.nof_subbands_tb2, csi_info::max_subbands));
+  for (unsigned i = 0; i != c.nof_subbands_tb1; ++i) {
+    c.sb_cqi_diff_tb1[i] = csi.sb_cqi_diff_tb1[i];
+  }
+  for (unsigned i = 0; i != c.nof_subbands_tb2; ++i) {
+    c.sb_cqi_diff_tb2[i] = csi.sb_cqi_diff_tb2[i];
+  }
+  c.pmi_type      = static_cast<uint8_t>(csi.pmi);
+  c.pmi_two_port  = csi.pmi == csi_info::pmi_kind::two_port ? uint8_t(csi.pmi_two_port) : nr;
+  c.pmi_i11       = csi.pmi_i1 ? uint8_t(*csi.pmi_i1) : nr;
+  c.pmi_i12       = csi.pmi_i12 ? uint8_t(*csi.pmi_i12) : nr;
+  c.pmi_i13       = csi.pmi_i13 ? uint8_t(*csi.pmi_i13) : nr;
+  c.pmi_i2        = csi.pmi_i2 ? uint8_t(*csi.pmi_i2) : nr;
+  c.t2_i12        = uint16_t(csi.t2_i12);
+  c.t2_nof_layers = uint8_t(std::min(csi.t2_nof_layers, csi_info::max_t2_layers));
+  for (unsigned l = 0; l != c.t2_nof_layers; ++l) {
+    c.t2_i13[l]        = csi.t2_i13[l];
+    c.t2_nof_coeffs[l] = uint8_t(std::min<unsigned>(csi.t2_nof_coeffs[l], csi_info::max_t2_coeffs));
+    for (unsigned k = 0; k != c.t2_nof_coeffs[l]; ++k) {
+      c.t2_i14[l][k] = csi.t2_i14[l][k];
+      c.t2_i21[l][k] = csi.t2_i21[l][k];
+      c.t2_i22[l][k] = csi.t2_i22[l][k];
+    }
+  }
+  std::lock_guard<std::mutex> lock(u->csi_mutex);
+  u->csi_snapshot = c;
 }
 
 void aurora::on_bsr(unsigned ue_index, uint32_t nof_bytes) noexcept
@@ -421,39 +479,57 @@ void aurora::on_scheduler_slot(unsigned                  pci,
 // ---------------------------------------------------------------------------------------------------------------------
 // CU-CP.
 
-static rc_cell_acc* rc_cell(global_state& s, uint32_t cell_id)
+static du_ho_acc* du_ho(global_state& s, uint64_t du_id)
 {
-  std::lock_guard<std::mutex> lock(s.rc_cells_mutex);
-  for (auto& c : s.rc_cells) {
-    if (get(c.used) && get(c.cell_id) == cell_id) {
-      return &c;
+  std::lock_guard<std::mutex> lock(s.ho_dus_mutex);
+  for (auto& d : s.ho_dus) {
+    if (get(d.used) && get(d.gnb_du_id) == du_id) {
+      return &d;
     }
   }
-  for (auto& c : s.rc_cells) {
-    if (!get(c.used)) {
-      set(c.cell_id, cell_id);
-      c.used.store(true, std::memory_order_release);
-      return &c;
+  for (auto& d : s.ho_dus) {
+    if (!get(d.used)) {
+      set(d.gnb_du_id, du_id);
+      d.used.store(true, std::memory_order_release);
+      return &d;
     }
   }
   return nullptr;
 }
 
-void aurora::on_handover_attempt(uint32_t cell_id) noexcept
+void aurora::on_handover_attempt(uint64_t source_gnb_du_id) noexcept
 {
   if (global_state* s = st()) {
-    if (rc_cell_acc* c = rc_cell(*s, cell_id)) {
-      add(c->ho_attempts, 1U);
+    if (du_ho_acc* d = du_ho(*s, source_gnb_du_id)) {
+      add(d->attempts, 1U);
+      add(d->attempts_total, 1U);
     }
   }
 }
 
-void aurora::on_handover_success(uint32_t cell_id) noexcept
+void aurora::on_handover_success(uint64_t source_gnb_du_id) noexcept
 {
   if (global_state* s = st()) {
-    if (rc_cell_acc* c = rc_cell(*s, cell_id)) {
-      add(c->ho_success, 1U);
+    if (du_ho_acc* d = du_ho(*s, source_gnb_du_id)) {
+      add(d->success, 1U);
+      add(d->success_total, 1U);
     }
+  }
+}
+
+void aurora::on_handover_preparation_attempt() noexcept
+{
+  if (global_state* s = st()) {
+    add(s->ho_prep_attempts, 1U);
+    add(s->ho_prep_attempts_total, 1U);
+  }
+}
+
+void aurora::on_handover_preparation_success() noexcept
+{
+  if (global_state* s = st()) {
+    add(s->ho_prep_success, 1U);
+    add(s->ho_prep_success_total, 1U);
   }
 }
 

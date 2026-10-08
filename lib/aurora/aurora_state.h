@@ -141,6 +141,12 @@ struct mac_ue_acc {
   // Last DL buffer occupancy per logical channel.
   std::array<std::atomic<uint32_t>, max_lcids> dl_bo{};
 
+  // Last decoded CSI report (Group 12 extension) and interval report counters. CSI reports arrive on the cell
+  // executor, the publisher copies the snapshot: guarded by a mutex (uncontended in practice, ~1 report / 10-80 ms).
+  std::mutex            csi_mutex;
+  aurora_csi_ue_stats_t csi_snapshot{};
+  std::atomic<uint32_t> csi_reports{0}, csi_invalid_reports{0};
+
   // DL HARQ consecutive NACK/DTX per HARQ process.
   std::array<std::atomic<uint32_t>, max_harq_ids> cons_nack{};
 
@@ -177,11 +183,12 @@ struct gtp_tunnel_acc {
   std::atomic<uint32_t> latency_count{0};
 };
 
-struct rc_cell_acc {
+/// Handover executions of one source DU.
+struct du_ho_acc {
   std::atomic<bool>     used{false};
-  std::atomic<uint32_t> cell_id{0};
-  /// Cumulative (OAI aurora.c keeps HO counters cumulative, not reset per interval).
-  std::atomic<uint32_t> ho_attempts{0}, ho_success{0};
+  std::atomic<uint64_t> gnb_du_id{0};
+  std::atomic<uint32_t> attempts{0}, success{0};             ///< Interval.
+  std::atomic<uint32_t> attempts_total{0}, success_total{0}; ///< Cumulative.
 };
 
 struct global_state {
@@ -208,8 +215,10 @@ struct global_state {
   std::atomic<uint32_t> du_count{0};
   std::atomic<float>    rsrq_sum{0};
   std::atomic<uint32_t> rsrq_count{0};
-  std::array<rc_cell_acc, max_rc_cells> rc_cells;
-  std::mutex                            rc_cells_mutex; ///< Serializes RC cell slot allocation (rare events).
+  std::array<du_ho_acc, AURORA_MAX_HO_DUS> ho_dus;
+  std::mutex                               ho_dus_mutex; ///< Serializes DU slot allocation (rare events).
+  std::atomic<uint32_t>                    ho_prep_attempts{0}, ho_prep_success{0};
+  std::atomic<uint32_t>                    ho_prep_attempts_total{0}, ho_prep_success_total{0};
   std::atomic<uint64_t>                 gtp_unknown_teid{0};
 
   std::array<mac_ue_acc, max_nof_ues>                                  mac_ues;

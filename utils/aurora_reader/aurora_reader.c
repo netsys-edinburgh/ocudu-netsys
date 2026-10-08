@@ -156,6 +156,21 @@ static double hist_mean_shift(const aurora_hist_t *hist, int shift) {
 
 typedef struct { double min, max, sum; int n; } agg_t;
 
+/* OCUDU extension, reduced over active UEs / DUs (see struct aurora_metrics_ext). */
+#define EXT_CSV_HO_DUS 4
+typedef struct {
+    int      present;                          /* producer published an extension */
+    uint64_t csi_reports, csi_invalid_reports;
+    agg_t    csi_ri, csi_li, csi_cqi_tb1, csi_cqi_tb2, csi_sb_cqi_diff, csi_nof_rs, csi_l1_rsrp_best;
+    agg_t    csi_pmi_i11, csi_pmi_i2;
+    uint32_t pmi_type_ues[4];                  /* UEs whose last report used AURORA_PMI_{NONE,TWO_PORT,TYPEI_SP,TYPEII} */
+    uint32_t ul_failure_ues;
+    agg_t    ul_failure_timer_ms;
+    uint32_t ho_prep_attempts, ho_prep_success, ho_prep_attempts_total, ho_prep_success_total;
+    uint32_t ho_du_count;
+    aurora_du_ho_stats_t ho_du[EXT_CSV_HO_DUS];
+} ext_snap_t;
+
 /* =========================================================
  * Thread CSV layout — built once at write_csv_header time.
  * Maps each CSV column slot to a thread slot index + name.
@@ -377,6 +392,9 @@ typedef struct {
 
     /* Group 17 — Per-thread runtime metrics (indexed by g_thread_cols layout) */
     thread_snap_t thread_snaps[AURORA_MAX_MONITORED_THREADS];
+
+    /* OCUDU extension (struct aurora_metrics_ext) */
+    ext_snap_t ext;
 } snapshot_t;
 
 /* =========================================================
@@ -384,9 +402,55 @@ typedef struct {
  * Per-UE arrays are reduced to min/max/avg in-place.
  * ========================================================= */
 
+static void fill_ext_snapshot(ext_snap_t *e, const struct aurora_metrics *m)
+{
+    const struct aurora_metrics_ext *x = &m->ext;
+    if (x->version < 1 || x->size < sizeof(struct aurora_metrics_ext))
+        return;
+    e->present = 1;
+    for (int i = 0; i < MAX_NO_UEs; i++) {
+        const aurora_mac_ue_stats_t *u = &m->mac_ue_stats[i];
+        const aurora_csi_ue_stats_t *c = &x->csi[i];
+        if (u->rnti == 0)
+            continue;
+        if (u->ul_failure) {
+            e->ul_failure_ues++;
+            agg_add(&e->ul_failure_timer_ms, u->ul_failure_timer);
+        }
+        if (c->rnti == 0)
+            continue;
+        e->csi_reports += c->nof_reports;
+        e->csi_invalid_reports += c->nof_invalid_reports;
+        if (c->ri != AURORA_CSI_NOT_REPORTED) agg_add(&e->csi_ri, c->ri);
+        if (c->li != AURORA_CSI_NOT_REPORTED) agg_add(&e->csi_li, c->li);
+        if (c->wb_cqi_tb1 != AURORA_CSI_NOT_REPORTED) agg_add(&e->csi_cqi_tb1, c->wb_cqi_tb1);
+        if (c->wb_cqi_tb2 != AURORA_CSI_NOT_REPORTED) agg_add(&e->csi_cqi_tb2, c->wb_cqi_tb2);
+        if (c->nof_subbands_tb1 > 0) {
+            double sum = 0;
+            for (int k = 0; k < c->nof_subbands_tb1 && k < AURORA_CSI_MAX_SUBBANDS; k++) sum += c->sb_cqi_diff_tb1[k];
+            agg_add(&e->csi_sb_cqi_diff, sum / c->nof_subbands_tb1);
+        }
+        if (c->nof_rs > 0) {
+            agg_add(&e->csi_nof_rs, c->nof_rs);
+            agg_add(&e->csi_l1_rsrp_best, c->l1_rsrp_best_dbm);
+        }
+        if (c->pmi_i11 != AURORA_CSI_NOT_REPORTED) agg_add(&e->csi_pmi_i11, c->pmi_i11);
+        if (c->pmi_i2 != AURORA_CSI_NOT_REPORTED) agg_add(&e->csi_pmi_i2, c->pmi_i2);
+        if (c->pmi_type < 4) e->pmi_type_ues[c->pmi_type]++;
+    }
+    e->ho_prep_attempts       = x->ho_prep_attempts;
+    e->ho_prep_success        = x->ho_prep_success;
+    e->ho_prep_attempts_total = x->ho_prep_attempts_total;
+    e->ho_prep_success_total  = x->ho_prep_success_total;
+    e->ho_du_count            = x->ho_du_count;
+    for (int k = 0; k < EXT_CSV_HO_DUS && k < (int)x->ho_du_count && k < AURORA_MAX_HO_DUS; k++)
+        e->ho_du[k] = x->ho_du[k];
+}
+
 static void fill_snapshot(snapshot_t *s, const struct aurora_metrics *m)
 {
     memset(s, 0, sizeof(*s));
+    fill_ext_snapshot(&s->ext, m);
     s->timestamp_us = m->timestamp_us;
     s->ran_type = m->ran_type;
 
@@ -755,6 +819,61 @@ static csv_gates_t compute_csv_gates(ran_type_t rt)
     return g;
 }
 
+/* OCUDU extension columns, appended after every OAI column so existing column positions never move. */
+#define AGG3(f) f "_min," f "_max," f "_avg"
+static void write_ext_csv_header(FILE *fp, const csv_gates_t *g)
+{
+    if (g->mac) {
+        fprintf(fp,
+            ",csi_reports,csi_invalid_reports"
+            "," AGG3("csi_ri") "," AGG3("csi_li") "," AGG3("csi_cqi_tb1") "," AGG3("csi_cqi_tb2")
+            "," AGG3("csi_sb_cqi_diff") "," AGG3("csi_nof_rs") "," AGG3("csi_l1_rsrp_best_dbm")
+            "," AGG3("csi_pmi_i11") "," AGG3("csi_pmi_i2")
+            ",csi_pmi_none_ues,csi_pmi_two_port_ues,csi_pmi_typeI_ues,csi_pmi_typeII_ues"
+            ",ul_failure_ues," AGG3("ul_failure_timer_ms"));
+    }
+    if (g->handover) {
+        fprintf(fp, ",ho_prep_attempts,ho_prep_success,ho_prep_attempts_total,ho_prep_success_total,ho_du_count");
+        for (int k = 0; k < EXT_CSV_HO_DUS; k++)
+            fprintf(fp, ",ho_du%d_id,ho_du%d_attempts,ho_du%d_success,ho_du%d_attempts_total,ho_du%d_success_total,"
+                        "ho_du%d_success_rate", k, k, k, k, k, k);
+    }
+}
+#undef AGG3
+
+static void write_agg3(FILE *fp, const agg_t *a)
+{
+    fprintf(fp, ",%.2f,%.2f,%.2f", a->n ? a->min : 0.0, a->n ? a->max : 0.0, agg_avg(a));
+}
+
+static void write_ext_csv_row(FILE *fp, const csv_gates_t *g, const ext_snap_t *e)
+{
+    if (g->mac) {
+        fprintf(fp, ",%lu,%lu", (unsigned long)e->csi_reports, (unsigned long)e->csi_invalid_reports);
+        write_agg3(fp, &e->csi_ri);
+        write_agg3(fp, &e->csi_li);
+        write_agg3(fp, &e->csi_cqi_tb1);
+        write_agg3(fp, &e->csi_cqi_tb2);
+        write_agg3(fp, &e->csi_sb_cqi_diff);
+        write_agg3(fp, &e->csi_nof_rs);
+        write_agg3(fp, &e->csi_l1_rsrp_best);
+        write_agg3(fp, &e->csi_pmi_i11);
+        write_agg3(fp, &e->csi_pmi_i2);
+        fprintf(fp, ",%u,%u,%u,%u,%u", e->pmi_type_ues[0], e->pmi_type_ues[1], e->pmi_type_ues[2],
+                e->pmi_type_ues[3], e->ul_failure_ues);
+        write_agg3(fp, &e->ul_failure_timer_ms);
+    }
+    if (g->handover) {
+        fprintf(fp, ",%u,%u,%u,%u,%u", e->ho_prep_attempts, e->ho_prep_success, e->ho_prep_attempts_total,
+                e->ho_prep_success_total, e->ho_du_count);
+        for (int k = 0; k < EXT_CSV_HO_DUS; k++) {
+            const aurora_du_ho_stats_t *d = &e->ho_du[k];
+            fprintf(fp, ",%lu,%u,%u,%u,%u,%.4f", (unsigned long)d->gnb_du_id, d->exec_attempts, d->exec_success,
+                    d->exec_attempts_total, d->exec_success_total, d->exec_success_rate);
+        }
+    }
+}
+
 static void write_csv_header(FILE *fp, const struct aurora_metrics *m)
 {
     /* Build the thread column layout from the current thread_stats snapshot.
@@ -1007,6 +1126,7 @@ static void write_csv_header(FILE *fp, const struct aurora_metrics *m)
             ",infra_gpu0_power_mw,infra_gpu0_ecc_sbit,infra_gpu0_ecc_dbit");
     }
 
+    write_ext_csv_header(fp, &g);
     fprintf(fp, "\n");
 }
 
@@ -1380,6 +1500,7 @@ static void write_csv_row(FILE *fp, const snapshot_t *s)
             (im->gpu.num_gpus > 0) ? (unsigned long)im->gpu.gpus[0].ecc_double_bit : 0UL);
     }
 
+    write_ext_csv_row(fp, &g, &s->ext);
     fprintf(fp, "\n");
 }
 
@@ -1753,6 +1874,35 @@ int main(int argc, char **argv)
         printf("  HO attempts=%u  success=%u  rate=%.3f\n",
                s.rc0_ho_attempts, s.rc0_ho_success, s.rc0_ho_success_rate);
 
+        {
+            ext_snap_t e;
+            memset(&e, 0, sizeof(e));
+            fill_ext_snapshot(&e, metrics);
+            if (e.present) {
+                printf("\n--- OCUDU extension: CSI (last report per UE) ---\n");
+                printf("  reports=%lu invalid=%lu\n", (unsigned long)e.csi_reports, (unsigned long)e.csi_invalid_reports);
+                for (int i = 0; i < MAX_NO_UEs; i++) {
+                    const aurora_csi_ue_stats_t *c = &metrics->ext.csi[i];
+                    if (c->rnti == 0) continue;
+                    printf("  UE 0x%04x: RI=%u LI=%u CQI(tb1/tb2)=%u/%u subbands=%u PMI type=%u i11=%u i12=%u i13=%u i2=%u"
+                           " nof_rs=%u best_L1-RSRP=%d dBm (%s)\n",
+                           c->rnti, c->ri, c->li, c->wb_cqi_tb1, c->wb_cqi_tb2, c->nof_subbands_tb1, c->pmi_type,
+                           c->pmi_i11, c->pmi_i12, c->pmi_i13, c->pmi_i2, c->nof_rs, c->l1_rsrp_best_dbm,
+                           c->rsrp_from_ssb ? "SSBRI" : "CRI");
+                }
+                printf("  UL failure: ues=%u timer_ms max=%.0f\n", e.ul_failure_ues,
+                       e.ul_failure_timer_ms.n ? e.ul_failure_timer_ms.max : 0.0);
+                printf("\n--- OCUDU extension: handover per source DU ---\n");
+                printf("  N2 preparations: attempts=%u success=%u (total %u/%u)\n", e.ho_prep_attempts,
+                       e.ho_prep_success, e.ho_prep_attempts_total, e.ho_prep_success_total);
+                for (uint32_t k = 0; k < metrics->ext.ho_du_count && k < AURORA_MAX_HO_DUS; k++) {
+                    const aurora_du_ho_stats_t *d = &metrics->ext.ho_du[k];
+                    printf("  DU %lu: exec attempts=%u success=%u (total %u/%u, rate=%.3f)\n",
+                           (unsigned long)d->gnb_du_id, d->exec_attempts, d->exec_success, d->exec_attempts_total,
+                           d->exec_success_total, d->exec_success_rate);
+                }
+            }
+        }
         printf("\n--- Process resource usage (delta) ---\n");
         printf("  user_cpu=%lu us  sys_cpu=%lu us  rss=%lu kB\n",
                s.ru_utime_us, s.ru_stime_us, s.ru_maxrss_kb);

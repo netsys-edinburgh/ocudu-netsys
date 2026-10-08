@@ -304,6 +304,94 @@ typedef struct {
     float    rx_loss_rate;   // Per-interval RX packet loss rate (rx_err_pkts / (rx_pkts + rx_err_pkts))
 } aurora_gtp_tunnel_stats_t;
 
+/* ===================================================================================================================
+ * OCUDU extension (appended after the OAI layout, which stays byte-identical so OAI-built readers keep working on the
+ * common prefix). Check `ext.version` / `ext.size` before using it.
+ * =================================================================================================================== */
+#define AURORA_EXT_VERSION         1
+#define AURORA_CSI_MAX_RS          4   /* csi_max_nof_reported_rs */
+#define AURORA_CSI_MAX_SUBBANDS    18  /* csi_max_nof_subbands */
+#define AURORA_CSI_MAX_T2_LAYERS   2   /* max_nof_typeII_layers */
+#define AURORA_CSI_MAX_T2_COEFFS   8   /* max_nof_typeII_coefficients */
+#define AURORA_MAX_HO_DUS          16
+#define AURORA_CSI_NOT_REPORTED    0xFF
+
+/* PMI codebook of the last CSI report (aurora_csi_ue_stats_t.pmi_type). */
+#define AURORA_PMI_NONE            0
+#define AURORA_PMI_TWO_PORT        1
+#define AURORA_PMI_TYPEI_SP        2   /* Type-I single panel */
+#define AURORA_PMI_TYPEII          3
+
+/* Full content of the last decoded UE CSI report (OCUDU csi_report_data) plus interval report counters.
+ * Indexed like mac_ue_stats (ue_index % MAX_NO_UEs); rnti == 0 means unused. 8-bit fields set to
+ * AURORA_CSI_NOT_REPORTED (0xFF) when the quantity was not part of the last report. */
+typedef struct {
+    uint32_t rnti;
+    uint32_t nof_reports;             /* interval: CSI reports received (valid + invalid) */
+    uint32_t nof_invalid_reports;     /* interval: reports flagged invalid (not decoded / DTX) */
+
+    /* CRI / L1-RSRP (cri-RSRP or ssb-Index-RSRP report quantity). */
+    uint8_t  nof_rs;                  /* number of reported resources (0..4) */
+    uint8_t  rsrp_from_ssb;           /* 1: SSB resource indexes (SSBRI), 0: CSI-RS resource indexes (CRI) */
+    uint8_t  cri[AURORA_CSI_MAX_RS];  /* CRI / SSBRI of each reported resource */
+    int16_t  l1_rsrp_dbm[AURORA_CSI_MAX_RS]; /* L1-RSRP of each reported resource, dBm [-140, -44] */
+    int16_t  l1_rsrp_best_dbm;        /* strongest reported L1-RSRP, dBm (0 if none) */
+
+    /* RI / LI / CQI. */
+    uint8_t  ri;                      /* rank indicator 1..8 */
+    uint8_t  li;                      /* layer indicator 0..7 */
+    uint8_t  wb_cqi_tb1;              /* wideband CQI, first TB, 0..15 */
+    uint8_t  wb_cqi_tb2;              /* wideband CQI, second TB, 0..15 */
+    uint8_t  nof_subbands_tb1;
+    uint8_t  nof_subbands_tb2;
+    uint8_t  sb_cqi_diff_tb1[AURORA_CSI_MAX_SUBBANDS]; /* subband differential CQI 0..3 */
+    uint8_t  sb_cqi_diff_tb2[AURORA_CSI_MAX_SUBBANDS];
+
+    /* PMI. */
+    uint8_t  pmi_type;                /* AURORA_PMI_* */
+    uint8_t  pmi_two_port;            /* two-port codebook PMI 0..3 */
+    uint8_t  pmi_i11;                 /* Type-I SP / Type-II i1,1 */
+    uint8_t  pmi_i12;                 /* Type-I SP i1,2 (0xFF if absent) */
+    uint8_t  pmi_i13;                 /* Type-I SP i1,3 (0xFF if absent) */
+    uint8_t  pmi_i2;                  /* Type-I SP i2 */
+    uint16_t t2_i12;                  /* Type-II i1,2 (beam combination) */
+    uint8_t  t2_nof_layers;
+    uint8_t  t2_i13[AURORA_CSI_MAX_T2_LAYERS];         /* strongest coefficient per layer */
+    uint8_t  t2_nof_coeffs[AURORA_CSI_MAX_T2_LAYERS];
+    uint8_t  t2_i14[AURORA_CSI_MAX_T2_LAYERS][AURORA_CSI_MAX_T2_COEFFS]; /* wideband amplitudes */
+    uint8_t  t2_i21[AURORA_CSI_MAX_T2_LAYERS][AURORA_CSI_MAX_T2_COEFFS]; /* phases */
+    uint8_t  t2_i22[AURORA_CSI_MAX_T2_LAYERS][AURORA_CSI_MAX_T2_COEFFS]; /* subband amplitudes */
+    uint8_t  _pad[2];
+} aurora_csi_ue_stats_t;
+
+/* Handover executions per source DU (CU-CP mobility manager, keyed by gNB-DU ID). */
+typedef struct {
+    uint64_t gnb_du_id;
+    uint32_t valid;
+    uint32_t exec_attempts;           /* interval */
+    uint32_t exec_success;            /* interval */
+    uint32_t exec_attempts_total;     /* cumulative */
+    uint32_t exec_success_total;      /* cumulative */
+    uint32_t _pad;
+    double   exec_success_rate;       /* exec_success_total / exec_attempts_total */
+} aurora_du_ho_stats_t;
+
+struct aurora_metrics_ext {
+    uint32_t version;                 /* AURORA_EXT_VERSION */
+    uint32_t size;                    /* sizeof(struct aurora_metrics_ext) */
+
+    aurora_csi_ue_stats_t csi[MAX_NO_UEs];
+
+    /* Handover. Executions per source DU; preparations (N2 inter-gNB source side) are not per DU. */
+    uint32_t             ho_du_count;
+    uint32_t             _pad0;
+    aurora_du_ho_stats_t ho_du[AURORA_MAX_HO_DUS];
+    uint32_t             ho_prep_attempts;        /* interval */
+    uint32_t             ho_prep_success;         /* interval */
+    uint32_t             ho_prep_attempts_total;  /* cumulative */
+    uint32_t             ho_prep_success_total;   /* cumulative */
+};
+
 struct aurora_metrics {
     ran_type_t ran_type;
     uint32_t collection_interval_ms;  // Configured collection interval in milliseconds
@@ -488,6 +576,9 @@ struct aurora_metrics {
      * Populated by the aurora_thread procfs/eBPF collector.
      * ------------------------------------------------------- */
     aurora_thread_stats_t thread_stats;
+
+    /* OCUDU extension, see struct aurora_metrics_ext. Must stay the last member. */
+    struct aurora_metrics_ext ext;
 };
 
 

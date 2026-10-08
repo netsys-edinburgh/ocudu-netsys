@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <thread>
 #include <unistd.h>
 
 using namespace ocudu;
@@ -212,10 +213,12 @@ TEST_F(aurora_core_test, cross_ue_aggregates_kpm_and_rc_cell)
   on_ul_crc(1, 0x4601, true, 30.0F);
   csi_info c0;
   c0.wb_cqi      = 7;
-  c0.l1_rsrp_dbm = -90.0F;
+  c0.nof_rs         = 1;
+  c0.l1_rsrp_dbm[0] = -90;
   csi_info c1;
   c1.wb_cqi      = 13;
-  c1.l1_rsrp_dbm = -70.0F;
+  c1.nof_rs         = 1;
+  c1.l1_rsrp_dbm[0] = -70;
   on_csi_report(0, c0);
   on_csi_report(1, c1);
   on_bsr(0, 1000);
@@ -347,21 +350,152 @@ TEST_F(aurora_core_test, gtp_tunnel_counters_loss_and_unknown_teid)
   EXPECT_EQ(t.tx_proc_latency_us, 2U);
 }
 
-TEST_F(aurora_core_test, handover_counters_are_cumulative)
+TEST_F(aurora_core_test, handover_counters_per_du_and_totals)
 {
-  on_handover_attempt(11);
-  on_handover_attempt(11);
-  on_handover_success(11);
+  const uint64_t du_a = 0x1'0000'0011ULL; // gNB-DU IDs are up to 36 bits.
+  const uint64_t du_b = 22;
+  on_handover_attempt(du_a);
+  on_handover_attempt(du_a);
+  on_handover_success(du_a);
+  on_handover_attempt(du_b);
+  on_handover_success(du_b);
+  on_handover_preparation_attempt();
+  on_handover_preparation_success();
   on_du_count(3);
   on_serving_cell_rsrq(-10.0F);
   on_serving_cell_rsrq(-12.0F);
   const aurora_metrics& r = publish();
-  EXPECT_EQ(r.rc_metrics[0].cell_id, 11U);
-  EXPECT_EQ(r.rc_metrics[0].handover_attempts, 2U);
-  EXPECT_DOUBLE_EQ(r.rc_metrics[0].handover_success_rate, 0.5);
+  // RC cell 0: totals over DUs, cumulative.
+  EXPECT_EQ(r.rc_cell_count, 1U);
+  EXPECT_EQ(r.rc_metrics[0].handover_attempts, 3U);
+  EXPECT_EQ(r.rc_metrics[0].handover_success, 2U);
+  EXPECT_NEAR(r.rc_metrics[0].handover_success_rate, 2.0 / 3, 1e-9);
   EXPECT_DOUBLE_EQ(r.rc_metrics[0].rsrq_avg, -11.0);
   EXPECT_EQ(r.du_count, 3U);
-  EXPECT_EQ(publish().rc_metrics[0].handover_attempts, 2U);
+  // Per-DU table.
+  ASSERT_EQ(r.ext.ho_du_count, 2U);
+  EXPECT_EQ(r.ext.ho_du[0].gnb_du_id, du_a);
+  EXPECT_EQ(r.ext.ho_du[0].exec_attempts, 2U);
+  EXPECT_EQ(r.ext.ho_du[0].exec_success, 1U);
+  EXPECT_DOUBLE_EQ(r.ext.ho_du[0].exec_success_rate, 0.5);
+  EXPECT_EQ(r.ext.ho_du[1].gnb_du_id, du_b);
+  EXPECT_DOUBLE_EQ(r.ext.ho_du[1].exec_success_rate, 1.0);
+  EXPECT_EQ(r.ext.ho_prep_attempts, 1U);
+  EXPECT_EQ(r.ext.ho_prep_success_total, 1U);
+  // Next interval: deltas reset, totals kept.
+  const aurora_metrics& r2 = publish();
+  EXPECT_EQ(r2.ext.ho_du[0].exec_attempts, 0U);
+  EXPECT_EQ(r2.ext.ho_du[0].exec_attempts_total, 2U);
+  EXPECT_EQ(r2.ext.ho_prep_attempts, 0U);
+  EXPECT_EQ(r2.rc_metrics[0].handover_attempts, 3U);
+}
+
+TEST_F(aurora_core_test, full_csi_report_is_published_in_extension)
+{
+  on_ue_created(8, 0x4608);
+  csi_info c;
+  c.nof_rs         = 2;
+  c.cri            = {3, 1, 0, 0};
+  c.l1_rsrp_dbm    = {-95, -80, 0, 0};
+  c.rsrp_from_ssb  = true;
+  c.ri             = 2;
+  c.li             = 1;
+  c.wb_cqi         = 12;
+  c.wb_cqi_tb2     = 9;
+  c.nof_subbands_tb1 = 3;
+  c.sb_cqi_diff_tb1  = {0, 1, 3};
+  c.pmi            = csi_info::pmi_kind::typeI_single_panel;
+  c.pmi_i1         = 5;
+  c.pmi_i12        = 2;
+  c.pmi_i2         = 1;
+  on_csi_report(8, c);
+  csi_info bad;
+  bad.valid = false;
+  on_csi_report(8, bad);
+
+  const aurora_metrics&        r = publish();
+  const aurora_csi_ue_stats_t& x = r.ext.csi[8];
+  EXPECT_EQ(r.ext.version, unsigned(AURORA_EXT_VERSION));
+  EXPECT_EQ(x.rnti, 0x4608U);
+  EXPECT_EQ(x.nof_reports, 2U);
+  EXPECT_EQ(x.nof_invalid_reports, 1U);
+  EXPECT_EQ(x.nof_rs, 2);
+  EXPECT_EQ(x.cri[0], 3);
+  EXPECT_EQ(x.l1_rsrp_dbm[1], -80);
+  EXPECT_EQ(x.l1_rsrp_best_dbm, -80);
+  EXPECT_EQ(x.rsrp_from_ssb, 1);
+  EXPECT_EQ(x.ri, 2);
+  EXPECT_EQ(x.li, 1);
+  EXPECT_EQ(x.wb_cqi_tb1, 12);
+  EXPECT_EQ(x.wb_cqi_tb2, 9);
+  EXPECT_EQ(x.nof_subbands_tb1, 3);
+  EXPECT_EQ(x.sb_cqi_diff_tb1[2], 3);
+  EXPECT_EQ(x.nof_subbands_tb2, 0);
+  EXPECT_EQ(x.pmi_type, AURORA_PMI_TYPEI_SP);
+  EXPECT_EQ(x.pmi_i11, 5);
+  EXPECT_EQ(x.pmi_i12, 2);
+  EXPECT_EQ(x.pmi_i13, AURORA_CSI_NOT_REPORTED);
+  EXPECT_EQ(x.pmi_i2, 1);
+  // OAI-layout mirrors.
+  EXPECT_EQ(r.mac_ue_stats[8].ssb_rsrp_best, -80);
+  EXPECT_EQ(r.mac_ue_stats[8].ri, 2);
+  EXPECT_EQ(r.mac_ue_stats[8].pmi_x1, 5);
+  // Counters are per interval; the last report persists.
+  const aurora_metrics& r2 = publish();
+  EXPECT_EQ(r2.ext.csi[8].nof_reports, 0U);
+  EXPECT_EQ(r2.ext.csi[8].ri, 2);
+}
+
+TEST_F(aurora_core_test, csi_quantities_are_not_reported_until_first_report)
+{
+  on_ue_created(13, 0x4613);
+  const aurora_csi_ue_stats_t& x = publish().ext.csi[13];
+  EXPECT_EQ(x.rnti, 0x4613U);
+  EXPECT_EQ(x.ri, AURORA_CSI_NOT_REPORTED);
+  EXPECT_EQ(x.wb_cqi_tb1, AURORA_CSI_NOT_REPORTED);
+  EXPECT_EQ(x.pmi_i11, AURORA_CSI_NOT_REPORTED);
+  EXPECT_EQ(x.pmi_type, AURORA_PMI_NONE);
+  EXPECT_EQ(x.nof_rs, 0);
+}
+
+TEST_F(aurora_core_test, type2_pmi_coefficients_are_published)
+{
+  on_ue_created(9, 0x4609);
+  csi_info c;
+  c.pmi              = csi_info::pmi_kind::typeII;
+  c.pmi_i1           = 4;
+  c.t2_i12           = 300;
+  c.t2_nof_layers    = 2;
+  c.t2_i13           = {6, 2};
+  c.t2_nof_coeffs    = {8, 8};
+  c.t2_i14[1][7]     = 7;
+  c.t2_i21[0][3]     = 5;
+  c.t2_i22[1][0]     = 1;
+  on_csi_report(9, c);
+  const aurora_csi_ue_stats_t& x = publish().ext.csi[9];
+  EXPECT_EQ(x.pmi_type, AURORA_PMI_TYPEII);
+  EXPECT_EQ(x.pmi_i11, 4);
+  EXPECT_EQ(x.t2_i12, 300);
+  EXPECT_EQ(x.t2_nof_layers, 2);
+  EXPECT_EQ(x.t2_i13[1], 2);
+  EXPECT_EQ(x.t2_i14[1][7], 7);
+  EXPECT_EQ(x.t2_i21[0][3], 5);
+  EXPECT_EQ(x.t2_i22[1][0], 1);
+}
+
+TEST_F(aurora_core_test, ul_failure_timer_counts_milliseconds_since_rlf)
+{
+  on_ue_created(12, 0x4612);
+  on_ul_failure(12, true);
+  std::this_thread::sleep_for(std::chrono::milliseconds{120});
+  const aurora_metrics& r = publish();
+  EXPECT_EQ(r.mac_ue_stats[12].ul_failure, 1);
+  EXPECT_GE(r.mac_ue_stats[12].ul_failure_timer, 120U);
+  EXPECT_LT(r.mac_ue_stats[12].ul_failure_timer, 2000U);
+  on_ul_failure(12, false);
+  const aurora_metrics& r2 = publish();
+  EXPECT_EQ(r2.mac_ue_stats[12].ul_failure, 0);
+  EXPECT_EQ(r2.mac_ue_stats[12].ul_failure_timer, 0U);
 }
 
 TEST_F(aurora_core_test, events_of_unknown_or_removed_ues_do_not_create_ghost_slots)

@@ -183,8 +183,10 @@ void publish_mac_ue(aurora_metrics& m, mac_ue_acc& u, unsigned slot, ue_totals& 
   aurora_fapi_ue_metrics_t& f = m.fapi_ue_metrics[slot];
   std::memset(&f, 0, sizeof(f));
 
+  aurora_csi_ue_stats_t& csi = m.ext.csi[slot];
   if (!get(u.active)) {
     std::memset(&o, 0, sizeof(o));
+    std::memset(&csi, 0, sizeof(csi));
     return;
   }
   if (take(u.reset_starvation, false)) {
@@ -194,6 +196,15 @@ void publish_mac_ue(aurora_metrics& m, mac_ue_acc& u, unsigned slot, ue_totals& 
   uint16_t rnti = get(u.rnti);
   // The reader treats rnti == 0 as an unused slot; keep the slot visible even before the C-RNTI is known.
   o.rnti = rnti != 0 ? rnti : slot + 1;
+
+  // OCUDU extension: full last CSI report + interval report counters.
+  {
+    std::lock_guard<std::mutex> lock(u.csi_mutex);
+    csi = u.csi_snapshot;
+  }
+  csi.rnti                = o.rnti;
+  csi.nof_reports         = take(u.csi_reports);
+  csi.nof_invalid_reports = take(u.csi_invalid_reports);
 
   o.dl_aggr_tbs        = take(u.dl_tbs);
   o.ul_aggr_tbs        = take(u.ul_tbs);
@@ -509,36 +520,55 @@ void publish_aggregates(aurora_metrics& m,
   set_kpm(k[15], 16, "L1M.UL-dtxRatio", true, 0, t.ul_harq != 0 ? double(t.ul_dtx) / double(t.ul_harq) : 0);
   m.kpm_metric_count = 16;
 
-  // Group 11: RC cells. Cell 0 = serving cell (MAC-derived), handover counters per cell.
+  // Group 11: RC cell 0 = serving cell (MAC-derived) + handover totals (OCUDU counts HO executions per source DU;
+  // the per-DU breakdown is in ext.ho_du[]).
   uint32_t rsrq_n   = take(st.rsrq_count);
   float    rsrq_sum = take(st.rsrq_sum, 0.0F);
-  unsigned nof_cells = 0;
-  for (unsigned i = 0; i != max_rc_cells; ++i) {
-    if (get(st.rc_cells[i].used)) {
-      nof_cells = i + 1;
+  uint32_t ho_att = 0, ho_succ = 0;
+  for (const auto& d : st.ho_dus) {
+    if (get(d.used)) {
+      ho_att += get(d.attempts_total);
+      ho_succ += get(d.success_total);
     }
   }
-  bool has_mac = (m.ran_type == RAN_GNB || m.ran_type == RAN_DU);
-  if (has_mac && nof_cells == 0) {
-    nof_cells = 1;
-  }
-  m.rc_cell_count = nof_cells;
-  for (unsigned i = 0; i != max_rc_cells; ++i) {
-    aurora_rc_stats_t& rc = m.rc_metrics[i];
-    rc_cell_acc&       a  = st.rc_cells[i];
-    rc.cell_id            = get(a.used) ? get(a.cell_id) : (i == 0 ? get(st.cell_pci) : 0);
-    rc.handover_attempts  = get(a.ho_attempts);
-    rc.handover_success   = get(a.ho_success);
-    rc.handover_success_rate =
-        rc.handover_attempts != 0 ? double(rc.handover_success) / double(rc.handover_attempts) : 0.0;
-    if (i == 0) {
-      rc.rsrp_avg          = rsrp_avg;
-      rc.rsrq_avg          = rsrq_n != 0 ? double(rsrq_sum) / rsrq_n : 0.0;
-      rc.sinr_avg          = sinr_avg;
-      rc.cell_load_percent = uint32_t(std::min(100.0F, m.dl_prb_utilization_pct));
-      rc.interference_level = sinr_avg >= 20.0 ? 0 : (sinr_avg >= 5.0 ? 1 : 2);
+  bool has_mac    = (m.ran_type == RAN_GNB || m.ran_type == RAN_DU);
+  m.rc_cell_count = (has_mac || ho_att != 0) ? 1 : 0;
+  std::memset(m.rc_metrics, 0, sizeof(m.rc_metrics));
+  aurora_rc_stats_t& rc    = m.rc_metrics[0];
+  rc.cell_id               = get(st.cell_pci);
+  rc.handover_attempts     = ho_att;
+  rc.handover_success      = ho_succ;
+  rc.handover_success_rate = ho_att != 0 ? double(ho_succ) / double(ho_att) : 0.0;
+  rc.rsrp_avg              = rsrp_avg;
+  rc.rsrq_avg              = rsrq_n != 0 ? double(rsrq_sum) / rsrq_n : 0.0;
+  rc.sinr_avg              = sinr_avg;
+  rc.cell_load_percent     = uint32_t(std::min(100.0F, m.dl_prb_utilization_pct));
+  rc.interference_level    = sinr_avg >= 20.0 ? 0 : (sinr_avg >= 5.0 ? 1 : 2);
+}
+
+void publish_handover_ext(aurora_metrics_ext& x, global_state& st)
+{
+  unsigned n = 0;
+  std::memset(x.ho_du, 0, sizeof(x.ho_du));
+  for (auto& d : st.ho_dus) {
+    if (!get(d.used) || n == AURORA_MAX_HO_DUS) {
+      continue;
     }
+    aurora_du_ho_stats_t& o = x.ho_du[n++];
+    o.gnb_du_id             = get(d.gnb_du_id);
+    o.valid                 = 1;
+    o.exec_attempts         = take(d.attempts);
+    o.exec_success          = take(d.success);
+    o.exec_attempts_total   = get(d.attempts_total);
+    o.exec_success_total    = get(d.success_total);
+    o.exec_success_rate =
+        o.exec_attempts_total != 0 ? double(o.exec_success_total) / double(o.exec_attempts_total) : 0.0;
   }
+  x.ho_du_count            = n;
+  x.ho_prep_attempts       = take(st.ho_prep_attempts);
+  x.ho_prep_success        = take(st.ho_prep_success);
+  x.ho_prep_attempts_total = get(st.ho_prep_attempts_total);
+  x.ho_prep_success_total  = get(st.ho_prep_success_total);
 }
 
 void publish_rusage(aurora_metrics& m)
@@ -573,6 +603,8 @@ void detail::init_shm_content(aurora_metrics& out, const config& cfg)
   out.dl_fapi_prb_min = out.ul_fapi_prb_min = u32_max;
   out.dl_fapi_tbs_min = out.ul_fapi_tbs_min = u32_max;
   out.timestamp_us                          = aurora_get_current_timestamp_us();
+  out.ext.version                           = AURORA_EXT_VERSION;
+  out.ext.size                              = sizeof(aurora_metrics_ext);
 }
 
 void detail::publish_interval(aurora_metrics& m, global_state& st)
@@ -592,6 +624,7 @@ void detail::publish_interval(aurora_metrics& m, global_state& st)
   publish_pdcp(m, st, pdcp_tx, pdcp_rx);
   publish_gtp(m, st);
   publish_aggregates(m, st, t, pdcp_tx, pdcp_rx);
+  publish_handover_ext(m.ext, st);
   publish_rusage(m);
 
   if (st.cfg.thread_metrics_enabled) {

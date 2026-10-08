@@ -736,6 +736,15 @@ TEST_F(cu_cp_inter_du_handover_test, when_ho_succeeds_then_aurora_handover_count
   EXPECT_EQ(snapshot->rc_metrics[0].handover_attempts, 1U);
   EXPECT_EQ(snapshot->rc_metrics[0].handover_success, 1U);
   EXPECT_DOUBLE_EQ(snapshot->rc_metrics[0].handover_success_rate, 1.0);
+  // Per source DU (OCUDU extension).
+  ASSERT_EQ(snapshot->ext.ho_du_count, 1U);
+  EXPECT_EQ(snapshot->ext.ho_du[0].exec_attempts, 1U);
+  EXPECT_EQ(snapshot->ext.ho_du[0].exec_success, 1U);
+  bool is_known_du = false;
+  for (const auto& du : this->get_cu_cp().get_metrics_handler().request_metrics_report().dus) {
+    is_known_du |= static_cast<uint64_t>(du.id) == snapshot->ext.ho_du[0].gnb_du_id;
+  }
+  EXPECT_TRUE(is_known_du) << "per-DU HO entry must carry a connected gNB-DU ID";
 
   aurora::stop();
 }
