@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ocudu/aurora/aurora.h"
 #include "ocudu/mac/mac_config.h"
 #include "ocudu/mac/mac_ue_configurator.h"
 #include "ocudu/ocudulog/ocudulog.h"
@@ -92,6 +93,8 @@ public:
     ues[ue_index].ko_counters[0].store(0, std::memory_order_relaxed);
     ues[ue_index].ko_counters[1].store(0, std::memory_order_relaxed);
     ues[ue_index].ko_counters[2].store(0, std::memory_order_relaxed);
+    aurora::on_ul_failure(ue_index, false);
+    report_consecutive_kos(ue_index);
     if (not ctrl_exec.defer([this, ue_index]() {
           auto* notifier = ues[ue_index].notifier;
           if (notifier != nullptr) {
@@ -104,6 +107,18 @@ public:
   }
 
 private:
+  /// AURORA: OAI pusch_consecutive_dtx_cnt / pucch_consecutive_dtx_cnt equivalents (consecutive CRC KOs and
+  /// consecutive undecoded PUCCH CSIs).
+  void report_consecutive_kos(du_ue_index_t ue_index) const
+  {
+    if (aurora::is_active()) {
+      aurora::on_consecutive_ul_ko(
+          ue_index,
+          ues[ue_index].ko_counters[(size_t)mac_rlf_cause::max_consecutive_crc_kos].load(std::memory_order_relaxed),
+          ues[ue_index].ko_counters[(size_t)mac_rlf_cause::max_consecutive_csi_dtx].load(std::memory_order_relaxed));
+    }
+  }
+
   void handle_event(du_cell_index_t cell_index, du_ue_index_t ue_index, mac_rlf_cause cause, bool valid)
   {
     ocudu_assert(ue_index < MAX_NOF_DU_UES, "Invalid ue_index={}", ue_index);
@@ -113,11 +128,13 @@ private:
     if (valid) {
       // Reset counter back to zero.
       ko_counter.store(0, std::memory_order::memory_order_relaxed);
+      report_consecutive_kos(ue_index);
       return;
     }
 
     // Increment consecutive KOs.
     unsigned       current_count = ko_counter.fetch_add(1, std::memory_order::memory_order_relaxed) + 1;
+    report_consecutive_kos(ue_index);
     const unsigned max_kos       = get_max_kos(cell_index, cause);
 
     // Note: We use != instead of < to ensure only one notification is sent.
@@ -136,6 +153,7 @@ private:
                                         ? "HARQ-ACK KOs"
                                         : (cause == mac_rlf_cause::max_consecutive_crc_kos ? "CRC KOs" : "undecoded CSIs");
           logger.info("ue={}: RLF detected. Cause: {} consecutive {}", ue_index, ko_count, ev_str);
+          aurora::on_ul_failure(ue_index, true);
 
           // Notify upper layers.
           notifier->on_rlf_detected(cause);

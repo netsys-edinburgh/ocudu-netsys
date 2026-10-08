@@ -132,8 +132,9 @@ struct csi_info {
 void on_csi_report(unsigned ue_index, const csi_info& csi) noexcept;
 void on_bsr(unsigned ue_index, uint32_t nof_bytes) noexcept;
 void on_phr(unsigned ue_index, int ph_db) noexcept;
-/// RLC DL buffer occupancy reported to MAC for one UE (sum over its logical channels).
-void on_dl_buffer_state(unsigned ue_index, uint32_t nof_bytes) noexcept;
+/// RLC DL buffer occupancy update of one logical channel. AURORA samples the per-UE total (sum over LCIDs), as OAI
+/// update_dlsch_buffer() does.
+void on_dl_buffer_state(unsigned ue_index, unsigned lcid, uint32_t nof_bytes) noexcept;
 /// MAC SDU (RLC PDU) multiplexed into a DL MAC PDU.
 void on_mac_dl_sdu(unsigned ue_index, uint32_t nof_bytes) noexcept;
 /// MAC SDU demultiplexed from a UL MAC PDU and delivered to RLC.

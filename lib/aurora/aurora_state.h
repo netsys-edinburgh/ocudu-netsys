@@ -22,6 +22,7 @@ constexpr unsigned nof_hist_bins    = AURORA_HIST_BINS;
 constexpr unsigned max_gtp_tunnels  = max_rbs_per_ue;
 constexpr uint32_t u32_max          = std::numeric_limits<uint32_t>::max();
 constexpr unsigned dl_harq_round_nb = 5; ///< Size of the OAI dl_harq[]/ul_harq[] arrays.
+constexpr unsigned max_lcids        = 64;
 
 inline unsigned ue_slot(unsigned ue_index)
 {
@@ -134,6 +135,9 @@ struct mac_ue_acc {
   std::atomic<uint32_t> pusch_kos{0}, pucch_kos{0};
   std::atomic<bool>     ul_failure{false};
   std::atomic<uint64_t> ul_failure_since_ns{0};
+
+  // Last DL buffer occupancy per logical channel.
+  std::array<std::atomic<uint32_t>, max_lcids> dl_bo{};
 
   // DL HARQ consecutive NACK/DTX per HARQ process.
   std::array<std::atomic<uint32_t>, max_harq_ids> cons_nack{};

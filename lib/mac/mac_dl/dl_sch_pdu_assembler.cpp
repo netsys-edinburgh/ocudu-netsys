@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "ocudu/aurora/aurora.h"
 #include "dl_sch_pdu_assembler.h"
 #include "cell_dl_harq_buffer_pool.h"
 #include "ocudu/mac/mac_pdu_format.h"
@@ -389,6 +390,10 @@ void dl_sch_pdu_assembler::assemble_sdus(dl_sch_pdu&           ue_pdu,
                    lcid,
                    mac_opportunity_size);
       break;
+    }
+
+    if (aurora::is_active()) {
+      aurora::on_mac_dl_sdu(ue_mng.get_ue_index(rnti), static_cast<uint32_t>(sdu_actual_len));
     }
 
     // Encode MAC subheader + SDU.

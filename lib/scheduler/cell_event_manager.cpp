@@ -3,6 +3,8 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "cell_event_manager.h"
+#include "logging/aurora_sched_tap.h"
+#include "ocudu/aurora/aurora.h"
 #include "cell/resource_grid.h"
 #include "common_scheduling/paging_scheduler.h"
 #include "common_scheduling/ra_scheduler.h"
@@ -315,6 +317,7 @@ public:
       if (parent.ue_ev_handler.handle_dl_buffer_state_indication(dl_bo)) {
         parent.ev_logger.enqueue(dl_bo);
         parent.metrics.handle_dl_buffer_state_indication(dl_bo);
+        aurora::on_dl_buffer_state(dl_bo.ue_index, dl_bo.lcid, static_cast<uint32_t>(dl_bo.bs));
       }
     }
   }
@@ -475,6 +478,7 @@ void cell_event_manager::handle_ue_crc(slot_point sl_rx, const ul_crc_pdu_indica
   // \ref pusch_transmitted is true if the gnb detected that the PUSCH was transmitted, false if it was DTX.
   auto [tbs, pusch_transmitted] = crc_process_res.value();
   if (not pusch_transmitted) {
+    aurora::on_ul_dtx(crc.ue_index);
     ev_logger.enqueue(scheduler_event_logger::crc_event{crc.ue_index,
                                                         crc.rnti,
                                                         cell_cfg.cell_index,
@@ -504,6 +508,7 @@ void cell_event_manager::handle_ue_crc(slot_point sl_rx, const ul_crc_pdu_indica
 
   // Notify metrics handler.
   metrics.handle_crc_indication(sl_rx, crc, tbs);
+  aurora::on_ul_crc(crc.ue_index, to_underlying(crc.rnti), crc.tb_crc_success, crc.ul_sinr_dB);
 }
 
 void cell_event_manager::handle_positioning_measurement_request(const positioning_measurement_request::cell_info& req)
@@ -530,6 +535,9 @@ void cell_event_manager::handle_ue_creation(ue_config_update_event ev)
       // Trace/log event.
       ev_logger.enqueue(scheduler_event_logger::ue_creation_event{ue_index, crnti, cell_cfg.cell_index});
       metrics.handle_ue_creation(ue_index, crnti, pci);
+      aurora::on_ue_created(ue_index, to_underlying(crnti));
+      // OAI dl_max_mcs: link-adaptation ceiling for the UE (scheduler expert DL MCS range upper bound).
+      aurora::on_dl_max_mcs(ue_index, cell_cfg.expert_cfg.ue.dl_mcs.stop().value());
     }
   });
 }
@@ -593,6 +601,11 @@ void cell_event_manager::handle_ul_bsr_indication(const ul_bsr_indication_messag
     if (ue_ev_handler.handle_ul_bsr_indication(*bsr_ptr)) {
       ev_logger.enqueue(*bsr_ptr);
       metrics.handle_ul_bsr_indication(*bsr_ptr);
+      uint32_t bsr_bytes = 0;
+      for (const auto& lcg : bsr_ptr->reported_lcgs) {
+        bsr_bytes += lcg.nof_bytes;
+      }
+      aurora::on_bsr(bsr_ptr->ue_index, bsr_bytes);
     }
   });
 }
@@ -607,6 +620,11 @@ void cell_event_manager::handle_ul_phr_indication(const ul_phr_indication_messag
     if (ue_ev_handler.handle_ul_phr_indication(*phr_ptr)) {
       ev_logger.enqueue(*phr_ptr);
       metrics.handle_ul_phr_indication(*phr_ptr);
+      if (not phr_ptr->phr.get_phr().empty()) {
+        // Midpoint of the reported PH range, as the scheduler metrics do.
+        const interval<int> ph = phr_ptr->phr.get_phr().front().ph;
+        aurora::on_phr(phr_ptr->ue_index, (ph.start() + ph.stop()) / 2);
+      }
     }
   });
 }
@@ -799,6 +817,9 @@ void cell_event_manager::handle_uci_pdu(slot_point uci_sl, const uci_indication:
 
   // Report the UCI PDU to the metrics handler.
   metrics.handle_uci_pdu_indication(uci_pdu.ue_index, *action);
+  if (action->ul_sinr_dB.has_value() and action->type != uci_action::pdu_type::pusch) {
+    aurora::on_pucch_snr(uci_pdu.ue_index, *action->ul_sinr_dB);
+  }
 }
 
 bool cell_event_manager::is_msgb_harq_ack_slot(rnti_t rnti, slot_point uci_sl) const
@@ -854,6 +875,12 @@ void cell_event_manager::handle_harq_ind(ue_cell&                             ue
 
     // Notify metrics handler with HARQ outcome.
     metrics.handle_dl_harq_ack(ue_cc.ue_index, status == mac_harq_ack_report_status::ack, tbs);
+    aurora::on_dl_harq_feedback(ue_cc.ue_index,
+                                to_underlying(ue_cc.rnti()),
+                                static_cast<unsigned>(h_dl->id()),
+                                status == mac_harq_ack_report_status::ack    ? aurora::harq_ack_status::ack
+                                : status == mac_harq_ack_report_status::nack ? aurora::harq_ack_status::nack
+                                                                             : aurora::harq_ack_status::dtx);
   }
 }
 
@@ -864,6 +891,7 @@ void cell_event_manager::handle_csi(ue_cell& ue_cc, slot_point sl_rx, const csi_
 
   // Log event.
   csi_report_event event{ue_cc.ue_index, ue_cc.rnti(), sl_rx, csi_rep};
+  aurora_report_csi(ue_cc.ue_index, ue_cc.cfg().csi_meas_cfg(), csi_rep);
   ev_tracer.on_event(event);
   ev_logger.enqueue(event);
 }

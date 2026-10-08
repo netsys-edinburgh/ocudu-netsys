@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "ocudu/aurora/aurora.h"
 #include "pdu_rx_handler.h"
 #include "ocudu/adt/format.h"
 #include "mac_ul_cell_metric_handler.h"
@@ -189,6 +190,8 @@ bool pdu_rx_handler::handle_sdu(const decoded_mac_rx_pdu& ctx, const mac_ul_sch_
 
   // Log MAC UL SDU
   logger.debug("{}: Forwarding SDU of {} bytes", create_prefix(ctx, sdu), sdu.sdu_length());
+
+  aurora::on_mac_ul_sdu(ue->ue_index, static_cast<uint32_t>(sdu.sdu_length()));
 
   // Push PDU to upper layers
   ue->ul_bearers[lcid]->on_new_sdu(byte_buffer_slice{ctx.pdu_rx.pdu, sdu.payload()});

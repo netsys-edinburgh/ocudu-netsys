@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "ocudu/aurora/aurora.h"
 #include "cell_harq_manager.h"
 #include "ocudu/scheduler/resource_grid_util.h"
 #include "ocudu/scheduler/result/pdsch_info.h"
@@ -240,6 +241,9 @@ void cell_harq_repository<IsDl>::handle_harq_ack_timeout(harq_type& h, slot_poin
     return;
   }
 
+  // HARQ process lost without successful delivery (OAI counts these in stats->{dl,ul}.errors as well).
+  aurora::on_harq_max_retx_failure(h.ue_idx, IsDl);
+
   if (h.status == harq_state_t::pending_retx) {
     // This HARQ is being starved by the scheduler.
     logger.info("rnti={} h_id={}: Discarding {} HARQ. Cause: The scheduler took too long to reschedule this HARQ "
@@ -429,6 +433,7 @@ void cell_harq_repository<IsDl>::handle_ack(harq_type& h, bool ack)
                    IsDl ? std::string_view{"DL"} : std::string_view{"UL"},
                    h.prev_tx_params.tbs);
     } else if (h.max_nof_harq_retxs != 0) {
+      aurora::on_harq_max_retx_failure(h.ue_idx, IsDl);
       logger.info(
           "rnti={} h_id={}: Discarding {} HARQ process TB with tbs={}. Cause: Maximum number of reTxs {} exceeded",
           h.rnti,

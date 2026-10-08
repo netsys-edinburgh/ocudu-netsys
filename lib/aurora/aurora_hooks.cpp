@@ -98,6 +98,9 @@ void aurora::on_ue_created(unsigned ue_index, uint16_t rnti) noexcept
   for (auto& c : u.cons_nack) {
     set(c, 0U);
   }
+  for (auto& bo : u.dl_bo) {
+    set(bo, 0U);
+  }
   u.dl_starvation_events = 0;
   u.ul_starvation_events = 0;
   set(u.ul_failure, false);
@@ -295,10 +298,18 @@ void aurora::on_phr(unsigned ue_index, int ph_db) noexcept
   }
 }
 
-void aurora::on_dl_buffer_state(unsigned ue_index, uint32_t nof_bytes) noexcept
+void aurora::on_dl_buffer_state(unsigned ue_index, unsigned lcid, uint32_t nof_bytes) noexcept
 {
-  (void)ue_index;
-  record_flow(flow::mac_dl_bo, nof_bytes);
+  mac_ue_acc* u = mac_ue(ue_index);
+  if (u == nullptr) {
+    return;
+  }
+  set(u->dl_bo[lcid % max_lcids], nof_bytes);
+  uint64_t total = 0;
+  for (const auto& bo : u->dl_bo) {
+    total += get(bo);
+  }
+  record_flow(flow::mac_dl_bo, total);
 }
 
 void aurora::on_mac_dl_sdu(unsigned ue_index, uint32_t nof_bytes) noexcept

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "ocudu/aurora/aurora.h"
 #include "ue_repository.h"
 #include "../logging/cell_metrics_handler.h"
 #include "ue_cell_repository.h"
@@ -336,6 +337,7 @@ void ue_repository::rem_ue(const ue& u)
   if (cell_metrics_handler* cell_metrics = cell_ues[u.get_pcell().cell_index]->get_metrics()) {
     cell_metrics->handle_ue_deletion(ue_idx);
   }
+  aurora::on_ue_removed(ue_idx);
 
   // Remove UE from the cell-specific repositories.
   for (auto& ue_cc : ue_cell_lookups[ue_idx].ue_cells) {
