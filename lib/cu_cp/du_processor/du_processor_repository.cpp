@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "ocudu/aurora/aurora.h"
 #include "du_processor_repository.h"
 #include "du_processor_config.h"
 #include "du_processor_factory.h"
@@ -78,6 +79,7 @@ cu_cp_du_index_t du_processor_repository::add_du(std::unique_ptr<f1ap_message_no
   ocudu_assert(du != nullptr, "Failed to create DU processor");
   du_ctxt.processor = std::move(du);
 
+  aurora::on_du_count(static_cast<unsigned>(du_db.size()));
   return du_index;
 }
 
@@ -104,6 +106,7 @@ async_task<void> du_processor_repository::remove_du(cu_cp_du_index_t du_index)
 
     // Remove DU
     du_db.erase(du_index);
+    aurora::on_du_count(static_cast<unsigned>(du_db.size()));
     logger.info("Removed DU {}", du_index);
 
     // Notify the CU-CP that the cells served by the connected DUs changed.

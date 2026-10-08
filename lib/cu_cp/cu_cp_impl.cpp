@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "ocudu/aurora/aurora.h"
 #include "cu_cp_impl.h"
 #include "du_processor/du_processor_repository.h"
 #include "metrics_handler/metrics_handler_impl.h"
@@ -1833,6 +1834,10 @@ void cu_cp_impl::handle_measurement_report(cu_cp_ue_index_t ue_index, const rrc_
     const auto& ssb     = serv_mo.meas_result_serving_cell.cell_results.results_ssb_cell;
     if (ssb.has_value()) {
       report.serving = extract_cell_meas(ssb.value());
+      // AURORA RC cell metrics: serving-cell SS-RSRQ (OAI rsrq_avg, which OAI itself never filled).
+      if (report.serving.rsrq_db.has_value()) {
+        aurora::on_serving_cell_rsrq(*report.serving.rsrq_db);
+      }
     }
   }
 

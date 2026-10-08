@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
+#include "lib/aurora/aurora_state.h"
+#include "ocudu/aurora/aurora.h"
+#include <unistd.h>
 #include "cu_cp_test_environment.h"
 #include "tests/test_doubles/e1ap/e1ap_cu_cp_test_messages.h"
 #include "tests/test_doubles/e1ap/e1ap_test_message_validators.h"
@@ -704,4 +707,35 @@ TEST_F(cu_cp_inter_du_handover_test, when_ho_succeeds_then_target_ue_is_connecte
   get_du(target_du_idx).push_ul_pdu(ul_rrc_msg_transfer);
   ASSERT_TRUE(this->wait_for_ngap_tx_pdu(ngap_pdu));
   ASSERT_TRUE(test_helpers::is_valid_ul_nas_transport_message(ngap_pdu));
+}
+
+/// AURORA Group 11: handover execution attempts/success are fed by the CU-CP mobility routines.
+TEST_F(cu_cp_inter_du_handover_test, when_ho_succeeds_then_aurora_handover_counters_are_updated)
+{
+  aurora::config acfg;
+  acfg.enabled                = true;
+  acfg.type                   = aurora::ran_type::cu_cp;
+  acfg.collection_interval    = std::chrono::milliseconds{3600 * 1000};
+  acfg.shm_key                = 0x7f000000U | (static_cast<uint32_t>(::getpid()) & 0xffffffU);
+  acfg.thread_metrics_enabled = false;
+  acfg.anomaly_enabled        = false;
+  ASSERT_EQ(aurora::start(acfg), 0);
+  auto snapshot = std::make_unique<aurora_metrics>();
+  aurora::detail::init_shm_content(*snapshot, acfg);
+
+  ASSERT_TRUE(send_rrc_measurement_report_and_await_ue_context_setup_request());
+  ASSERT_TRUE(send_ue_context_setup_response_and_await_ue_context_modification_request());
+  ASSERT_TRUE(send_ue_context_modification_response(source_du_idx));
+  ASSERT_TRUE(send_rrc_reconfiguration_complete_and_await_bearer_context_modification_request());
+  ASSERT_TRUE(send_bearer_context_modification_response_and_await_ue_context_modification_request());
+  ASSERT_TRUE(send_ue_context_modification_response_and_await_ue_context_release_command());
+  ASSERT_TRUE(send_f1ap_ue_context_release_complete(source_du_idx));
+
+  aurora::detail::publish_interval(*snapshot, *aurora::detail::state);
+  ASSERT_GE(snapshot->rc_cell_count, 1U);
+  EXPECT_EQ(snapshot->rc_metrics[0].handover_attempts, 1U);
+  EXPECT_EQ(snapshot->rc_metrics[0].handover_success, 1U);
+  EXPECT_DOUBLE_EQ(snapshot->rc_metrics[0].handover_success_rate, 1.0);
+
+  aurora::stop();
 }

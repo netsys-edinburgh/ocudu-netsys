@@ -115,7 +115,8 @@ target_link_libraries(cu_cp_test
         xnap_test_doubles
         gtest
         ocudu_gtest_main)
-target_include_directories(cu_cp_test PRIVATE ${CMAKE_SOURCE_DIR})
+target_include_directories(cu_cp_test PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/lib/aurora)
+target_link_libraries(cu_cp_test ocudu_aurora)
 gtest_discover_tests(cu_cp_test)
 
 add_executable(cu_cp_config_test cu_cp_config_test.cpp)

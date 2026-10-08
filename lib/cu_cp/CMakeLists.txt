@@ -86,6 +86,7 @@ set(SOURCES
 add_library(ocudu_cu_cp STATIC ${SOURCES})
 
 target_link_libraries(ocudu_cu_cp
+        ocudu_aurora
         ocudu_cu_cp_cell_meas_manager
         ocudu_cu_cp_mobility_manager
         ocudu_ue_location_manager

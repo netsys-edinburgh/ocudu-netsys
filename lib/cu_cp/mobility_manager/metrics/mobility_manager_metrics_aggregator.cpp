@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "mobility_manager_metrics_aggregator.h"
+#include "ocudu/aurora/aurora.h"
 
 using namespace ocudu;
 using namespace ocucp;
@@ -20,11 +21,14 @@ void mobility_manager_metrics_aggregator::aggregate_successful_handover_preparat
 void mobility_manager_metrics_aggregator::aggregate_requested_handover_execution(gnb_du_id_t source_du_id)
 {
   ++aggregated_mobility_manager_metrics.per_du_executions[source_du_id].nof_handover_executions_requested;
+  // AURORA RC cell key: OCUDU tracks HO executions per source DU (gNB-DU ID), not per cell.
+  aurora::on_handover_attempt(static_cast<uint32_t>(source_du_id));
 }
 
 void mobility_manager_metrics_aggregator::aggregate_successful_handover_execution(gnb_du_id_t source_du_id)
 {
   ++aggregated_mobility_manager_metrics.per_du_executions[source_du_id].nof_successful_handover_executions;
+  aurora::on_handover_success(static_cast<uint32_t>(source_du_id));
 }
 
 mobility_management_metrics mobility_manager_metrics_aggregator::request_metrics_report() const
