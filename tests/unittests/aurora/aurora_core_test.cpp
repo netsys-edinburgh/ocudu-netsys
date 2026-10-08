@@ -4,7 +4,9 @@
 #include "lib/aurora/aurora_state.h"
 #include "ocudu/aurora/aurora.h"
 #include <gtest/gtest.h>
+#include <cstdio>
 #include <memory>
+#include <string>
 #include <unistd.h>
 
 using namespace ocudu;
@@ -366,4 +368,53 @@ TEST_F(aurora_core_test, rusage_and_timestamp)
   const aurora_metrics& r = publish();
   EXPECT_GT(r.ru_maxrss_kb, 0U);
   EXPECT_GE(r.timestamp_us, t0);
+}
+
+extern "C" void aurora_thread_registry_init(const aurora_thread_config_t* cfg);
+
+namespace {
+
+void load_whitelist(const char* list)
+{
+  aurora_thread_config_t cfg{};
+  cfg.enabled = 1;
+  std::snprintf(cfg.whitelist, sizeof(cfg.whitelist), "%s", list);
+  aurora_thread_registry_init(&cfg);
+}
+
+} // namespace
+
+TEST(aurora_thread_whitelist, default_list_fits_limits_and_matches_ocudu_thread_names)
+{
+  const std::string list = default_thread_whitelist();
+  ASSERT_LT(list.size(), size_t(AURORA_THREAD_WHITELIST_MAX)) << "whitelist would be truncated";
+  unsigned nof_patterns = 1;
+  for (char c : list) {
+    nof_patterns += c == ',';
+  }
+  ASSERT_LE(nof_patterns, 64U) << "registry keeps at most 64 patterns";
+
+  load_whitelist(list.c_str());
+  for (const char* name : {"gnb",          "odu",           "ocu",           "ocucp",         "ocuup",
+                           "odu_low",      "main_pool#0",   "main_pool#15",  "phy_worker",    "radio",
+                           "split6",       "ru_timing",     "ru_txrx_#0",    "ru_dummy",      "lower_phy#0",
+                           "lower_phy_tx#1", "lower_phy_rx#0", "lower_phy_ul#0", "io_broker_epoll", "ws_server",
+                           "tracer_worker", "rx_symb_print", "SRSIQDump",     "ULPhyTap",      "ZMQbg/Reaper",
+                           "ZMQbg/IO/0",   "aurora_reset",  "aurora_thr_proc", "aurora_thr_ebpf", "async_thread",
+                           "lower_phy_prach", "low_rx",     "ru_rx_#0",      "ru_emu_#3",     "radio_util_samp",
+                           "rx_power_analyz"}) {
+    EXPECT_TRUE(aurora_thread_name_matches(name)) << name;
+  }
+  for (const char* name : {"main_pool", "phy_worker#0", "foo", "gnb_extra", "lower_phy_x"}) {
+    EXPECT_FALSE(aurora_thread_name_matches(name)) << name;
+  }
+}
+
+TEST(aurora_thread_whitelist, multi_line_yaml_whitespace_is_trimmed)
+{
+  load_whitelist("  main_pool#* ,\n    radio\t,\r\n ws_server\n");
+  EXPECT_TRUE(aurora_thread_name_matches("main_pool#2"));
+  EXPECT_TRUE(aurora_thread_name_matches("radio"));
+  EXPECT_TRUE(aurora_thread_name_matches("ws_server"));
+  EXPECT_FALSE(aurora_thread_name_matches("radio2"));
 }

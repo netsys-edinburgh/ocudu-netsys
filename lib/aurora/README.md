@@ -92,8 +92,23 @@ The following stay the same as OAI:
 | 17 threads | `thread/` (procfs / eBPF collectors copied from OAI) |
 | 18 infra | `infra/`, run by `aurora_reader --infra-enabled yes` |
 
-**Default thread whitelist:** `main_pool*`, `phy_worker*`, `ru_timing*`, `ru_txrx_*`, `split6*`, `radio*`,
-`lower_phy*`, `ru_dummy*`, `io_broker_epoll`, `ws_server`, `aurora_reset`, `aurora_thr_proc`, `aurora_thr_ebpf`.
+**Default thread whitelist.** It covers every thread name the OCUDU code base sets, as they appear in
+`/proc/<pid>/task/<tid>/comm` (`unique_thread` truncates to 15 characters). A test checks it against the real names
+(`aurora_core_test`, `aurora_thread_whitelist.*`).
+
+| Source | Names |
+|--------|-------|
+| Main thread of each app | `gnb`, `odu`, `ocu`, `ocucp`, `ocuup`, `odu_low`. The ocudulog backend thread and unnamed library threads inherit this name. |
+| `apps/services/worker_manager` | `main_pool#*`, `phy_worker`, `radio`, `split6`, `ru_timing`, `ru_txrx_#*`, `ru_dummy`, `lower_phy#*`, `lower_phy_tx#*`, `lower_phy_rx#*`, `lower_phy_ul#*` |
+| Support threads | `io_broker_epoll`, `ws_server` (remote control), `tracer_worker` (event tracing), `rx_symb_print` (PHY RX grid printer) |
+| `ocudu_phy_tap` and libzmq | `SRSIQDump`, `ULPhyTap`, `ZMQbg/*` |
+| AURORA | `aurora_reset`, `aurora_thr_proc`, `aurora_thr_ebpf` |
+| `apps/examples` | `async_thread`, `lower_phy`, `lower_phy_dl`, `lower_phy_ul`, `lower_phy_prach`, `low_rx`, `low_tx`, `low_dl`, `low_ul`, `ru_rx_#*`, `ru_emu_#*`, `ru_emulator`, `radio_ssb`, `radio_util_samp`, `rx_power_analyz` |
+
+Whitespace and newlines around entries are ignored, so the list can span several YAML lines. The registry keeps at most
+64 patterns and tracks at most 64 threads.
+
+`aurora_reader` appends `_<tid>` to the CSV columns of threads whose name is shared with another thread.
 
 ## ANOMALY
 

@@ -182,7 +182,7 @@ typedef struct {
 typedef struct {
     int  slot_idx;                           /* index in thread_stats.threads[] */
     char name[AURORA_THREAD_NAME_LEN];       /* original thread name */
-    char safe_name[AURORA_THREAD_NAME_LEN];  /* sanitised for CSV column names */
+    char safe_name[AURORA_THREAD_NAME_LEN + 16];  /* sanitised (+ "_<tid>" when duplicated) for CSV column names */
 } thread_csv_col_t;
 
 static thread_csv_col_t g_thread_cols[AURORA_MAX_MONITORED_THREADS];
@@ -773,6 +773,16 @@ static void write_csv_header(FILE *fp, const struct aurora_metrics *m)
             strncpy(col->name, tm->thread_name, AURORA_THREAD_NAME_LEN - 1);
             col->name[AURORA_THREAD_NAME_LEN - 1] = '\0';
             sanitise_thread_name(col->name, col->safe_name, AURORA_THREAD_NAME_LEN);
+            /* OCUDU: several threads can share a name (e.g. the main thread and threads inheriting its name, such
+             * as the logger backend); make the CSV column names unique by appending the TID. */
+            for (int k = 0; k < g_thread_ncols - 1; k++) {
+                if (strcmp(g_thread_cols[k].name, col->name) == 0) {
+                    char base[sizeof(col->safe_name)];
+                    snprintf(base, sizeof(base), "%s", col->safe_name);
+                    snprintf(col->safe_name, sizeof(col->safe_name), "%s_%d", base, (int)tm->tid);
+                    break;
+                }
+            }
         }
     }
 

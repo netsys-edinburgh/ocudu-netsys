@@ -74,8 +74,11 @@ static void aurora_thread_load_whitelist(const char *whitelist_str)
     char *saveptr = NULL;
     char *token = strtok_r(buf, ",", &saveptr);
     while (token && whitelist_count < AURORA_MAX_WHITELIST_PATTERNS) {
-        /* Trim leading spaces */
-        while (*token == ' ') token++;
+        /* Trim leading and trailing whitespace (multi-line YAML strings carry newlines/indentation). */
+        while (*token == ' ' || *token == '\t' || *token == '\n' || *token == '\r') token++;
+        char *end = token + strlen(token);
+        while (end > token && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\n' || end[-1] == '\r'))
+            *--end = '\0';
         if (*token == '\0') {
             token = strtok_r(NULL, ",", &saveptr);
             continue;

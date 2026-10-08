@@ -77,10 +77,23 @@ aurora_metrics* create_segment(key_t key)
 
 const char* aurora::default_thread_whitelist()
 {
-  // OCUDU thread names (apps/services/worker_manager, io_broker, remote_control) plus AURORA's own threads.
-  return "main_pool*,phy_worker*,ru_timing*,ru_txrx_*,split6*,radio*,lower_phy*,ru_dummy*,"
-         "io_broker_epoll,ws_server,"
-         "aurora_reset,aurora_thr_proc,aurora_thr_ebpf";
+  // Every thread name created by the OCUDU code base (names as seen in /proc/<pid>/task/<tid>/comm, i.e. truncated
+  // to 15 characters by unique_thread). '#*' entries are worker pools / per-cell / per-sector threads.
+  return
+      // Main thread of each application; the ocudulog backend thread inherits it.
+      "gnb,odu,ocu,ocucp,ocuup,odu_low,"
+      // apps/services/worker_manager.
+      "main_pool#*,phy_worker,radio,split6,ru_timing,ru_txrx_#*,ru_dummy,"
+      "lower_phy#*,lower_phy_tx#*,lower_phy_rx#*,lower_phy_ul#*,"
+      // Support threads: IO broker, remote control server, event tracer, PHY RX grid printer.
+      "io_broker_epoll,ws_server,tracer_worker,rx_symb_print,"
+      // ocudu_phy_tap external processors and the libzmq background threads used by the ZMQ radio / PHY tap.
+      "SRSIQDump,ULPhyTap,ZMQbg/*,"
+      // AURORA itself.
+      "aurora_reset,aurora_thr_proc,aurora_thr_ebpf,"
+      // apps/examples (radio_ssb, radio_util_sample, rx_power_analyzer, ru_emulator).
+      "async_thread,lower_phy,lower_phy_dl,lower_phy_ul,lower_phy_prach,low_rx,low_tx,low_dl,low_ul,"
+      "ru_rx_#*,ru_emu_#*,ru_emulator,radio_ssb,radio_util_samp,rx_power_analyz";
 }
 
 int aurora::start(const config& cfg)
