@@ -120,6 +120,20 @@ static bool read_force_first_gpu_failure()
   return (env_value != nullptr) && (env_value[0] != '\0') && (std::strcmp(env_value, "0") != 0);
 }
 
+/// Reads whether IQ data that lives in host memory is (de)compressed on the GPU (default: on the CPU).
+///
+/// The GPU path for host-resident IQ copies every message to the device and back and waits for it on the calling
+/// thread; for the per-sample work of O-RAN (de)compression that round trip costs far more CPU time than doing the work
+/// on the CPU (measured on GH200 at 40 MHz: about 2 cores of synchronous CUDA calls on the upper-PHY worker pool for
+/// DL compression, versus 0.03 cores with NEON). The GPU is used where the IQ already lives on the device: compression
+/// from a device-visible downlink grid and decompression into a device-visible uplink grid. Set
+/// OCUDU_OFH_CUDA_HOST_IQ=1 to also send host-resident IQ to the GPU (previous behaviour; used by the GPU tests).
+static bool read_host_iq_on_gpu()
+{
+  const char* env_value = std::getenv("OCUDU_OFH_CUDA_HOST_IQ");
+  return (env_value != nullptr) && (env_value[0] != '\0') && (std::strcmp(env_value, "0") != 0);
+}
+
 iq_compression_cuda::iq_compression_cuda(compression_type                         type_,
                                          ocudulog::basic_logger&                  logger_,
                                          float                                    iq_scaling_,
@@ -128,6 +142,7 @@ iq_compression_cuda::iq_compression_cuda(compression_type                       
   logger(logger_),
   iq_scaling(iq_scaling_),
   force_fallback(read_force_fallback()),
+  host_iq_on_gpu(read_host_iq_on_gpu()),
   inject_next_gpu_failure(read_force_first_gpu_failure())
 {
 #ifdef ENABLE_CUDA
@@ -449,6 +464,11 @@ void iq_compression_cuda::compress(span<uint8_t>                buffer,
   unsigned prb_size = get_compressed_prb_size(params).value();
   ocudu_assert(buffer.size() >= prb_size * nof_prbs, "Output buffer does not have enough space for compressed PRBs.");
   if (nof_prbs == 0) {
+    return;
+  }
+  // Host-resident IQ: compressing on the CPU is far cheaper than a synchronous round trip to the GPU.
+  if (!host_iq_on_gpu) {
+    fallback_compressor->compress(buffer, iq_data, params);
     return;
   }
   bool success       = false;
@@ -913,6 +933,10 @@ bool iq_compression_cuda::decompress(span<cbf16_t>                iq_data,
                nof_prbs);
   if (nof_prbs == 0) {
     return true;
+  }
+  // Host-resident output: decompressing on the CPU is far cheaper than a synchronous round trip to the GPU.
+  if (!host_iq_on_gpu) {
+    return fallback_decompressor->decompress(iq_data, compressed_data, params);
   }
   bool success       = false;
   bool first_failure = false;

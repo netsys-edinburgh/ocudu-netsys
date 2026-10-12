@@ -130,6 +130,9 @@ public:
                                                      span<const uint8_t>          compressed_data,
                                                      const ru_compression_params& params) override;
 
+  /// Returns true if host-resident IQ (compress() / decompress()) is processed on the GPU, false if on the CPU.
+  bool processes_host_iq_on_gpu() const { return host_iq_on_gpu; }
+
   /// Returns the number of times the accelerated path failed and the CPU implementation was used instead.
   uint64_t get_nof_acceleration_failures() const { return nof_acceleration_failures.load(std::memory_order_relaxed); }
 
@@ -171,6 +174,8 @@ private:
   ocudulog::basic_logger&                    logger;
   float                                      iq_scaling;
   bool                                       force_fallback;
+  /// Whether host-resident IQ (compress() / decompress()) goes to the GPU (OCUDU_OFH_CUDA_HOST_IQ=1) or the CPU.
+  bool                                       host_iq_on_gpu;
   std::atomic<bool>                          inject_next_gpu_failure;
   std::unique_ptr<iq_compressor>             fallback_compressor;
   std::unique_ptr<iq_decompressor>           fallback_decompressor;

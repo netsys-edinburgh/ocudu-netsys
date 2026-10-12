@@ -25,6 +25,11 @@ using namespace ocudu;
 
 namespace {
 
+/// The GPU tests below exercise the CUDA kernels through the host-IQ entry points (compress() / decompress()), which by
+/// default run on the CPU (see iq_compression_cuda.cpp, read_host_iq_on_gpu()). Opt this binary into the GPU path
+/// before any compressor is constructed; host_iq_defaults_to_cpu tests the default.
+const bool host_iq_on_gpu_for_tests = []() { return ::setenv("OCUDU_OFH_CUDA_HOST_IQ", "1", 1) == 0; }();
+
 std::vector<cbf16_t> generate_iq(unsigned nof_prbs)
 {
   std::mt19937                          rgen(0);
@@ -1793,4 +1798,52 @@ TEST(ofh_iq_compression_cuda_test, backend_synchronize_gives_up_on_a_stuck_strea
   (void)cudaFree(gate_word);
   (void)cudaStreamDestroy(release_stream);
   ocudu_ofh_compression_destroy(handle);
+}
+
+// By default host-resident IQ is (de)compressed on the CPU: a per-message GPU round trip costs far more CPU time than
+// the work itself. The result is the same either way.
+TEST(ofh_iq_compression_cuda_test, host_iq_defaults_to_cpu_with_identical_results)
+{
+  ASSERT_TRUE(host_iq_on_gpu_for_tests);
+  static constexpr unsigned nof_prbs = 106;
+  static constexpr float    iq_scale = 0.27F;
+  ocudulog::basic_logger&   logger   = ocudulog::fetch_basic_logger("OFH", false);
+
+  for (ofh::compression_type type : {ofh::compression_type::none, ofh::compression_type::BFP}) {
+    auto data = generate_iq(nof_prbs);
+
+    std::unique_ptr<ofh::iq_compressor>   gpu_compressor   = ofh::create_iq_compressor(type, logger, iq_scale, "cuda");
+    std::unique_ptr<ofh::iq_decompressor> gpu_decompressor = ofh::create_iq_decompressor(type, logger, "cuda");
+    ASSERT_EQ(::unsetenv("OCUDU_OFH_CUDA_HOST_IQ"), 0);
+    std::unique_ptr<ofh::iq_compressor> default_compressor = ofh::create_iq_compressor(type, logger, iq_scale, "cuda");
+    std::unique_ptr<ofh::iq_decompressor> default_decompressor = ofh::create_iq_decompressor(type, logger, "cuda");
+    ASSERT_EQ(::setenv("OCUDU_OFH_CUDA_HOST_IQ", "1", 1), 0);
+
+    auto& gpu_impl     = static_cast<ofh::iq_compression_cuda&>(*gpu_compressor);
+    auto& default_impl = static_cast<ofh::iq_compression_cuda&>(*default_compressor);
+    EXPECT_TRUE(gpu_impl.processes_host_iq_on_gpu());
+    EXPECT_FALSE(default_impl.processes_host_iq_on_gpu());
+    EXPECT_FALSE(static_cast<ofh::iq_compression_cuda&>(*default_decompressor).processes_host_iq_on_gpu());
+
+    for (unsigned data_width : {9U, 16U}) {
+      ofh::ru_compression_params params;
+      params.type                   = type;
+      params.data_width             = data_width;
+      const unsigned       prb_size = ofh::get_compressed_prb_size(params).value();
+      std::vector<uint8_t> gpu_compressed(nof_prbs * prb_size);
+      std::vector<uint8_t> default_compressed(nof_prbs * prb_size);
+      gpu_compressor->compress(gpu_compressed, data, params);
+      default_compressor->compress(default_compressed, data, params);
+      EXPECT_EQ(gpu_compressed, default_compressed) << ofh::to_string(type) << " width=" << data_width;
+
+      std::vector<cbf16_t> gpu_decompressed(data.size());
+      std::vector<cbf16_t> default_decompressed(data.size());
+      gpu_decompressor->decompress(gpu_decompressed, gpu_compressed, params);
+      default_decompressor->decompress(default_decompressed, gpu_compressed, params);
+      EXPECT_EQ(gpu_decompressed, default_decompressed) << ofh::to_string(type) << " width=" << data_width;
+    }
+    // The CPU path is not an acceleration failure.
+    EXPECT_EQ(default_impl.get_nof_acceleration_failures(), 0U);
+    EXPECT_EQ(default_impl.get_nof_acceleration_retries(), 0U);
+  }
 }
