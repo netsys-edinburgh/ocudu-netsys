@@ -13,6 +13,20 @@ class resource_grid_reader;
 
 namespace ofh {
 
+/// \brief A region of a device-visible resource grid and the payload buffer its compressed PRBs go to.
+struct device_grid_compression_region {
+  /// Resource-grid port.
+  unsigned port;
+  /// OFDM symbol index within the slot.
+  unsigned symbol;
+  /// First PRB of the region.
+  unsigned start_prb;
+  /// Number of PRBs of the region.
+  unsigned nof_prbs;
+  /// Destination of the compressed PRBs (back to back); at least nof_prbs compressed PRBs long.
+  span<uint8_t> output;
+};
+
 /// \brief Describes the IQ data compressor.
 ///
 /// Compresses and serializes floating point IQ samples together with compression parameters according to compression
@@ -210,6 +224,36 @@ public:
     (void)nof_symbols;
     (void)start_prb;
     (void)nof_prbs;
+    (void)params;
+    return false;
+  }
+
+  /// \brief Returns true if compress_device_grid_regions() can be used with the given parameters.
+  ///
+  /// Callers check this before arranging their buffers for the region path, so that implementations without it keep
+  /// their other paths with no extra work.
+  virtual bool supports_device_grid_regions(const ru_compression_params& params) const
+  {
+    (void)params;
+    return false;
+  }
+
+  /// \brief Compresses several regions of a device-visible grid straight into their payload buffers.
+  ///
+  /// All the regions of a downlink slot (every message fragment, symbol and port) can be compressed with one call: the
+  /// implementation writes every payload buffer directly and returns once they are all complete. On failure the
+  /// payload contents are unspecified and the caller compresses through one of the other paths.
+  ///
+  /// \param[in] regions Regions to compress and their payload buffers.
+  /// \param[in] grid    Resource-grid reader exposing the source symbols.
+  /// \param[in] params  Compression parameters.
+  /// \return True on success, false when the implementation cannot use this path.
+  virtual bool compress_device_grid_regions(span<const device_grid_compression_region> regions,
+                                            const resource_grid_reader&                grid,
+                                            const ru_compression_params&               params)
+  {
+    (void)regions;
+    (void)grid;
     (void)params;
     return false;
   }

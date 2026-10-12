@@ -1847,3 +1847,216 @@ TEST(ofh_iq_compression_cuda_test, host_iq_defaults_to_cpu_with_identical_result
     EXPECT_EQ(default_impl.get_nof_acceleration_retries(), 0U);
   }
 }
+
+namespace {
+
+/// Region layout used by the region-compression tests: PRB fragments (as O-RAN MTU fragmentation produces) over
+/// every symbol of a batch and every port.
+struct region_layout {
+  unsigned port;
+  unsigned symbol;
+  unsigned start_prb;
+  unsigned nof_prbs;
+};
+
+std::vector<region_layout> make_region_layouts(unsigned nof_ports, unsigned first_symbol, unsigned nof_symbols)
+{
+  static constexpr std::array<std::pair<unsigned, unsigned>, 4> fragments = {{{0, 30}, {30, 30}, {60, 27}, {87, 19}}};
+  std::vector<region_layout>                                    layouts;
+  for (const auto& [start_prb, nof_prbs] : fragments) {
+    for (unsigned symbol = first_symbol; symbol != first_symbol + nof_symbols; ++symbol) {
+      for (unsigned port = 0; port != nof_ports; ++port) {
+        layouts.push_back({port, symbol, start_prb, nof_prbs});
+      }
+    }
+  }
+  return layouts;
+}
+
+/// CPU reference of one region: the CPU compressor run on the region's PRBs of a host copy of the grid.
+std::vector<uint8_t> compress_region_on_cpu(ofh::iq_compressor&               cpu_compressor,
+                                            span<const cbf16_t>               host_grid,
+                                            unsigned                          nof_grid_symbols,
+                                            unsigned                          nof_subc,
+                                            const region_layout&              region,
+                                            const ofh::ru_compression_params& params)
+{
+  const size_t offset = (static_cast<size_t>(region.port) * nof_grid_symbols + region.symbol) * nof_subc +
+                        static_cast<size_t>(region.start_prb) * NOF_SUBCARRIERS_PER_RB;
+  std::vector<uint8_t> expected(static_cast<size_t>(region.nof_prbs) * ofh::get_compressed_prb_size(params).value());
+  cpu_compressor.compress(expected, host_grid.subspan(offset, region.nof_prbs * NOF_SUBCARRIERS_PER_RB), params);
+  return expected;
+}
+
+} // namespace
+
+// The region backend compresses every fragment / symbol / port of a slot in place, byte-exact with the CPU compressor.
+TEST_P(ofh_iq_compression_cuda_test, cuda_device_grid_regions_match_cpu_reference)
+{
+  static constexpr unsigned grid_nof_prbs    = 106;
+  static constexpr unsigned nof_subc         = grid_nof_prbs * NOF_SUBCARRIERS_PER_RB;
+  static constexpr unsigned nof_grid_symbols = 14;
+  static constexpr unsigned nof_ports        = 2;
+  static constexpr float    iq_scale         = 0.27F;
+  ofh::compression_type     type             = GetParam();
+
+  const size_t grid_size   = static_cast<size_t>(nof_ports) * nof_grid_symbols * nof_subc;
+  cbf16_t*     device_grid = nullptr;
+  ASSERT_EQ(cudaMallocManaged(&device_grid, grid_size * sizeof(cbf16_t)), cudaSuccess);
+  std::vector<cbf16_t> host_grid(grid_size);
+  {
+    std::vector<cbf16_t> iq = generate_iq(grid_size / NOF_SUBCARRIERS_PER_RB);
+    std::copy(iq.begin(), iq.end(), host_grid.begin());
+    std::copy(host_grid.begin(), host_grid.end(), device_grid);
+  }
+  const bool direct_host_writes = ocudu_ofh_compression_device_writes_host_memory() != 0;
+
+  std::unique_ptr<ofh::iq_compressor> cpu_compressor = ofh::create_iq_compressor(type, logger, iq_scale, "generic");
+  ocudu_ofh_compression_handle_t*     handle         = nullptr;
+  ASSERT_NE(ocudu_ofh_compression_create(&handle), 0);
+  const int cuda_type =
+      (type == ofh::compression_type::BFP) ? OCUDU_OFH_COMPRESSION_TYPE_BFP : OCUDU_OFH_COMPRESSION_TYPE_NONE;
+
+  // 4 fragments x 13 symbols x 2 ports = 104 regions in one call (one launch); 4 x 14 x 2 = 112 likewise.
+  const std::vector<region_layout> layouts = make_region_layouts(nof_ports, 1, 13);
+  for (unsigned data_width : {8U, 9U, 10U, 12U, 14U, 16U}) {
+    ofh::ru_compression_params params;
+    params.type             = type;
+    params.data_width       = data_width;
+    const unsigned prb_size = ofh::get_compressed_prb_size(params).value();
+
+    // Destinations: plain host memory where the device can write it directly, else managed memory.
+    std::vector<std::vector<uint8_t>>           host_outputs(layouts.size());
+    std::vector<uint8_t*>                       managed_outputs(layouts.size(), nullptr);
+    std::vector<ocudu_ofh_compression_region_t> regions(layouts.size());
+    for (unsigned i = 0; i != layouts.size(); ++i) {
+      const size_t bytes = static_cast<size_t>(layouts[i].nof_prbs) * prb_size;
+      uint8_t*     output;
+      if (direct_host_writes) {
+        host_outputs[i].assign(bytes, 0xa5);
+        output = host_outputs[i].data();
+      } else {
+        ASSERT_EQ(cudaMallocManaged(&managed_outputs[i], bytes), cudaSuccess);
+        output = managed_outputs[i];
+      }
+      regions[i] = {output,
+                    static_cast<uint16_t>(layouts[i].port),
+                    static_cast<uint16_t>(layouts[i].symbol),
+                    static_cast<uint16_t>(layouts[i].start_prb),
+                    static_cast<uint16_t>(layouts[i].nof_prbs)};
+    }
+
+    ASSERT_NE(ocudu_ofh_compress_device_grid_regions_async(handle,
+                                                           cuda_type,
+                                                           device_grid,
+                                                           nof_ports,
+                                                           nof_grid_symbols,
+                                                           nof_subc,
+                                                           regions.data(),
+                                                           regions.size(),
+                                                           data_width,
+                                                           iq_scale),
+              0)
+        << "width=" << data_width;
+    ASSERT_NE(ocudu_ofh_compression_synchronize(handle), 0);
+
+    for (unsigned i = 0; i != layouts.size(); ++i) {
+      std::vector<uint8_t> expected =
+          compress_region_on_cpu(*cpu_compressor, host_grid, nof_grid_symbols, nof_subc, layouts[i], params);
+      span<const uint8_t> actual(regions[i].output, expected.size());
+      ASSERT_TRUE(std::equal(actual.begin(), actual.end(), expected.begin()))
+          << ofh::to_string(type) << " width=" << data_width << " region=" << i;
+    }
+    for (uint8_t* buffer : managed_outputs) {
+      if (buffer != nullptr) {
+        cudaFree(buffer);
+      }
+    }
+  }
+
+  // Unsupported width and invalid regions are rejected without launching anything.
+  std::vector<uint8_t>           scratch(64 * 32);
+  ocudu_ofh_compression_region_t region = {scratch.data(), 0, 0, 0, 4};
+  EXPECT_EQ(ocudu_ofh_compress_device_grid_regions_async(
+                handle, cuda_type, device_grid, nof_ports, nof_grid_symbols, nof_subc, &region, 1, 11, iq_scale),
+            0);
+  ocudu_ofh_compression_region_t bad_port   = {scratch.data(), nof_ports, 0, 0, 4};
+  ocudu_ofh_compression_region_t bad_prbs   = {scratch.data(), 0, 0, grid_nof_prbs - 2, 4};
+  ocudu_ofh_compression_region_t bad_symbol = {scratch.data(), 0, nof_grid_symbols, 0, 4};
+  for (const auto& bad : {bad_port, bad_prbs, bad_symbol}) {
+    EXPECT_EQ(ocudu_ofh_compress_device_grid_regions_async(
+                  handle, cuda_type, device_grid, nof_ports, nof_grid_symbols, nof_subc, &bad, 1, 9, iq_scale),
+              0);
+  }
+  ASSERT_NE(ocudu_ofh_compression_synchronize(handle), 0);
+  ocudu_ofh_compression_destroy(handle);
+  cudaFree(device_grid);
+}
+
+// The compressor's region path on a CUDA-visible downlink grid filled by a device producer, byte-exact with the CPU.
+TEST_P(ofh_iq_compression_cuda_test, cuda_compressor_device_grid_regions_match_cpu_reference)
+{
+  static constexpr unsigned grid_nof_prbs    = 106;
+  static constexpr unsigned nof_subc         = grid_nof_prbs * NOF_SUBCARRIERS_PER_RB;
+  static constexpr unsigned nof_grid_symbols = 14;
+  static constexpr unsigned nof_ports        = 1;
+  static constexpr float    iq_scale         = 0.27F;
+  ofh::compression_type     type             = GetParam();
+
+  ASSERT_EQ(::setenv("OCUDU_DL_CUDA_VISIBLE_GRID", "managed", 1), 0);
+  std::shared_ptr<resource_grid_factory> grid_factory = create_phy_acceleration_resource_grid_factory(
+      create_resource_grid_factory(), phy_acceleration_resource_grid_direction::downlink, true);
+  std::unique_ptr<resource_grid> grid = grid_factory->create(nof_ports, nof_grid_symbols, nof_subc);
+  ASSERT_EQ(::unsetenv("OCUDU_DL_CUDA_VISIBLE_GRID"), 0);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_TRUE(grid->get_writer().supports_device_grid_mapping());
+
+  // Fill the grid as a device producer does (PDSCH), so the device-read gate admits the read on every platform.
+  const size_t         grid_size = static_cast<size_t>(nof_ports) * nof_grid_symbols * nof_subc;
+  std::vector<cbf16_t> host_grid = generate_iq(grid_size / NOF_SUBCARRIERS_PER_RB);
+  cudaStream_t         stream    = nullptr;
+  ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
+  ASSERT_TRUE(grid->get_writer().prepare_device_grid_mapping(stream));
+  ASSERT_EQ(cudaMemcpyAsync(grid->get_writer().get_device_grid_bf16(),
+                            host_grid.data(),
+                            grid_size * sizeof(cbf16_t),
+                            cudaMemcpyHostToDevice,
+                            stream),
+            cudaSuccess);
+  ASSERT_TRUE(grid->get_writer().on_device_grid_mapping_enqueued(stream));
+
+  std::unique_ptr<ofh::iq_compressor> cpu_compressor  = ofh::create_iq_compressor(type, logger, iq_scale, "generic");
+  std::unique_ptr<ofh::iq_compressor> cuda_compressor = ofh::create_iq_compressor(type, logger, iq_scale, "cuda");
+
+  const std::vector<region_layout> layouts = make_region_layouts(nof_ports, 0, nof_grid_symbols);
+  for (unsigned data_width : {9U, 16U, 11U}) {
+    ofh::ru_compression_params params;
+    params.type                     = type;
+    params.data_width               = data_width;
+    const unsigned prb_size         = ofh::get_compressed_prb_size(params).value();
+    const bool     expected_support = (ocudu_ofh_compression_device_writes_host_memory() != 0) && (data_width != 11U);
+    EXPECT_EQ(cuda_compressor->supports_device_grid_regions(params), expected_support) << "width=" << data_width;
+    if (!expected_support) {
+      std::vector<uint8_t>                               buffer(4 * prb_size);
+      std::array<ofh::device_grid_compression_region, 1> one = {{{0, 0, 0, 4, buffer}}};
+      EXPECT_FALSE(cuda_compressor->compress_device_grid_regions(one, grid->get_reader(), params));
+      continue;
+    }
+
+    std::vector<std::vector<uint8_t>>                outputs(layouts.size());
+    std::vector<ofh::device_grid_compression_region> regions;
+    for (unsigned i = 0; i != layouts.size(); ++i) {
+      outputs[i].assign(static_cast<size_t>(layouts[i].nof_prbs) * prb_size, 0x5a);
+      regions.push_back(
+          {layouts[i].port, layouts[i].symbol, layouts[i].start_prb, layouts[i].nof_prbs, span<uint8_t>(outputs[i])});
+    }
+    ASSERT_TRUE(cuda_compressor->compress_device_grid_regions(regions, grid->get_reader(), params));
+    for (unsigned i = 0; i != layouts.size(); ++i) {
+      EXPECT_EQ(outputs[i],
+                compress_region_on_cpu(*cpu_compressor, host_grid, nof_grid_symbols, nof_subc, layouts[i], params))
+          << ofh::to_string(type) << " width=" << data_width << " region=" << i;
+    }
+    EXPECT_EQ(static_cast<ofh::iq_compression_cuda&>(*cuda_compressor).get_nof_acceleration_failures(), 0U);
+  }
+  cudaStreamDestroy(stream);
+}

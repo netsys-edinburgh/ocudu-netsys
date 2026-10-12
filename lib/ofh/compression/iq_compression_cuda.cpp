@@ -11,6 +11,7 @@
 #include "ocudu/support/error_handling.h"
 #include "ocudu/support/ocudu_assert.h"
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -152,6 +153,14 @@ iq_compression_cuda::iq_compression_cuda(compression_type                       
   // CPU implementations used when the accelerated path fails at run-time. They are built up-front so that the fallback
   // does not allocate on the data path. Requesting "cpu_auto" cannot resolve back to CUDA, so this does not recurse.
   fallback_compressor   = create_iq_compressor(type, logger, iq_scaling, "cpu_auto");
+
+  // Region path (compress_device_grid_regions): the kernels write the packet payload buffers directly, which needs
+  // device access to pageable host memory (GH200, GB10). OCUDU_OFH_CUDA_DIRECT_PAYLOAD=0 disables it.
+  {
+    const char* env_value = std::getenv("OCUDU_OFH_CUDA_DIRECT_PAYLOAD");
+    const bool  disabled  = (env_value != nullptr) && (std::strcmp(env_value, "0") == 0);
+    direct_payload_writes = !disabled && (ocudu_ofh_compression_device_writes_host_memory() != 0);
+  }
   fallback_decompressor = create_iq_decompressor(type, logger, "cpu_auto");
 
   // CUDA allocation APIs may synchronize unrelated pending work. Reserve every configured receive or transmit handle
@@ -911,6 +920,95 @@ bool iq_compression_cuda::compress_device_symbol_batch_to_buffers(span<span<uint
   (void)nof_symbols;
   (void)start_prb;
   (void)nof_prbs;
+  (void)params;
+  return false;
+#endif
+}
+
+bool iq_compression_cuda::supports_device_grid_regions(const ru_compression_params& params) const
+{
+#ifdef ENABLE_CUDA
+  if (!direct_payload_writes || force_fallback || (params.type != type)) {
+    return false;
+  }
+  switch (params.data_width) {
+    case 8:
+    case 9:
+    case 10:
+    case 12:
+    case 14:
+    case 16:
+      return true;
+    default:
+      return false;
+  }
+#else
+  (void)params;
+  return false;
+#endif
+}
+
+bool iq_compression_cuda::compress_device_grid_regions(span<const device_grid_compression_region> regions,
+                                                       const resource_grid_reader&                grid,
+                                                       const ru_compression_params&               params)
+{
+#ifdef ENABLE_CUDA
+  if (!supports_device_grid_regions(params) || regions.empty() || !grid.supports_device_grid_reading()) {
+    return false;
+  }
+
+  const unsigned                                           prb_size = get_compressed_prb_size(params).value();
+  thread_local std::vector<ocudu_ofh_compression_region_t> device_regions;
+  device_regions.resize(regions.size());
+  for (unsigned i = 0, e = regions.size(); i != e; ++i) {
+    const device_grid_compression_region& region = regions[i];
+    if ((region.nof_prbs == 0) || (region.output.size() < static_cast<size_t>(region.nof_prbs) * prb_size) ||
+        (region.port > UINT16_MAX) || (region.symbol > UINT16_MAX) || (region.start_prb > UINT16_MAX) ||
+        (region.nof_prbs > UINT16_MAX)) {
+      return false;
+    }
+    device_regions[i] = {region.output.data(),
+                         static_cast<uint16_t>(region.port),
+                         static_cast<uint16_t>(region.symbol),
+                         static_cast<uint16_t>(region.start_prb),
+                         static_cast<uint16_t>(region.nof_prbs)};
+  }
+
+  ocudu_ofh_compression_handle* handle = acquire_handle();
+  if (handle == nullptr) {
+    return false;
+  }
+  void* stream = ocudu_ofh_compression_get_stream(handle);
+  // Same device-read protocol as the other device-grid paths: order after the grid's producers, hold the grid until
+  // the kernels completed. One wait covers every region of the call (e.g. a whole downlink slot).
+  device_grid_read_guard grid_read(grid, stream);
+  if (!grid_read.is_valid()) {
+    release_handle(handle);
+    return false;
+  }
+  bool success = ocudu_ofh_compress_device_grid_regions_async(handle,
+                                                              to_cuda_compression_type(type),
+                                                              grid_read.data(),
+                                                              grid.get_nof_ports(),
+                                                              grid.get_nof_symbols(),
+                                                              grid.get_nof_subc(),
+                                                              device_regions.data(),
+                                                              device_regions.size(),
+                                                              params.data_width,
+                                                              iq_scaling) != 0;
+  // Wait for the kernels on every path, before the guard releases the read hold: no enqueued write may outlive this
+  // call or the hold.
+  success = (ocudu_ofh_compression_synchronize(handle) != 0) && success;
+  if (success) {
+    release_handle(handle);
+  } else {
+    note_acceleration_failure("device-grid region compression", handle);
+    discard_handle(handle);
+  }
+  return success;
+#else
+  (void)regions;
+  (void)grid;
   (void)params;
   return false;
 #endif

@@ -121,6 +121,18 @@ private:
                                                   span<const unsigned>                          eaxcs,
                                                   const shared_resource_grid&                   grid);
 
+  /// \brief Enqueues the User-Plane messages of a slot burst with one region compression for all of them.
+  ///
+  /// Reserves and builds the headers of every message fragment of the slot first, then compresses all their payloads
+  /// from the device-visible grid with one compressor call (one GPU wait per slot, payloads written in place).
+  /// Returns false, with nothing enqueued, when this path cannot be used.
+  bool enqueue_section_type_1_messages_slot_regions(const data_flow_uplane_resource_grid_context& base_context,
+                                                    unsigned                                      first_symbol,
+                                                    unsigned                                      nof_symbols,
+                                                    unsigned                                      first_port,
+                                                    span<const unsigned>                          eaxcs,
+                                                    const resource_grid_reader&                   reader);
+
   /// Enqueues an User-Plane message symbol with the given context and grid.
   unsigned enqueue_section_type_1_message_symbol(span<const cbf16_t>          iq_symbol_data,
                                                  const uplane_message_params& params,

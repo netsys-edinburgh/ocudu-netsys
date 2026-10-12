@@ -118,6 +118,37 @@ public:
     }
     return false;
   }
+
+  /// \brief Builds the headers of the messages of a symbol and port batch, leaving their IQ payload to the caller.
+  ///
+  /// Same messages as build_symbol_batch_messages() (buffers ordered by symbol first and port second), but only the
+  /// headers are serialized: \c payloads receives, per message, the span its compressed PRBs go to, so that the caller
+  /// can compress several batches (e.g. every fragment of a slot) at once.
+  ///
+  /// \param[out] buffers       Buffers where each message is built.
+  /// \param[in]  first_symbol  First OFDM symbol index.
+  /// \param[in]  nof_symbols   Number of consecutive OFDM symbols.
+  /// \param[in]  params        User plane message parameters shared by all messages except symbol id.
+  /// \param[out] payloads      Payload span of each message, params.nof_prb compressed PRBs long.
+  /// \param[out] bytes_written Size of each complete message (headers and payload).
+  /// \return True on success, false when this path is unsupported or the arguments are inconsistent.
+  virtual bool build_symbol_batch_message_headers(span<span<uint8_t>>          buffers,
+                                                  unsigned                     first_symbol,
+                                                  unsigned                     nof_symbols,
+                                                  const uplane_message_params& params,
+                                                  span<span<uint8_t>>          payloads,
+                                                  span<unsigned>               bytes_written)
+  {
+    (void)buffers;
+    (void)first_symbol;
+    (void)nof_symbols;
+    (void)params;
+    (void)payloads;
+    for (unsigned& value : bytes_written) {
+      value = 0;
+    }
+    return false;
+  }
 };
 
 } // namespace ofh

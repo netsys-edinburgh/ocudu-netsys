@@ -200,6 +200,39 @@ int ocudu_ofh_compress_device_grid_symbol_batch_to_device(ocudu_ofh_compression_
                                                           unsigned                        data_width,
                                                           float                           iq_scaling);
 
+/// One region of a device-visible resource grid to compress into its own destination.
+typedef struct {
+  /// Destination of the region's compressed PRBs (nof_prbs PRBs, back to back). It must be writable by the device:
+  /// device memory, or host memory when ocudu_ofh_compression_device_writes_host_memory() returns 1.
+  uint8_t* output;
+  uint16_t port;
+  uint16_t symbol;
+  uint16_t start_prb;
+  uint16_t nof_prbs;
+} ocudu_ofh_compression_region_t;
+
+/// \brief Returns 1 if the compression kernels can write host memory directly (pageable memory access, e.g. GH200
+/// and GB10 over NVLink-C2C), else 0.
+int ocudu_ofh_compression_device_writes_host_memory(void);
+
+/// \brief Compresses regions of a device-visible grid straight into their destinations, on the handle stream.
+///
+/// The grid layout is the one of ocudu_ofh_compress_device_grid_symbol_batch_to_host_buffers(). Regions are processed
+/// in launches of up to 128; nothing is copied through staging buffers and the call does not wait: the caller
+/// synchronises the handle (ocudu_ofh_compression_synchronize()) once for all the regions it enqueued.
+/// Supported data widths: 8, 9, 10, 12, 14 and 16 (none and BFP).
+/// \return 1 if every region was enqueued; 0 on invalid arguments, an unsupported width or a launch error.
+int ocudu_ofh_compress_device_grid_regions_async(ocudu_ofh_compression_handle_t*       handle,
+                                                 int                                   compression_type,
+                                                 const void*                           input_grid_cbf16,
+                                                 unsigned                              nof_grid_ports,
+                                                 unsigned                              nof_grid_symbols,
+                                                 unsigned                              nof_subc,
+                                                 const ocudu_ofh_compression_region_t* regions,
+                                                 unsigned                              nof_regions,
+                                                 unsigned                              data_width,
+                                                 float                                 iq_scaling);
+
 int ocudu_ofh_compress_device_grid_symbol_batch_to_host_buffers(ocudu_ofh_compression_handle_t* handle,
                                                                 int                             compression_type,
                                                                 void* const*                    output_host_buffers,

@@ -5,6 +5,7 @@
 
 #include "../include/cuda_gpu_wait_timeout.h"
 #include "ofh_compression.h"
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <cuda.h>
@@ -4309,6 +4310,153 @@ extern "C" int ocudu_ofh_compress_device_grid_symbol_batch_to_host_buffers(
     }
 
     return copy_device_to_host_buffers(handle, output_host_buffers, nof_buffers, port_bytes, handle->d_out);
+}
+
+/// Regions per launch of the region kernels; passed by value (16 bytes each, 2 KiB of kernel parameters).
+constexpr unsigned OFH_COMPRESSION_REGIONS_PER_LAUNCH = 128U;
+
+struct ofh_compression_region_batch {
+    ocudu_ofh_compression_region_t regions[OFH_COMPRESSION_REGIONS_PER_LAUNCH];
+};
+
+/// One thread per PRB of one region (blockIdx.y): reads the grid, writes the region's destination directly.
+template <unsigned DATA_WIDTH, bool BFP>
+__global__ void ofh_compress_grid_regions_kernel_t(const uint32_t*              input_grid,
+                                                   unsigned                     nof_grid_symbols,
+                                                   unsigned                     nof_subc,
+                                                   ofh_compression_region_batch batch,
+                                                   unsigned                     nof_regions,
+                                                   unsigned                     prb_size,
+                                                   float                        iq_scaling)
+{
+    unsigned region_index = blockIdx.y;
+    if (region_index >= nof_regions) {
+        return;
+    }
+    const ocudu_ofh_compression_region_t& region = batch.regions[region_index];
+    unsigned prb = blockIdx.x * blockDim.x + threadIdx.x;
+    if (prb >= region.nof_prbs) {
+        return;
+    }
+    size_t input_re = (static_cast<size_t>(region.port) * nof_grid_symbols + region.symbol) * nof_subc +
+                      (static_cast<size_t>(region.start_prb) + prb) * NOF_SUBCARRIERS_PER_RB;
+    compress_prb_t<DATA_WIDTH, BFP>(input_grid + input_re, region.output + static_cast<size_t>(prb) * prb_size, iq_scaling);
+}
+
+template <unsigned DATA_WIDTH, bool BFP>
+static void launch_compress_grid_regions_t(const uint32_t*                     input_grid,
+                                           unsigned                            nof_grid_symbols,
+                                           unsigned                            nof_subc,
+                                           const ofh_compression_region_batch& batch,
+                                           unsigned                            nof_regions,
+                                           unsigned                            max_nof_prbs,
+                                           unsigned                            prb_size,
+                                           float                               iq_scaling,
+                                           cudaStream_t                        stream)
+{
+    constexpr unsigned threads = 64U;
+    dim3               block(threads);
+    dim3               grid((max_nof_prbs + threads - 1U) / threads, nof_regions);
+    ofh_compress_grid_regions_kernel_t<DATA_WIDTH, BFP><<<grid, block, 0, stream>>>(
+        input_grid, nof_grid_symbols, nof_subc, batch, nof_regions, prb_size, iq_scaling);
+}
+
+template <bool BFP>
+static bool launch_compress_grid_regions(const uint32_t*                     input_grid,
+                                         unsigned                            nof_grid_symbols,
+                                         unsigned                            nof_subc,
+                                         const ofh_compression_region_batch& batch,
+                                         unsigned                            nof_regions,
+                                         unsigned                            max_nof_prbs,
+                                         unsigned                            data_width,
+                                         unsigned                            prb_size,
+                                         float                               iq_scaling,
+                                         cudaStream_t                        stream)
+{
+    switch (data_width) {
+        case 8:
+            launch_compress_grid_regions_t<8, BFP>(input_grid, nof_grid_symbols, nof_subc, batch, nof_regions, max_nof_prbs, prb_size, iq_scaling, stream);
+            return true;
+        case 9:
+            launch_compress_grid_regions_t<9, BFP>(input_grid, nof_grid_symbols, nof_subc, batch, nof_regions, max_nof_prbs, prb_size, iq_scaling, stream);
+            return true;
+        case 10:
+            launch_compress_grid_regions_t<10, BFP>(input_grid, nof_grid_symbols, nof_subc, batch, nof_regions, max_nof_prbs, prb_size, iq_scaling, stream);
+            return true;
+        case 12:
+            launch_compress_grid_regions_t<12, BFP>(input_grid, nof_grid_symbols, nof_subc, batch, nof_regions, max_nof_prbs, prb_size, iq_scaling, stream);
+            return true;
+        case 14:
+            launch_compress_grid_regions_t<14, BFP>(input_grid, nof_grid_symbols, nof_subc, batch, nof_regions, max_nof_prbs, prb_size, iq_scaling, stream);
+            return true;
+        case 16:
+            launch_compress_grid_regions_t<16, BFP>(input_grid, nof_grid_symbols, nof_subc, batch, nof_regions, max_nof_prbs, prb_size, iq_scaling, stream);
+            return true;
+        default:
+            return false;
+    }
+}
+
+extern "C" int ocudu_ofh_compression_device_writes_host_memory(void)
+{
+    int device = 0;
+    int pageable_access = 0;
+    return (cudaGetDevice(&device) == cudaSuccess) &&
+           (cudaDeviceGetAttribute(&pageable_access, cudaDevAttrPageableMemoryAccess, device) == cudaSuccess) &&
+           (pageable_access != 0);
+}
+
+extern "C" int ocudu_ofh_compress_device_grid_regions_async(ocudu_ofh_compression_handle_t*       handle,
+                                                            int                                   compression_type,
+                                                            const void*                           input_grid_cbf16,
+                                                            unsigned                              nof_grid_ports,
+                                                            unsigned                              nof_grid_symbols,
+                                                            unsigned                              nof_subc,
+                                                            const ocudu_ofh_compression_region_t* regions,
+                                                            unsigned                              nof_regions,
+                                                            unsigned                              data_width,
+                                                            float                                 iq_scaling)
+{
+    if ((handle == nullptr) || (input_grid_cbf16 == nullptr) || ((regions == nullptr) && (nof_regions != 0U)) ||
+        (nof_grid_ports == 0U) || (nof_grid_symbols == 0U) || (nof_subc == 0U) ||
+        ((nof_subc % NOF_SUBCARRIERS_PER_RB) != 0U) || !valid_request(compression_type, 1U, data_width)) {
+        return 0;
+    }
+    const unsigned grid_nof_prbs = nof_subc / NOF_SUBCARRIERS_PER_RB;
+    for (unsigned i = 0; i != nof_regions; ++i) {
+        const ocudu_ofh_compression_region_t& region = regions[i];
+        if ((region.output == nullptr) || (region.nof_prbs == 0U) || (region.port >= nof_grid_ports) ||
+            (region.symbol >= nof_grid_symbols) ||
+            (static_cast<unsigned>(region.start_prb) + region.nof_prbs > grid_nof_prbs)) {
+            return 0;
+        }
+    }
+
+    const bool     bfp      = compression_type == OCUDU_OFH_COMPRESSION_TYPE_BFP;
+    const unsigned prb_size = compressed_prb_size(compression_type, data_width);
+    for (unsigned first = 0; first < nof_regions; first += OFH_COMPRESSION_REGIONS_PER_LAUNCH) {
+        const unsigned               count = std::min(nof_regions - first, OFH_COMPRESSION_REGIONS_PER_LAUNCH);
+        ofh_compression_region_batch batch = {};
+        unsigned                     max_nof_prbs = 0;
+        for (unsigned i = 0; i != count; ++i) {
+            batch.regions[i] = regions[first + i];
+            max_nof_prbs     = std::max(max_nof_prbs, static_cast<unsigned>(regions[first + i].nof_prbs));
+        }
+        const bool supported =
+            bfp ? launch_compress_grid_regions<true>(reinterpret_cast<const uint32_t*>(input_grid_cbf16),
+                                                     nof_grid_symbols, nof_subc, batch, count, max_nof_prbs,
+                                                     data_width, prb_size, iq_scaling, handle->stream)
+                : launch_compress_grid_regions<false>(reinterpret_cast<const uint32_t*>(input_grid_cbf16),
+                                                      nof_grid_symbols, nof_subc, batch, count, max_nof_prbs,
+                                                      data_width, prb_size, iq_scaling, handle->stream);
+        if (!supported) {
+            return 0;
+        }
+        if (!record_cuda_status(handle, cudaGetLastError(), "launch O-FH region compression kernel")) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 extern "C" int ocudu_ofh_compress_device_grid_symbol_batch_to_device_async(ocudu_ofh_compression_handle_t* handle,

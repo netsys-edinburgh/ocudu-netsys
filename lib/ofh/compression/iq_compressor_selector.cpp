@@ -109,3 +109,15 @@ bool iq_compressor_selector::compress_device_symbol_batch_to_buffers(span<span<u
   return compressor->compress_device_symbol_batch_to_buffers(
       buffers, grid, first_port, nof_ports, first_symbol, nof_symbols, start_prb, nof_prbs, params);
 }
+
+bool iq_compressor_selector::supports_device_grid_regions(const ru_compression_params& params) const
+{
+  return compressors[static_cast<unsigned>(params.type)]->supports_device_grid_regions(params);
+}
+
+bool iq_compressor_selector::compress_device_grid_regions(span<const device_grid_compression_region> regions,
+                                                          const resource_grid_reader&                grid,
+                                                          const ru_compression_params&               params)
+{
+  return compressors[static_cast<unsigned>(params.type)]->compress_device_grid_regions(regions, grid, params);
+}

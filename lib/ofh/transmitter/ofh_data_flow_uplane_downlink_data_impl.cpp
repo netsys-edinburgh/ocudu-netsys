@@ -368,6 +368,13 @@ bool data_flow_uplane_downlink_data_impl::enqueue_section_type_1_messages_slot_b
   }
   const unsigned nof_symbols = symbol_end - first_symbol;
 
+  // Every fragment of the slot in one compression call when the compressor supports it.
+  if (compressor_sel->supports_device_grid_regions(compr_params) &&
+      enqueue_section_type_1_messages_slot_regions(
+          base_context, first_symbol, nof_symbols, first_port, eaxcs, reader)) {
+    return true;
+  }
+
   units::bytes headers_size = eth_builder->get_header_size() +
                               ecpri_builder->get_header_size(ecpri::message_type::iq_data) +
                               up_builder->get_header_size(compr_params);
@@ -478,6 +485,131 @@ bool data_flow_uplane_downlink_data_impl::enqueue_section_type_1_messages_slot_b
     committed_buffers = true;
   } while (!is_last_fragment);
 
+  return true;
+}
+
+bool data_flow_uplane_downlink_data_impl::enqueue_section_type_1_messages_slot_regions(
+    const data_flow_uplane_resource_grid_context& base_context,
+    unsigned                                      first_symbol,
+    unsigned                                      nof_symbols,
+    unsigned                                      first_port,
+    span<const unsigned>                          eaxcs,
+    const resource_grid_reader&                   reader)
+{
+  const unsigned nof_ports    = eaxcs.size();
+  const unsigned nof_messages = nof_symbols * nof_ports;
+
+  const units::bytes headers_size = eth_builder->get_header_size() +
+                                    ecpri_builder->get_header_size(ecpri::message_type::iq_data) +
+                                    up_builder->get_header_size(compr_params);
+  const units::bytes offset =
+      eth_builder->get_header_size() + ecpri_builder->get_header_size(ecpri::message_type::iq_data);
+
+  struct fragment_info {
+    unsigned              first_message;
+    uplane_message_params params;
+  };
+  std::vector<ether::scoped_frame_buffer>     scoped_buffers;
+  std::vector<span<uint8_t>>                  data_buffers;
+  std::vector<span<uint8_t>>                  ofh_buffers;
+  std::vector<span<uint8_t>>                  payloads;
+  std::vector<unsigned>                       up_bytes_written;
+  std::vector<fragment_info>                  fragments;
+  std::vector<device_grid_compression_region> regions;
+
+  // Reserve the buffers and build the headers of every fragment of the slot.
+  ofh_uplane_fragment_size_calculator prb_fragment_calculator(0, ru_nof_prbs, compr_params);
+  bool                                is_last_fragment   = false;
+  unsigned                            fragment_start_prb = 0U;
+  unsigned                            fragment_nof_prbs  = 0U;
+  do {
+    const unsigned first_message = scoped_buffers.size();
+    for (unsigned i_symbol = 0; i_symbol != nof_symbols; ++i_symbol) {
+      for (unsigned i_port = 0; i_port != nof_ports; ++i_port) {
+        trace_point pool_access_tp = ofh_tracer.now();
+        auto        scoped_buffer =
+            frame_pool->reserve(slot_symbol_point(base_context.slot, first_symbol + i_symbol, nof_symbols_per_slot));
+        ofh_tracer << trace_event("ofh_uplane_pool_access", pool_access_tp);
+        if (OCUDU_UNLIKELY(!scoped_buffer)) {
+          logger.warning(
+              "Sector#{}: not enough space in the buffer pool to create downlink User-Plane symbol batch for slot "
+              "'{}'",
+              sector_id,
+              base_context.slot);
+          return false;
+        }
+        span<uint8_t> data = scoped_buffer->get_buffer();
+        if (OCUDU_UNLIKELY(data.size() < headers_size.value())) {
+          return false;
+        }
+        data_buffers.push_back(data);
+        ofh_buffers.push_back(span<uint8_t>(data).last(data.size() - offset.value()));
+        scoped_buffers.emplace_back(std::move(scoped_buffer));
+      }
+    }
+    is_last_fragment = prb_fragment_calculator.calculate_fragment_size(
+        fragment_start_prb, fragment_nof_prbs, data_buffers[first_message].size() - headers_size.value());
+    if (OCUDU_UNLIKELY(fragment_nof_prbs == 0)) {
+      return false;
+    }
+
+    uplane_message_params up_params = generate_dl_ofh_user_parameters(
+        base_context.slot, first_symbol, fragment_start_prb, fragment_nof_prbs, compr_params);
+    payloads.resize(scoped_buffers.size());
+    up_bytes_written.resize(scoped_buffers.size());
+    if (!up_builder->build_symbol_batch_message_headers(
+            span<span<uint8_t>>(ofh_buffers).subspan(first_message, nof_messages),
+            first_symbol,
+            nof_symbols,
+            up_params,
+            span<span<uint8_t>>(payloads).subspan(first_message, nof_messages),
+            span<unsigned>(up_bytes_written).subspan(first_message, nof_messages))) {
+      return false;
+    }
+    fragments.push_back({first_message, up_params});
+    for (unsigned i_symbol = 0; i_symbol != nof_symbols; ++i_symbol) {
+      for (unsigned i_port = 0; i_port != nof_ports; ++i_port) {
+        regions.push_back({first_port + i_port,
+                           first_symbol + i_symbol,
+                           fragment_start_prb,
+                           fragment_nof_prbs,
+                           payloads[first_message + i_symbol * nof_ports + i_port]});
+      }
+    }
+  } while (!is_last_fragment);
+
+  ofh_tracer << instant_trace_event{"ofh_uplane_symbol", instant_trace_event::cpu_scope::thread};
+
+  // Compress every payload of the slot at once; if that fails, fragment by fragment.
+  if (!compressor_sel->compress_device_grid_regions(regions, reader, compr_params)) {
+    for (const fragment_info& fragment : fragments) {
+      if (!compressor_sel->compress_device_symbol_batch_to_buffers(
+              span<span<uint8_t>>(payloads).subspan(fragment.first_message, nof_messages),
+              reader,
+              first_port,
+              nof_ports,
+              first_symbol,
+              nof_symbols,
+              fragment.params.start_prb,
+              fragment.params.nof_prb,
+              compr_params)) {
+        return false;
+      }
+    }
+  }
+
+  for (const fragment_info& fragment : fragments) {
+    for (unsigned i_symbol = 0; i_symbol != nof_symbols; ++i_symbol) {
+      for (unsigned i_port = 0; i_port != nof_ports; ++i_port) {
+        const unsigned        message_index = fragment.first_message + i_symbol * nof_ports + i_port;
+        uplane_message_params symbol_params = fragment.params;
+        symbol_params.symbol_id             = first_symbol + i_symbol;
+        unsigned used_size                  = finish_section_type_1_message_symbol(
+            up_bytes_written[message_index], symbol_params, eaxcs[i_port], data_buffers[message_index]);
+        scoped_buffers[message_index]->set_size(used_size);
+      }
+    }
+  }
   return true;
 }
 

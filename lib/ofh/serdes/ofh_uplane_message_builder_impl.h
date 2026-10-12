@@ -53,7 +53,23 @@ public:
                                    const uplane_message_params& params,
                                    span<unsigned>               bytes_written) override;
 
+  /// \copydoc uplane_message_builder::build_symbol_batch_message_headers
+  bool build_symbol_batch_message_headers(span<span<uint8_t>>          buffers,
+                                          unsigned                     first_symbol,
+                                          unsigned                     nof_symbols,
+                                          const uplane_message_params& params,
+                                          span<span<uint8_t>>          payloads,
+                                          span<unsigned>               bytes_written) override;
+
 private:
+  /// Serializes the headers of a symbol and port batch and returns each message's payload span.
+  bool serialize_symbol_batch_headers(span<span<uint8_t>>          buffers,
+                                      unsigned                     first_symbol,
+                                      unsigned                     nof_symbols,
+                                      const uplane_message_params& params,
+                                      span<span<uint8_t>>          payloads,
+                                      span<unsigned>               bytes_written);
+
   /// Serializes IQ data from a resource grid.
   void serialize_iq_data(network_order_binary_serializer& serializer,
                          span<const cbf16_t>              iq_data,

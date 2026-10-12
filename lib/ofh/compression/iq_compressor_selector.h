@@ -77,6 +77,14 @@ public:
                                                unsigned                     nof_prbs,
                                                const ru_compression_params& params) override;
 
+  // See interface for documentation.
+  bool supports_device_grid_regions(const ru_compression_params& params) const override;
+
+  // See interface for documentation.
+  bool compress_device_grid_regions(span<const device_grid_compression_region> regions,
+                                    const resource_grid_reader&                grid,
+                                    const ru_compression_params&               params) override;
+
 private:
   std::array<std::unique_ptr<iq_compressor>, NOF_COMPRESSION_TYPES_SUPPORTED> compressors;
 };

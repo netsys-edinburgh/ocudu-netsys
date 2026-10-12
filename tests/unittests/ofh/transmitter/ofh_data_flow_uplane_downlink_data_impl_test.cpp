@@ -9,10 +9,13 @@
 #include "../ethernet/vlan_ethernet_frame_builder_test_doubles.h"
 #include "ocudu/adt/format.h"
 #include "ocudu/adt/interval.h"
+#include "ocudu/ofh/compression/compression_properties.h"
 #include "ocudu/ofh/ethernet/ethernet_frame_pool.h"
 #include "ocudu/phy/support/resource_grid_context.h"
 #include "ocudu/ran/resource_block.h"
+#include <array>
 #include <gtest/gtest.h>
+#include <optional>
 #include <vector>
 
 using namespace ocudu;
@@ -337,4 +340,248 @@ TEST(ofh_data_flow_uplane_downlink_data_impl, frame_buffer_size_of_nof_prbs_gene
 
   // Assert number of packets. As the packet should not fit in the frame, check that it generated 2 packets per symbol.
   ASSERT_EQ(uplane_builder->nof_built_packets(), context.symbol_range.length() * 2);
+}
+
+namespace {
+
+/// Resource-grid reader spy that reports a device-visible grid, so that the slot-burst paths are taken.
+class device_grid_reader_spy : public resource_grid_reader_spy
+{
+public:
+  using resource_grid_reader_spy::resource_grid_reader_spy;
+
+  bool supports_device_grid_reading() const override { return true; }
+};
+
+/// User-Plane builder spy for the region path: lays out 8 header bytes followed by the payload of each message.
+class uplane_header_builder_spy : public uplane_message_builder
+{
+public:
+  static constexpr unsigned header_size = 8;
+
+  struct batch_call {
+    unsigned              first_symbol;
+    unsigned              nof_symbols;
+    uplane_message_params params;
+  };
+
+  units::bytes get_header_size(const ru_compression_params& params) const override { return units::bytes(header_size); }
+
+  unsigned build_message(span<uint8_t> buffer, span<const cbf16_t> grid, const uplane_message_params& params) override
+  {
+    ++nof_message_builds;
+    return 0;
+  }
+
+  bool build_symbol_batch_message_headers(span<span<uint8_t>>          buffers,
+                                          unsigned                     first_symbol,
+                                          unsigned                     nof_symbols,
+                                          const uplane_message_params& params,
+                                          span<span<uint8_t>>          payloads,
+                                          span<unsigned>               bytes_written) override
+  {
+    const unsigned payload_size = params.nof_prb * get_compressed_prb_size(params.compression_params).value();
+    for (unsigned i = 0, e = buffers.size(); i != e; ++i) {
+      if (buffers[i].size() < header_size + payload_size) {
+        return false;
+      }
+      payloads[i]      = buffers[i].subspan(header_size, payload_size);
+      bytes_written[i] = header_size + payload_size;
+    }
+    batch_calls.push_back({first_symbol, nof_symbols, params});
+    all_payloads.insert(all_payloads.end(), payloads.begin(), payloads.end());
+    return true;
+  }
+
+  std::vector<batch_call>    batch_calls;
+  std::vector<span<uint8_t>> all_payloads;
+  unsigned                   nof_message_builds = 0;
+};
+
+/// Compressor spy for the region path; records the regions and the per-fragment fallback calls.
+class region_compressor_spy : public iq_compressor
+{
+public:
+  struct fallback_call {
+    std::vector<span<uint8_t>> buffers;
+    unsigned                   first_port;
+    unsigned                   nof_ports;
+    unsigned                   first_symbol;
+    unsigned                   nof_symbols;
+    unsigned                   start_prb;
+    unsigned                   nof_prbs;
+  };
+
+  region_compressor_spy(bool supports_, bool succeeds_) : supports(supports_), succeeds(succeeds_) {}
+
+  void compress(span<uint8_t> buffer, span<const cbf16_t> iq_data, const ru_compression_params& params) override {}
+
+  bool supports_device_grid_regions(const ru_compression_params& params) const override { return supports; }
+
+  bool compress_device_grid_regions(span<const device_grid_compression_region> regions,
+                                    const resource_grid_reader&                grid,
+                                    const ru_compression_params&               params) override
+  {
+    region_calls.emplace_back(regions.begin(), regions.end());
+    return succeeds;
+  }
+
+  bool compress_device_symbol_batch_to_buffers(span<span<uint8_t>>          buffers,
+                                               const resource_grid_reader&  grid,
+                                               unsigned                     first_port,
+                                               unsigned                     nof_ports,
+                                               unsigned                     first_symbol,
+                                               unsigned                     nof_symbols,
+                                               unsigned                     start_prb,
+                                               unsigned                     nof_prbs,
+                                               const ru_compression_params& params) override
+  {
+    fallback_calls.push_back(
+        {{buffers.begin(), buffers.end()}, first_port, nof_ports, first_symbol, nof_symbols, start_prb, nof_prbs});
+    return true;
+  }
+
+  const bool                                               supports;
+  const bool                                               succeeds;
+  std::vector<std::vector<device_grid_compression_region>> region_calls;
+  std::vector<fallback_call>                               fallback_calls;
+};
+
+/// Region-path test bench: 2 ports, 3 symbols, 273 PRBs of BFP 9, frames holding 150 PRBs (two fragments per symbol).
+struct region_path_bench {
+  static constexpr unsigned nof_ports   = 2;
+  static constexpr unsigned nof_symbols = 3;
+  static constexpr unsigned nof_prbs    = 273;
+  static constexpr unsigned frame_prbs  = 150;
+
+  region_path_bench(bool supports, bool succeeds) :
+    rg_reader(nof_ports, nof_symbols, nof_prbs), rg(rg_reader, rg_writer), shared_rg(rg)
+  {
+    data_flow_uplane_downlink_data_impl_config config;
+    config.ru_nof_prbs  = nof_prbs;
+    config.compr_params = {compression_type::BFP, 9};
+
+    data_flow_uplane_downlink_data_impl_dependencies dependencies;
+    dependencies.logger         = &ocudulog::fetch_basic_logger("TEST");
+    auto compr                  = std::make_unique<region_compressor_spy>(supports, succeeds);
+    compressor                  = compr.get();
+    dependencies.compressor_sel = std::move(compr);
+    auto up                     = std::make_unique<uplane_header_builder_spy>();
+    up_builder                  = up.get();
+    dependencies.up_builder     = std::move(up);
+    auto eth                    = std::make_unique<ether::testing::vlan_frame_builder_spy>(ether::vlan_frame_params{
+                           {0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x11}, {0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x22}, {}, 0xaabb});
+    auto ecpri                  = std::make_unique<ecpri::testing::packet_builder_spy>();
+    ecpri_builder               = ecpri.get();
+    const unsigned frame_size   = frame_prbs * get_compressed_prb_size(config.compr_params).value() +
+                                uplane_header_builder_spy::header_size + eth->get_header_size().value() +
+                                ecpri->get_header_size(ecpri::message_type::iq_data).value();
+    dependencies.eth_builder   = std::move(eth);
+    dependencies.ecpri_builder = std::move(ecpri);
+    dependencies.frame_pool    = std::make_shared<ether::eth_frame_pool>(
+        *dependencies.logger, units::bytes(frame_size), 2, message_type::user_plane, data_direction::downlink);
+    data_flow.emplace(config, std::move(dependencies));
+  }
+
+  void run()
+  {
+    data_flow_uplane_resource_grid_context context;
+    context.sector       = 0;
+    context.slot         = slot_point(0, 0, 0);
+    context.symbol_range = {0, nof_symbols};
+    data_flow->enqueue_section_type_1_messages(context, 0, eaxcs, shared_rg.get_grid());
+  }
+
+  const std::array<unsigned, nof_ports>              eaxcs = {4, 5};
+  device_grid_reader_spy                             rg_reader;
+  resource_grid_writer_spy                           rg_writer;
+  resource_grid_spy                                  rg;
+  shared_resource_grid_spy                           shared_rg;
+  region_compressor_spy*                             compressor    = nullptr;
+  uplane_header_builder_spy*                         up_builder    = nullptr;
+  ecpri::testing::packet_builder_spy*                ecpri_builder = nullptr;
+  std::optional<data_flow_uplane_downlink_data_impl> data_flow;
+};
+
+} // namespace
+
+TEST(ofh_data_flow_uplane_downlink_data_impl, slot_regions_compress_every_fragment_with_one_call)
+{
+  region_path_bench bench(true, true);
+  bench.run();
+
+  // Headers of both fragments built as symbol batches; every fragment, symbol and port compressed in one call.
+  ASSERT_EQ(bench.up_builder->batch_calls.size(), 2);
+  const interval<unsigned> fragments[] = {{0, region_path_bench::frame_prbs},
+                                          {region_path_bench::frame_prbs, region_path_bench::nof_prbs}};
+  for (unsigned i_fragment = 0; i_fragment != 2; ++i_fragment) {
+    const auto& call = bench.up_builder->batch_calls[i_fragment];
+    EXPECT_EQ(call.first_symbol, 0);
+    EXPECT_EQ(call.nof_symbols, region_path_bench::nof_symbols);
+    EXPECT_EQ(call.params.start_prb, fragments[i_fragment].start());
+    EXPECT_EQ(call.params.nof_prb, fragments[i_fragment].length());
+  }
+  ASSERT_EQ(bench.compressor->region_calls.size(), 1);
+  EXPECT_TRUE(bench.compressor->fallback_calls.empty());
+  EXPECT_EQ(bench.up_builder->nof_message_builds, 0);
+
+  // Regions ordered by fragment, symbol and port, each writing the payload of its own message.
+  const std::vector<device_grid_compression_region>& regions = bench.compressor->region_calls.front();
+  ASSERT_EQ(regions.size(), 2 * region_path_bench::nof_symbols * region_path_bench::nof_ports);
+  ASSERT_EQ(bench.up_builder->all_payloads.size(), regions.size());
+  for (unsigned i = 0, e = regions.size(); i != e; ++i) {
+    const unsigned i_fragment = i / (region_path_bench::nof_symbols * region_path_bench::nof_ports);
+    EXPECT_EQ(regions[i].port, i % region_path_bench::nof_ports) << i;
+    EXPECT_EQ(regions[i].symbol, (i / region_path_bench::nof_ports) % region_path_bench::nof_symbols) << i;
+    EXPECT_EQ(regions[i].start_prb, fragments[i_fragment].start()) << i;
+    EXPECT_EQ(regions[i].nof_prbs, fragments[i_fragment].length()) << i;
+    EXPECT_EQ(regions[i].output.data(), bench.up_builder->all_payloads[i].data()) << i;
+    EXPECT_EQ(regions[i].output.size(), bench.up_builder->all_payloads[i].size()) << i;
+  }
+
+  // One eCPRI / Ethernet message per region, carrying its port's eAxC.
+  span<const ecpri::iq_data_parameters> data_params = bench.ecpri_builder->get_data_parameters();
+  ASSERT_EQ(data_params.size(), regions.size());
+  for (unsigned i = 0, e = data_params.size(); i != e; ++i) {
+    EXPECT_EQ(data_params[i].pc_id, bench.eaxcs[i % region_path_bench::nof_ports]) << i;
+  }
+}
+
+TEST(ofh_data_flow_uplane_downlink_data_impl, slot_regions_failure_falls_back_per_fragment)
+{
+  region_path_bench bench(true, false);
+  bench.run();
+
+  // The region call fails: each fragment is compressed as a symbol batch into the same payloads.
+  ASSERT_EQ(bench.compressor->region_calls.size(), 1);
+  ASSERT_EQ(bench.compressor->fallback_calls.size(), 2);
+  const unsigned messages_per_fragment = region_path_bench::nof_symbols * region_path_bench::nof_ports;
+  for (unsigned i_fragment = 0; i_fragment != 2; ++i_fragment) {
+    const auto& call = bench.compressor->fallback_calls[i_fragment];
+    EXPECT_EQ(call.first_port, 0);
+    EXPECT_EQ(call.nof_ports, region_path_bench::nof_ports);
+    EXPECT_EQ(call.first_symbol, 0);
+    EXPECT_EQ(call.nof_symbols, region_path_bench::nof_symbols);
+    EXPECT_EQ(call.start_prb, i_fragment * region_path_bench::frame_prbs);
+    EXPECT_EQ(call.nof_prbs,
+              i_fragment == 0 ? region_path_bench::frame_prbs
+                              : region_path_bench::nof_prbs - region_path_bench::frame_prbs);
+    ASSERT_EQ(call.buffers.size(), messages_per_fragment);
+    for (unsigned i = 0; i != messages_per_fragment; ++i) {
+      EXPECT_EQ(call.buffers[i].data(), bench.up_builder->all_payloads[i_fragment * messages_per_fragment + i].data());
+    }
+  }
+  EXPECT_EQ(bench.ecpri_builder->get_data_parameters().size(), 2 * messages_per_fragment);
+  EXPECT_EQ(bench.up_builder->nof_message_builds, 0);
+}
+
+TEST(ofh_data_flow_uplane_downlink_data_impl, slot_regions_unused_when_the_compressor_does_not_support_them)
+{
+  region_path_bench bench(false, true);
+  bench.run();
+
+  // The previous paths build the messages one by one (this builder has no symbol-batch build).
+  EXPECT_TRUE(bench.compressor->region_calls.empty());
+  EXPECT_TRUE(bench.up_builder->batch_calls.empty());
+  EXPECT_EQ(bench.up_builder->nof_message_builds, 2 * region_path_bench::nof_symbols * region_path_bench::nof_ports);
 }
