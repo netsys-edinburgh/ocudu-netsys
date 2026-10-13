@@ -214,6 +214,10 @@ The injection points sit on the real data path. In OAI, the MAC/RLC/PDCP hooks r
 
 - Running the eBPF backends needs root, or `CAP_BPF` + `CAP_PERFMON` (plus `CAP_SYS_ADMIN` for the infra cgroup
   lookup).
+- Docker images built from `docker/Dockerfile` install the eBPF build and runtime dependencies on Debian and Ubuntu
+  (`docker/scripts/install_aurora_ebpf_dependencies.sh`) and give the RAN binaries the `cap_bpf` and `cap_perfmon`
+  file capabilities. The container must allow both, e.g. `privileged: true` or `cap_add: [BPF, PERFMON]`, otherwise
+  the binary fails to start with "operation not permitted".
 - The thread collectors (procfs or eBPF) are driven by the publisher once per interval, so every published interval is
   complete. OAI used a free-running collector thread that raced the reset and could destroy the BPF skeleton while still
   reading its maps.

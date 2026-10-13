@@ -42,7 +42,8 @@ RUN --mount=type=secret,id=rh_entitlement_cert,target=/etc/pki/entitlement/entit
     --mount=type=secret,id=rh_rhsm_conf,target=/etc/rhsm/rhsm.conf \
     --mount=type=secret,id=rh_rhsm_ca,target=/etc/rhsm/ca/redhat-uep.pem \
     /src/docker/scripts/install_dependencies.sh build && \
-    /src/docker/scripts/install_docker_dependencies.sh build
+    /src/docker/scripts/install_docker_dependencies.sh build && \
+    /src/docker/scripts/install_aurora_ebpf_dependencies.sh build
 
 #################################
 # Stage 0b: Shared lean base     #
@@ -389,7 +390,8 @@ RUN --mount=type=secret,id=rh_entitlement_cert,target=/etc/pki/entitlement/entit
     --mount=type=secret,id=rh_rhsm_ca,target=/etc/rhsm/ca/redhat-uep.pem \
     /usr/local/etc/install_ocudu_dependencies.sh run && \
     /usr/local/etc/install_rohc_dependencies.sh run && \
-    /usr/local/etc/install_docker_dependencies.sh run
+    /usr/local/etc/install_docker_dependencies.sh run && \
+    /usr/local/etc/install_aurora_ebpf_dependencies.sh run
 
 # Register DPDK/UHD/ROHC library paths for the dynamic linker.
 # When binaries have file capabilities, ld.so enters secure-execution mode and
@@ -449,15 +451,15 @@ RUN --mount=type=secret,id=rh_entitlement_cert,target=/etc/pki/entitlement/entit
 RUN case "${COMPONENT}" in \
       gnb|du) \
         BIN=$([ "${COMPONENT}" = "gnb" ] && echo "gnb" || echo "odu") && \
-        setcap cap_sys_nice,cap_ipc_lock,cap_perfmon+ep /usr/local/bin/${BIN} && \
+        setcap cap_sys_nice,cap_ipc_lock,cap_perfmon,cap_bpf+ep /usr/local/bin/${BIN} && \
         getcap /usr/local/bin/${BIN} ;; \
       ru-emulator) setcap cap_sys_nice,cap_ipc_lock+ep /usr/local/bin/ru_emulator && getcap /usr/local/bin/ru_emulator ;; \
       cu)    setcap cap_sys_nice,cap_ipc_lock+ep             /usr/local/bin/ocu   && getcap /usr/local/bin/ocu ;; \
-      cu-cp) setcap cap_sys_nice,cap_ipc_lock,cap_perfmon+ep /usr/local/bin/ocucp && getcap /usr/local/bin/ocucp ;; \
-      cu-up) setcap cap_sys_nice,cap_ipc_lock,cap_perfmon+ep /usr/local/bin/ocuup && getcap /usr/local/bin/ocuup ;; \
+      cu-cp) setcap cap_sys_nice,cap_ipc_lock,cap_perfmon,cap_bpf+ep /usr/local/bin/ocucp && getcap /usr/local/bin/ocucp ;; \
+      cu-up) setcap cap_sys_nice,cap_ipc_lock,cap_perfmon,cap_bpf+ep /usr/local/bin/ocuup && getcap /usr/local/bin/ocuup ;; \
       *) \
         for bin in gnb odu ocucp ocuup; do \
-            test -f /usr/local/bin/${bin} && setcap cap_sys_nice,cap_ipc_lock,cap_perfmon+ep /usr/local/bin/${bin} || true; \
+            test -f /usr/local/bin/${bin} && setcap cap_sys_nice,cap_ipc_lock,cap_perfmon,cap_bpf+ep /usr/local/bin/${bin} || true; \
         done && \
         for bin in ocu ru_emulator; do \
             test -f /usr/local/bin/${bin} && setcap cap_sys_nice,cap_ipc_lock+ep /usr/local/bin/${bin} || true; \
@@ -478,8 +480,8 @@ COPY --from=builder-lean /opt/ocudu /usr/local
 RUN ldconfig && \
     case "${COMPONENT}" in \
       cu)    setcap cap_sys_nice,cap_ipc_lock+ep             /usr/local/bin/ocu   && getcap /usr/local/bin/ocu ;; \
-      cu-cp) setcap cap_sys_nice,cap_ipc_lock,cap_perfmon+ep /usr/local/bin/ocucp && getcap /usr/local/bin/ocucp ;; \
-      cu-up) setcap cap_sys_nice,cap_ipc_lock,cap_perfmon+ep /usr/local/bin/ocuup && getcap /usr/local/bin/ocuup ;; \
+      cu-cp) setcap cap_sys_nice,cap_ipc_lock,cap_perfmon,cap_bpf+ep /usr/local/bin/ocucp && getcap /usr/local/bin/ocucp ;; \
+      cu-up) setcap cap_sys_nice,cap_ipc_lock,cap_perfmon,cap_bpf+ep /usr/local/bin/ocuup && getcap /usr/local/bin/ocuup ;; \
       *)     echo "Unsupported lean component: ${COMPONENT}" >&2; exit 1 ;; \
     esac
 
@@ -503,8 +505,8 @@ RUN --mount=type=secret,id=rh_entitlement_cert,target=/etc/pki/entitlement/entit
     ldconfig
 
 RUN case "${COMPONENT}" in \
-      gnb) setcap cap_sys_nice,cap_ipc_lock,cap_perfmon+ep /usr/local/bin/gnb && getcap /usr/local/bin/gnb ;; \
-      du)  setcap cap_sys_nice,cap_ipc_lock,cap_perfmon+ep /usr/local/bin/odu && getcap /usr/local/bin/odu ;; \
+      gnb) setcap cap_sys_nice,cap_ipc_lock,cap_perfmon,cap_bpf+ep /usr/local/bin/gnb && getcap /usr/local/bin/gnb ;; \
+      du)  setcap cap_sys_nice,cap_ipc_lock,cap_perfmon,cap_bpf+ep /usr/local/bin/odu && getcap /usr/local/bin/odu ;; \
       *)   echo "Unsupported UHD component: ${COMPONENT}" >&2; exit 1 ;; \
     esac
 
@@ -528,8 +530,8 @@ RUN --mount=type=secret,id=rh_entitlement_cert,target=/etc/pki/entitlement/entit
     ldconfig
 
 RUN case "${COMPONENT}" in \
-      gnb)         setcap cap_sys_nice,cap_ipc_lock,cap_perfmon+ep /usr/local/bin/gnb && getcap /usr/local/bin/gnb ;; \
-      du)          setcap cap_sys_nice,cap_ipc_lock,cap_perfmon+ep /usr/local/bin/odu && getcap /usr/local/bin/odu ;; \
+      gnb)         setcap cap_sys_nice,cap_ipc_lock,cap_perfmon,cap_bpf+ep /usr/local/bin/gnb && getcap /usr/local/bin/gnb ;; \
+      du)          setcap cap_sys_nice,cap_ipc_lock,cap_perfmon,cap_bpf+ep /usr/local/bin/odu && getcap /usr/local/bin/odu ;; \
       ru-emulator) setcap cap_sys_nice,cap_ipc_lock+ep /usr/local/bin/ru_emulator && getcap /usr/local/bin/ru_emulator ;; \
       *)           echo "Unsupported DPDK component: ${COMPONENT}" >&2; exit 1 ;; \
     esac
