@@ -147,6 +147,26 @@ static void hist_stats_exp(const aurora_hist_t *hist, hist_stats_t *st) {
 
 typedef struct { double min, max, sum; int n; } agg_t;
 
+/* F1-C (F1AP) and F1-U (NR-U) interface columns, in CSV order. DL = CU-CP/CU-UP -> DU, UL = DU -> CU. */
+#define F1C_FIELDS(X)                                                                                                  \
+    X(f1c_dl_msgs) X(f1c_ul_msgs) X(f1c_dl_bytes) X(f1c_ul_bytes) X(f1c_dl_bytes_max) X(f1c_ul_bytes_max)             \
+    X(f1c_dl_rrc_msgs) X(f1c_ul_rrc_msgs) X(f1c_dl_rrc_bytes) X(f1c_ul_rrc_bytes) X(f1c_decode_errors)                \
+    X(f1c_init_ul_rrc) X(f1c_paging) X(f1c_ue_ctx_release_req) X(f1c_resets) X(f1c_error_indications)                 \
+    X(f1c_proc_timeouts) X(f1c_links_up)
+#define F1U_FIELDS(X)                                                                                                  \
+    X(f1u_dl_pdus) X(f1u_ul_pdus) X(f1u_dl_dropped) X(f1u_ul_dropped) X(f1u_dl_discards) X(f1u_dds) X(f1u_dds_failures)
+#define F1C_NOF_PROCS 4
+static const char *const f1c_proc_names[F1C_NOF_PROCS] = {"f1c_f1_setup", "f1c_ue_ctx_setup", "f1c_ue_ctx_mod",
+                                                          "f1c_ue_ctx_release"};
+
+typedef struct {
+#define F1_FIELD(name) uint64_t name;
+    F1C_FIELDS(F1_FIELD)
+    F1U_FIELDS(F1_FIELD)
+#undef F1_FIELD
+    aurora_f1c_proc_stats_t f1c_procs[F1C_NOF_PROCS]; /* F1 Setup, UE Context Setup / Modification / Release */
+} f1_snap_t;
+
 /* OCUDU extension, reduced over active UEs / DUs (see struct aurora_metrics_ext). */
 #define EXT_CSV_HO_DUS 4
 typedef struct {
@@ -376,6 +396,9 @@ typedef struct {
     /* Group 17 — Per-thread runtime metrics (indexed by g_thread_cols layout) */
     thread_snap_t thread_snaps[AURORA_MAX_MONITORED_THREADS];
 
+    /* F1-C / F1-U interface */
+    f1_snap_t f1;
+
     /* OCUDU extension (struct aurora_metrics_ext) */
     ext_snap_t ext;
 } snapshot_t;
@@ -384,6 +407,18 @@ typedef struct {
  * fill_snapshot — extract one snapshot from shared memory.
  * Per-UE arrays are reduced to min/max/avg in-place.
  * ========================================================= */
+
+static void fill_f1_snapshot(f1_snap_t *f, const struct aurora_metrics *m)
+{
+#define F1_COPY(name) f->name = (uint64_t)m->name;
+    F1C_FIELDS(F1_COPY)
+    F1U_FIELDS(F1_COPY)
+#undef F1_COPY
+    f->f1c_procs[0] = m->f1c_f1_setup;
+    f->f1c_procs[1] = m->f1c_ue_ctx_setup;
+    f->f1c_procs[2] = m->f1c_ue_ctx_mod;
+    f->f1c_procs[3] = m->f1c_ue_ctx_release;
+}
 
 static void fill_ext_snapshot(ext_snap_t *e, const struct aurora_metrics *m)
 {
@@ -430,6 +465,7 @@ static void fill_snapshot(snapshot_t *s, const struct aurora_metrics *m)
 {
     memset(s, 0, sizeof(*s));
     fill_ext_snapshot(&s->ext, m);
+    fill_f1_snapshot(&s->f1, m);
     s->timestamp_us = m->timestamp_us;
     s->ran_type = m->ran_type;
 
@@ -774,6 +810,8 @@ typedef struct {
                         * own; gated by its real call site, rrc_gNB_mobility.c (RRC, CU-side) */
     bool rc_cell_count; /* rc_cell_count -- set by either the aggregator (mac) or first handover
                         * event (handover), so applies whenever either does */
+    bool f1c;         /* F1-C (F1AP): roles with a DU or a CU-CP */
+    bool f1u;         /* F1-U (NR-U): roles with a DU or a CU-UP */
 } csv_gates_t;
 
 static csv_gates_t compute_csv_gates(ran_type_t rt)
@@ -787,7 +825,41 @@ static csv_gates_t compute_csv_gates(ran_type_t rt)
     g.gtp      = (rt == RAN_GNB || rt == RAN_CU || rt == RAN_CU_UP);
     g.handover = (rt == RAN_GNB || rt == RAN_CU || rt == RAN_CU_CP);
     g.rc_cell_count = g.mac || g.handover;
+    g.f1c      = (rt == RAN_GNB || rt == RAN_DU || rt == RAN_CU || rt == RAN_CU_CP);
+    g.f1u      = (rt == RAN_GNB || rt == RAN_DU || rt == RAN_CU || rt == RAN_CU_UP);
     return g;
+}
+
+static void write_f1_csv_header(FILE *fp, const csv_gates_t *g)
+{
+#define F1_NAME(name) fprintf(fp, "," #name);
+    if (g->f1c) {
+        F1C_FIELDS(F1_NAME)
+        for (int i = 0; i < F1C_NOF_PROCS; i++)
+            fprintf(fp, ",%s_attempts,%s_success,%s_failure,%s_latency_avg_us,%s_latency_max_us", f1c_proc_names[i],
+                    f1c_proc_names[i], f1c_proc_names[i], f1c_proc_names[i], f1c_proc_names[i]);
+    }
+    if (g->f1u) {
+        F1U_FIELDS(F1_NAME)
+    }
+#undef F1_NAME
+}
+
+static void write_f1_csv_row(FILE *fp, const csv_gates_t *g, const f1_snap_t *f)
+{
+#define F1_VALUE(name) fprintf(fp, ",%lu", (unsigned long)f->name);
+    if (g->f1c) {
+        F1C_FIELDS(F1_VALUE)
+        for (int i = 0; i < F1C_NOF_PROCS; i++) {
+            const aurora_f1c_proc_stats_t *p = &f->f1c_procs[i];
+            fprintf(fp, ",%u,%u,%u,%.2f,%u", p->attempts, p->success, p->failure, (double)p->latency_avg_us,
+                    p->latency_max_us);
+        }
+    }
+    if (g->f1u) {
+        F1U_FIELDS(F1_VALUE)
+    }
+#undef F1_VALUE
 }
 
 /* OCUDU extension columns, appended after every OAI column so existing column positions never move. */
@@ -1102,6 +1174,7 @@ static void write_csv_header(FILE *fp, const struct aurora_metrics *m)
             ",infra_gpu0_power_mw,infra_gpu0_ecc_sbit,infra_gpu0_ecc_dbit");
     }
 
+    write_f1_csv_header(fp, &g);
     write_ext_csv_header(fp, &g);
     fprintf(fp, "\n");
 }
@@ -1472,6 +1545,7 @@ static void write_csv_row(FILE *fp, const snapshot_t *s)
             (im->gpu.num_gpus > 0) ? (unsigned long)im->gpu.gpus[0].ecc_double_bit : 0UL);
     }
 
+    write_f1_csv_row(fp, &g, &s->f1);
     write_ext_csv_row(fp, &g, &s->ext);
     fprintf(fp, "\n");
 }
@@ -1837,6 +1911,33 @@ int main(int argc, char **argv)
                 }
             }
         }
+
+        printf("\n--- F1-C (F1AP) ---\n");
+        printf("  DL msgs=%lu bytes=%lu max=%u   UL msgs=%lu bytes=%lu max=%u   links up=%u\n",
+               (unsigned long)metrics->f1c_dl_msgs, (unsigned long)metrics->f1c_dl_bytes, metrics->f1c_dl_bytes_max,
+               (unsigned long)metrics->f1c_ul_msgs, (unsigned long)metrics->f1c_ul_bytes, metrics->f1c_ul_bytes_max,
+               metrics->f1c_links_up);
+        printf("  RRC transfer: DL msgs=%lu bytes=%lu  UL msgs=%lu bytes=%lu  initial UL RRC=%u\n",
+               (unsigned long)metrics->f1c_dl_rrc_msgs, (unsigned long)metrics->f1c_dl_rrc_bytes,
+               (unsigned long)metrics->f1c_ul_rrc_msgs, (unsigned long)metrics->f1c_ul_rrc_bytes,
+               metrics->f1c_init_ul_rrc);
+        {
+            const aurora_f1c_proc_stats_t *procs[F1C_NOF_PROCS] = {&metrics->f1c_f1_setup, &metrics->f1c_ue_ctx_setup,
+                                                                  &metrics->f1c_ue_ctx_mod,
+                                                                  &metrics->f1c_ue_ctx_release};
+            for (int i = 0; i < F1C_NOF_PROCS; i++)
+                printf("  %-20s att=%u succ=%u fail=%u latency avg=%.0f max=%u us\n", f1c_proc_names[i],
+                       procs[i]->attempts, procs[i]->success, procs[i]->failure, (double)procs[i]->latency_avg_us,
+                       procs[i]->latency_max_us);
+        }
+        printf("  release req=%u paging=%u resets=%u error ind=%u timeouts=%u decode errors=%u\n",
+               metrics->f1c_ue_ctx_release_req, metrics->f1c_paging, metrics->f1c_resets,
+               metrics->f1c_error_indications, metrics->f1c_proc_timeouts, metrics->f1c_decode_errors);
+        printf("\n--- F1-U (NR-U) ---\n");
+        printf("  DL pdus=%lu dropped=%u discards=%u   UL pdus=%lu dropped=%u   DDS=%u failures=%u\n",
+               (unsigned long)metrics->f1u_dl_pdus, metrics->f1u_dl_dropped, metrics->f1u_dl_discards,
+               (unsigned long)metrics->f1u_ul_pdus, metrics->f1u_ul_dropped, metrics->f1u_dds,
+               metrics->f1u_dds_failures);
 
         printf("\n--- RC cell 0 ---\n");
         printf("  SINR=%.2f dB  load=%u%%  intf=%u\n", s.rc0_sinr_avg, s.rc0_cell_load_pct, s.rc0_interference_lvl);
