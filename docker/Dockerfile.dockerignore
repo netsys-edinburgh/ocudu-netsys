@@ -1,0 +1,4 @@
+# BuildKit per-Dockerfile ignore file (applies only to docker/Dockerfile): keep local build trees out of the build
+# context. A copied build/ directory carries the host CMakeCache.txt, which makes the in-container CMake configure
+# step fail, and can be several GB.
+build/
