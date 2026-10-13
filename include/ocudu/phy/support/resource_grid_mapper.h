@@ -57,21 +57,22 @@ public:
     ///
     /// \param[in] re_offsets           RE offsets within one port, in mapping order.
     /// \param[in] device_grid          Device BF16 grid, or null to use the buffer's own scratch grid.
-    /// \param[in] nof_ports            Number of grid ports to write.
+    /// \param[in] grid_ports           Grid port written by each precoded port, in precoding order. The scratch grid
+    ///                                 holds the precoded ports in order instead.
     /// \param[in] nof_layers           Number of layers in the symbol stream.
     /// \param[in] nof_grid_re_per_port Number of RE in one full port grid.
-    /// \param[in] weights              Wideband precoding matrix, \c nof_layers by \c nof_ports.
+    /// \param[in] weights              Wideband precoding matrix, \c nof_layers by the number of grid ports.
     /// \return True if the symbols were mapped; false leaves the mapping to the host.
     virtual bool map_to_device_grid(span<const uint32_t>           re_offsets,
                                     void*                          device_grid,
-                                    unsigned                       nof_ports,
+                                    span<const unsigned>           grid_ports,
                                     unsigned                       nof_layers,
                                     unsigned                       nof_grid_re_per_port,
                                     const precoding_weight_matrix& weights)
     {
       (void)re_offsets;
       (void)device_grid;
-      (void)nof_ports;
+      (void)grid_ports;
       (void)nof_layers;
       (void)nof_grid_re_per_port;
       (void)weights;

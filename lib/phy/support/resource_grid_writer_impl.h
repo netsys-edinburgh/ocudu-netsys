@@ -69,6 +69,19 @@ public:
     }
   }
 
+  /// \brief Marks a region as allocated.
+  ///
+  /// Used when the region is written outside this writer, for instance by a device-side grid mapping.
+  void mark_region_allocated(const device_grid_mapping_region& region)
+  {
+    for (unsigned i_port : region.ports) {
+      for (unsigned i_symbol = region.symbols.start(), i_symbol_end = region.symbols.stop(); i_symbol != i_symbol_end;
+           ++i_symbol) {
+        alloc_mask.update_crb_range(i_port, i_symbol, region.crbs);
+      }
+    }
+  }
+
 private:
   storage_type&                  data;
   resource_grid_allocation_info& alloc_mask;

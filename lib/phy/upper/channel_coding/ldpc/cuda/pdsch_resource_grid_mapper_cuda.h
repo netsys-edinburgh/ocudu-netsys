@@ -109,4 +109,33 @@ bool pdsch_map_layers_int8_to_bf16_precoded_grid(const int8_t*                  
                                                  const pdsch_precoding_weights_t& weights,
                                                  void*                            stream);
 
+/// Resource grid port of each port written by a PDSCH device mapping, in port order.
+struct pdsch_grid_port_map {
+  /// Resource grid port of each mapped port.
+  unsigned grid_ports[PDSCH_PRECODING_MAX_PORTS];
+  /// Number of mapped ports.
+  unsigned nof_ports;
+};
+
+/// \brief Places the mapped RE of a compact grid into the given ports of a resource grid.
+///
+/// The compact grid holds the mapped ports in order, in the same layout as the resource grid. Only the RE listed in
+/// \c d_re_offsets are copied, so the other RE of the destination ports are left untouched.
+///
+/// \param[in]  d_compact_grid_bf16  Device pointer to the compact BF16 IQ grid, with \c port_map.nof_ports ports.
+/// \param[in]  d_re_offsets         Device pointer to linear RE offsets within one port.
+/// \param[out] d_grid_bf16          Device pointer to the full BF16 IQ resource grid.
+/// \param[in]  nof_re               Number of RE to place in each port.
+/// \param[in]  nof_grid_re_per_port Number of RE in one full port grid, in both grids.
+/// \param[in]  port_map             Resource grid port of each compact grid port.
+/// \param[in]  stream               Opaque cudaStream_t. If null, CUDA default stream is used.
+/// \return True if the CUDA launch was accepted.
+bool pdsch_place_ports_bf16_grid(const uint16_t*            d_compact_grid_bf16,
+                                 const uint32_t*            d_re_offsets,
+                                 uint16_t*                  d_grid_bf16,
+                                 unsigned                   nof_re,
+                                 unsigned                   nof_grid_re_per_port,
+                                 const pdsch_grid_port_map& port_map,
+                                 void*                      stream);
+
 } // namespace ocudu

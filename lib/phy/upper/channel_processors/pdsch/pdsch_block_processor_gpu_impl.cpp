@@ -11,6 +11,7 @@
 #include "ocudu/ran/cyclic_prefix.h"
 #include "ocudu/ran/resource_block.h"
 #include "ocudu/support/ocudu_assert.h"
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -276,6 +277,45 @@ bool pdsch_block_processor_gpu_impl::supports_device_grid_mapping() const
 }
 
 bool pdsch_block_processor_gpu_impl::map_to_device_grid(span<const uint32_t>           re_offsets,
+                                                        void*                          d_grid_bf16,
+                                                        span<const unsigned>           grid_ports,
+                                                        unsigned                       mapped_nof_layers,
+                                                        unsigned                       nof_grid_re_per_port,
+                                                        const precoding_weight_matrix& weights)
+{
+  unsigned mapped_nof_ports = grid_ports.size();
+  if ((mapped_nof_ports == 0) || (mapped_nof_ports > PDSCH_PRECODING_MAX_PORTS)) {
+    return false;
+  }
+
+  // Ports that already sit at their position in the grid are mapped in place, and so is the scratch grid.
+  bool ports_in_order = true;
+  for (unsigned i_port = 0; i_port != mapped_nof_ports; ++i_port) {
+    ports_in_order = ports_in_order && (grid_ports[i_port] == i_port);
+  }
+  if (ports_in_order || (d_grid_bf16 == nullptr)) {
+    return map_ports_in_order(
+        re_offsets, d_grid_bf16, mapped_nof_ports, mapped_nof_layers, nof_grid_re_per_port, weights);
+  }
+
+  // Otherwise, map the ports in order into the scratch grid, then place each one in its grid port. The scratch grid
+  // has the same layout as the destination, so the RE offsets apply to both.
+  if (!map_ports_in_order(re_offsets, nullptr, mapped_nof_ports, mapped_nof_layers, nof_grid_re_per_port, weights)) {
+    return false;
+  }
+  pdsch_grid_port_map port_map = {};
+  port_map.nof_ports           = mapped_nof_ports;
+  std::copy(grid_ports.begin(), grid_ports.end(), port_map.grid_ports);
+  return pdsch_place_ports_bf16_grid(static_cast<const uint16_t*>(d_mapper_grid_bf16),
+                                     static_cast<const uint32_t*>(d_mapper_re_offsets),
+                                     static_cast<uint16_t*>(d_grid_bf16),
+                                     re_offsets.size(),
+                                     nof_grid_re_per_port,
+                                     port_map,
+                                     get_device_grid_mapping_stream());
+}
+
+bool pdsch_block_processor_gpu_impl::map_ports_in_order(span<const uint32_t>           re_offsets,
                                                         void*                          d_grid_bf16,
                                                         unsigned                       mapped_nof_ports,
                                                         unsigned                       mapped_nof_layers,

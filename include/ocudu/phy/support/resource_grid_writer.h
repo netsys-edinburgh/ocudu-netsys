@@ -7,8 +7,10 @@
 
 #include "ocudu/adt/bounded_bitset.h"
 #include "ocudu/adt/complex.h"
+#include "ocudu/adt/interval.h"
 #include "ocudu/adt/span.h"
 #include "ocudu/phy/support/resource_grid_base.h"
+#include "ocudu/ran/resource_allocation/rb_interval.h"
 #include "ocudu/ran/resource_block.h"
 
 namespace ocudu {
@@ -112,8 +114,30 @@ public:
   /// Prepares the device grid for mapping on an opaque execution stream.
   virtual bool prepare_device_grid_mapping(void*) { return true; }
 
-  /// Records that device-grid mapping has been enqueued on an opaque execution stream.
+  /// \brief Records that device-grid mapping has been enqueued on an opaque execution stream.
+  ///
+  /// The mapping may have written any resource element, so readers must treat every port as allocated.
   virtual bool on_device_grid_mapping_enqueued(void*) { return true; }
+
+  /// Resource elements a device-grid mapping wrote.
+  struct device_grid_mapping_region {
+    /// Written ports.
+    span<const unsigned> ports;
+    /// Written OFDM symbols.
+    interval<unsigned> symbols;
+    /// Written common resource blocks.
+    crb_interval crbs;
+  };
+
+  /// \brief Records that a device-grid mapping limited to \c region has been enqueued on an opaque execution stream.
+  ///
+  /// Readers see the region as allocated, as if it had been written with \c put(). The default implementation
+  /// conservatively treats the mapping as if it had written the whole grid.
+  virtual bool on_device_grid_mapping_enqueued(void* stream, const device_grid_mapping_region& region)
+  {
+    (void)region;
+    return on_device_grid_mapping_enqueued(stream);
+  }
 
   /// Returns true when the writer can publish an immutable device-owned copy of the mapped grid.
   virtual bool supports_owned_device_grid_snapshot() const { return false; }

@@ -375,12 +375,18 @@ static bool try_map_device_grid(resource_grid_mapper::symbol_buffer&            
                                 const re_pattern_list&                                reserved,
                                 const bounded_bitset<MAX_NOF_SUBCARRIERS>&            base_crb_re_mask,
                                 const precoding_weight_matrix&                        prg_weights,
-                                unsigned                                              nof_ports,
+                                span<const unsigned>                                  grid_ports,
                                 unsigned                                              nof_grid_symbols,
                                 unsigned                                              nof_grid_subc,
                                 unsigned                                              re_skip)
 {
   if (!buffer.supports_device_grid_mapping()) {
+    return false;
+  }
+
+  // The device mapping writes the grid without bound checks, so leave any out-of-range port to the host mapping.
+  if (std::any_of(
+          grid_ports.begin(), grid_ports.end(), [&writer](unsigned port) { return port >= writer.get_nof_ports(); })) {
     return false;
   }
 
@@ -424,7 +430,7 @@ static bool try_map_device_grid(resource_grid_mapper::symbol_buffer&            
   }
   if (!buffer.map_to_device_grid(span<const uint32_t>(re_offsets.data(), re_offset_count),
                                  device_grid,
-                                 nof_ports,
+                                 grid_ports,
                                  nof_layers,
                                  nof_grid_symbols * nof_grid_subc,
                                  prg_weights)) {
@@ -437,7 +443,15 @@ static bool try_map_device_grid(resource_grid_mapper::symbol_buffer&            
   if (!writer_device_mapping_prepared) {
     return true;
   }
-  if (!writer.on_device_grid_mapping_enqueued(mapping_stream)) {
+  // Report the written region so that readers, such as the OFDM modulator, see exactly the mapped beams as allocated.
+  int                                              lowest_subc  = base_crb_re_mask.find_lowest();
+  int                                              highest_subc = base_crb_re_mask.find_highest();
+  resource_grid_writer::device_grid_mapping_region region       = {
+            .ports   = grid_ports,
+            .symbols = {allocation.time_alloc.start(), allocation.time_alloc.stop()},
+            .crbs    = {static_cast<unsigned>(lowest_subc) / NOF_SUBCARRIERS_PER_RB,
+                        static_cast<unsigned>(highest_subc) / NOF_SUBCARRIERS_PER_RB + 1}};
+  if (!writer.on_device_grid_mapping_enqueued(mapping_stream, region)) {
     writer.cancel_device_grid_mapping();
     return false;
   }
@@ -639,22 +653,15 @@ void resource_grid_mapper_impl::map(resource_grid_writer&                      w
     base_crb_re_mask.fill(crb_idx * NOF_SUBCARRIERS_PER_RB, (crb_idx + 1) * NOF_SUBCARRIERS_PER_RB);
   });
 
-  // The device-grid mapping fast path maps onto ports [0, nof_antennas) implicitly and does not honor an arbitrary
-  // beam-to-port remapping, so it is only taken when the beams select the grid ports in order (ports[i] == i); other
-  // beam grid topologies are mapped on the host. The device mapping applies one wideband precoding matrix, so it needs
-  // a single PRG.
-  bool identity_ports = true;
-  for (unsigned i_port = 0, nof_ports = ports.size(); i_port != nof_ports; ++i_port) {
-    identity_ports = identity_ports && (ports[i_port] == i_port);
-  }
-  if (identity_ports && should_try_device_grid_mapping(writer) && (precoding.get_nof_prg() == 1) &&
+  // The device mapping applies one wideband precoding matrix, so it needs a single PRG.
+  if (should_try_device_grid_mapping(writer) && (precoding.get_nof_prg() == 1) &&
       try_map_device_grid(buffer,
                           writer,
                           allocation,
                           reserved,
                           base_crb_re_mask,
                           prg_weights,
-                          nof_antennas,
+                          ports,
                           writer.get_nof_symbols(),
                           writer.get_nof_subc(),
                           re_skip) &&

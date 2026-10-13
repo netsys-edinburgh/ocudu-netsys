@@ -81,6 +81,25 @@ __global__ void map_layers_int8_to_bf16_real_grid_kernel(const int8_t* __restric
   }
 }
 
+__global__ void place_ports_bf16_grid_kernel(const uint32_t* __restrict__ d_compact_grid,
+                                             const uint32_t* __restrict__ d_re_offsets,
+                                             uint32_t* __restrict__ d_grid,
+                                             unsigned                  nof_re,
+                                             unsigned                  nof_grid_re_per_port,
+                                             const pdsch_grid_port_map port_map)
+{
+  unsigned i_re   = blockIdx.x * blockDim.x + threadIdx.x;
+  unsigned i_port = blockIdx.y;
+  if (i_re >= nof_re) {
+    return;
+  }
+
+  // Each RE is a packed pair of BF16 words, so it is moved as one 32-bit word.
+  unsigned re_offset = d_re_offsets[i_re];
+  d_grid[port_map.grid_ports[i_port] * nof_grid_re_per_port + re_offset] =
+      d_compact_grid[i_port * nof_grid_re_per_port + re_offset];
+}
+
 } // namespace
 
 __global__ void map_layers_int8_to_bf16_precoded_grid_kernel(const int8_t* __restrict__ d_symbols_int8,
@@ -183,5 +202,31 @@ bool ocudu::pdsch_map_layers_int8_to_bf16_precoded_grid(const int8_t*           
   auto                      cuda_stream = reinterpret_cast<cudaStream_t>(stream);
   map_layers_int8_to_bf16_precoded_grid_kernel<<<grid_size, block_size, 0, cuda_stream>>>(
       d_symbols_int8, d_re_offsets, d_grid_bf16, nof_re, nof_grid_re_per_port, weights);
+  return cudaGetLastError() == cudaSuccess;
+}
+
+bool ocudu::pdsch_place_ports_bf16_grid(const uint16_t*            d_compact_grid_bf16,
+                                        const uint32_t*            d_re_offsets,
+                                        uint16_t*                  d_grid_bf16,
+                                        unsigned                   nof_re,
+                                        unsigned                   nof_grid_re_per_port,
+                                        const pdsch_grid_port_map& port_map,
+                                        void*                      stream)
+{
+  if ((d_compact_grid_bf16 == nullptr) || (d_re_offsets == nullptr) || (d_grid_bf16 == nullptr) || (nof_re == 0) ||
+      (nof_grid_re_per_port == 0) || (port_map.nof_ports == 0) || (port_map.nof_ports > PDSCH_PRECODING_MAX_PORTS)) {
+    return false;
+  }
+
+  static constexpr unsigned block_size  = 256;
+  dim3                      grid_size((nof_re + block_size - 1U) / block_size, port_map.nof_ports);
+  auto                      cuda_stream = reinterpret_cast<cudaStream_t>(stream);
+  place_ports_bf16_grid_kernel<<<grid_size, block_size, 0, cuda_stream>>>(
+      reinterpret_cast<const uint32_t*>(d_compact_grid_bf16),
+      d_re_offsets,
+      reinterpret_cast<uint32_t*>(d_grid_bf16),
+      nof_re,
+      nof_grid_re_per_port,
+      port_map);
   return cudaGetLastError() == cudaSuccess;
 }

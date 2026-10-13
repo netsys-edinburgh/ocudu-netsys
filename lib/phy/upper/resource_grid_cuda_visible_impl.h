@@ -581,6 +581,15 @@ private:
       return true;
     }
 
+    bool on_device_grid_mapping_enqueued(void* stream, const device_grid_mapping_region& region) override
+    {
+      if (!parent.record_device_mapping(stream)) {
+        return false;
+      }
+      mark_region_allocated(region);
+      return true;
+    }
+
     bool supports_owned_device_grid_snapshot() const override { return parent.owned_snapshot_words != 0; }
 
     bool publish_owned_device_grid_snapshot(void* stream) override

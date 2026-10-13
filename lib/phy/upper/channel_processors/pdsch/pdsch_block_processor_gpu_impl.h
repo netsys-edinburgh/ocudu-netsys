@@ -61,10 +61,21 @@ private:
   // See interface for documentation.
   bool map_to_device_grid(span<const uint32_t>           re_offsets,
                           void*                          d_grid_bf16,
-                          unsigned                       nof_ports,
+                          span<const unsigned>           grid_ports,
                           unsigned                       nof_layers,
                           unsigned                       nof_grid_re_per_port,
                           const precoding_weight_matrix& weights) override;
+
+  /// \brief Maps the precoded ports into the first ports of a device grid, in order.
+  ///
+  /// It implements \ref map_to_device_grid for the grid ports \f$\{0, 1, \dots, N_{ports} - 1\}\f$. A null grid
+  /// selects the scratch grid.
+  bool map_ports_in_order(span<const uint32_t>           re_offsets,
+                          void*                          d_grid_bf16,
+                          unsigned                       nof_ports,
+                          unsigned                       nof_layers,
+                          unsigned                       nof_grid_re_per_port,
+                          const precoding_weight_matrix& weights);
 
   // See interface for documentation.
   void* get_device_grid_mapping_stream() const override;

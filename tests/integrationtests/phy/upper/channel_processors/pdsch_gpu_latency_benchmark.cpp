@@ -379,14 +379,18 @@ public:
 
   bool map_to_device_grid(span<const uint32_t>           re_offsets,
                           void*                          d_grid_bf16,
-                          unsigned                       mapped_nof_ports,
+                          span<const unsigned>           grid_ports,
                           unsigned                       mapped_nof_layers,
                           unsigned                       nof_grid_re_per_port,
                           const precoding_weight_matrix& weights) override
   {
-    if (consumed || (d_symbols == nullptr) || (d_grid_bf16 == nullptr) || re_offsets.empty() ||
-        (mapped_nof_ports != nof_ports) || (mapped_nof_layers != nof_layers) ||
-        (re_offsets.size() * nof_layers != nof_symbols)) {
+    // The benchmark grid carries one port per antenna, in order.
+    bool ports_in_order = (grid_ports.size() == nof_ports);
+    for (unsigned i_port = 0; ports_in_order && (i_port != nof_ports); ++i_port) {
+      ports_in_order = (grid_ports[i_port] == i_port);
+    }
+    if (consumed || (d_symbols == nullptr) || (d_grid_bf16 == nullptr) || re_offsets.empty() || !ports_in_order ||
+        (mapped_nof_layers != nof_layers) || (re_offsets.size() * nof_layers != nof_symbols)) {
       return false;
     }
 

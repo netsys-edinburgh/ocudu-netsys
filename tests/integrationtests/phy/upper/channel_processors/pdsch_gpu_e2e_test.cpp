@@ -783,6 +783,86 @@ TEST(PdschGpuIssueProfile, ManagedGridMatchesHostAcrossHarqRvsAndRepeatedSlots)
   }
 }
 
+// With beamforming, the precoded ports of a PDSCH are the beams selected by the PDU, which need not be the first ports
+// of the resource grid nor be in order. The GPU must map them onto those grid ports, like the host, and leave the
+// allocation information of the grid as host mapping would.
+TEST(PdschGpuIssueProfile, ManagedGridMapsBeamsOntoTheirGridPorts)
+{
+  if (!is_pdsch_block_processor_acceleration_available()) {
+    GTEST_SKIP() << "CUDA PDSCH GPU block processor is not available in this build/runtime.";
+  }
+
+  env_var_guard grid_mode("OCUDU_DL_CUDA_VISIBLE_GRID");
+  ASSERT_EQ(setenv("OCUDU_DL_CUDA_VISIBLE_GRID", "managed", 1), 0);
+
+  inline_task_executor executor;
+  auto                 cpu_proc_factory = create_test_pdsch_processor_factory(
+      create_cpu_pdsch_block_processor_factory(), executor, std::numeric_limits<unsigned>::max());
+  auto gpu_proc_factory = create_test_pdsch_processor_factory(
+      create_pdsch_block_processor_factory_accelerated(), executor, std::numeric_limits<unsigned>::max());
+  ASSERT_NE(cpu_proc_factory, nullptr);
+  ASSERT_NE(gpu_proc_factory, nullptr);
+  std::unique_ptr<pdsch_processor> cpu_proc = cpu_proc_factory->create();
+  std::unique_ptr<pdsch_processor> gpu_proc = gpu_proc_factory->create();
+  ASSERT_NE(cpu_proc, nullptr);
+  ASSERT_NE(gpu_proc, nullptr);
+
+  constexpr unsigned nof_prb          = 52;
+  constexpr unsigned nof_subc         = nof_prb * NOF_SUBCARRIERS_PER_RB;
+  constexpr unsigned nof_grid_ports   = 6;
+  constexpr unsigned nof_layers       = 2;
+  symbol_slot_mask   dmrs_symbol_mask = make_dmrs_symbol_mask(dmrs_profile::single_symbol);
+
+  std::shared_ptr<resource_grid_factory> host_grid_factory = create_resource_grid_factory();
+  resource_grid_cuda_visible_factory     managed_grid_factory(resource_grid_cuda_visible_factory::direction::downlink);
+  std::unique_ptr<resource_grid> cpu_grid = host_grid_factory->create(nof_grid_ports, MAX_NSYMB_PER_SLOT, nof_subc);
+  std::unique_ptr<resource_grid> gpu_grid = managed_grid_factory.create(nof_grid_ports, MAX_NSYMB_PER_SLOT, nof_subc);
+  ASSERT_NE(cpu_grid, nullptr);
+  ASSERT_NE(gpu_grid, nullptr);
+  ASSERT_TRUE(gpu_grid->get_writer().supports_device_grid_mapping());
+
+  // One and two layers, on beams that are out of order and skip grid ports.
+  for (const precoding_beam_list& beams :
+       {precoding_beam_list{to_beam_id(4)}, precoding_beam_list{to_beam_id(4), to_beam_id(1)}}) {
+    unsigned pdu_nof_layers = std::min(nof_layers, static_cast<unsigned>(beams.size()));
+    SCOPED_TRACE("nof_layers=" + std::to_string(pdu_nof_layers));
+
+    sch_mcs_description mcs_descr = pdsch_mcs_get_config(pdsch_mcs_table::qam256, sch_mcs_index(20));
+    unsigned            tbs       = calculate_tbs(
+        mcs_descr, nof_prb, pdu_nof_layers, dmrs_config_type::type1, dmrs_symbol_mask, 2, nof_ofdm_symbols);
+    pdsch_processor::pdu_t pdu = build_pdsch_pdu(
+        mcs_descr, nof_prb, pdu_nof_layers, pdu_nof_layers, 0, dmrs_config_type::type1, dmrs_symbol_mask, 2, tbs);
+    pdu.precoding_and_beamforming =
+        precoding_beamforming_configuration::make_wideband(make_identity(pdu_nof_layers), beams);
+
+    std::vector<uint8_t> tx_data(tbs / 8);
+    std::mt19937         rgen(0x5eedU + pdu_nof_layers);
+    std::generate(tx_data.begin(), tx_data.end(), [&rgen]() { return static_cast<uint8_t>(rgen() & 0xff); });
+
+    cpu_grid->set_all_zero();
+    gpu_grid->set_all_zero();
+    pdsch_processor_notifier_adaptor cpu_notifier;
+    pdsch_processor_notifier_adaptor gpu_notifier;
+    cpu_proc->process(cpu_grid->get_writer(), cpu_notifier, {shared_transport_block(tx_data)}, pdu);
+    gpu_proc->process(gpu_grid->get_writer(), gpu_notifier, {shared_transport_block(tx_data)}, pdu);
+    cpu_notifier.wait_for_completion();
+    gpu_notifier.wait_for_completion();
+
+    grid_diff_stats diff = compare_resource_grids(cpu_grid->get_reader(), gpu_grid->get_reader());
+    ASSERT_EQ(diff.nof_mismatches, 0U) << "max_abs_error=" << diff.max_abs_error << " at port=" << diff.port
+                                       << " symbol=" << diff.symbol << " subcarrier=" << diff.subcarrier
+                                       << " cpu=" << diff.cpu_value << " gpu=" << diff.gpu_value;
+
+    for (unsigned port = 0; port != nof_grid_ports; ++port) {
+      for (unsigned symbol = 0; symbol != MAX_NSYMB_PER_SLOT; ++symbol) {
+        ASSERT_EQ(cpu_grid->get_reader().get_allocation_range(port, symbol),
+                  gpu_grid->get_reader().get_allocation_range(port, symbol))
+            << "port=" << port << " symbol=" << symbol;
+      }
+    }
+  }
+}
+
 TEST(PdschGpuIssueProfile, DeviceCompressionReleasesItsGridReadHold)
 {
   if (!is_pdsch_block_processor_acceleration_available()) {
