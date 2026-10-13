@@ -157,6 +157,21 @@ The following stay the same as OAI:
 | 16 rusage | `getrusage(RUSAGE_SELF)` deltas |
 | 17 threads | `thread/` (procfs / eBPF collectors copied from OAI) |
 | 18 infra | `infra/`, run by `aurora_reader --infra-enabled yes` |
+| F1-C (`f1c_*`) | F1-C gateways (`lib/f1ap/gateways/f1c_aurora_tap.cpp`): CU-CP SCTP server, DU SCTP client, co-located connector |
+| F1-U (`f1u_*`) | CU-UP F1-U TX/RX metric helpers; DU `f1u_bearer_impl` in a DU-only process |
+
+**F1-C and F1-U.** These fields are part of `struct aurora_metrics` (after `thread_stats`, before `ext`). DL is
+CU-CP/CU-UP to DU, UL is DU to CU-CP/CU-UP.
+
+- F1-C: F1AP messages, encoded bytes and largest message per direction; RRC Message Transfer messages and bytes (SRB
+  traffic on F1-C); decode errors, Initial UL RRC Message Transfers, Paging, DU-initiated UE Context Release Requests,
+  F1 Resets, Error Indications; F1 links up; and for F1 Setup, UE Context Setup, Modification and Release the
+  attempts, successes, failures and request-to-outcome latency (matched by gNB-CU UE F1AP ID or transaction ID). A
+  request without outcome after 5 s counts in `f1c_proc_timeouts`. Each message is counted once per process, at the
+  F1-C gateway; the co-located gNB connector encodes the messages to measure them while AURORA is active.
+- F1-U: NR-U DL/UL PDUs, drops per direction, PDCP discards requested towards the DU, Data Delivery Status messages
+  and their handling failures. Counted on the CU-UP side, or on the DU side in a DU-only process, so a gNB counts each
+  PDU once. The byte counts stay in Group 1 (`mhtx_*`, `mhrx_*`, `f1u_rlc`, `rlc_f1`).
 
 **Default thread whitelist.** It covers every thread name the OCUDU code base sets, as they appear in
 `/proc/<pid>/task/<tid>/comm` (`unique_thread` truncates to 15 characters). A test checks it against the real names
