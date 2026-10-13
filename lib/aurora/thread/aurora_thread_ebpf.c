@@ -172,6 +172,34 @@ static void ebpf_read_and_merge(void)
 }
 
 /* ---------------------------------------------------------------
+ * OCUDU: drop the BPF entries of threads whose slot was freed or taken over
+ * by another thread during the last discovery (@before holds the slot TIDs
+ * from before it). Entries are no longer reset, so without this they would
+ * pile up for exited threads, and a reused TID would inherit old totals.
+ * Single deletes outside of any map walk.
+ * --------------------------------------------------------------- */
+static void ebpf_forget_exited_threads(const pid_t *before)
+{
+    int stats_fd  = bpf_map__fd(g_skel->maps.tid_stats);
+    int filter_fd = bpf_map__fd(g_skel->maps.tid_filter);
+
+    for (uint32_t i = 0; i < AURORA_MAX_MONITORED_THREADS; i++) {
+        if (before[i] <= 0)
+            continue;
+        const aurora_thread_metrics_t *m = &g_ts->threads[i];
+        if (m->valid && m->tid == before[i])
+            continue;
+
+        uint32_t key = (uint32_t)before[i];
+        if (stats_fd >= 0)
+            bpf_map_delete_elem(stats_fd, &key);
+        if (filter_fd >= 0)
+            bpf_map_delete_elem(filter_fd, &key);
+        g_prev[i].tid = 0;
+    }
+}
+
+/* ---------------------------------------------------------------
  * Start the next collection interval: quanta recorded from now on count
  * towards the next per-interval maximum.
  * --------------------------------------------------------------- */
@@ -195,8 +223,12 @@ void aurora_ebpf_collect_once(void)
     if (!g_skel)
         return;
 
-    /* Discover new threads */
+    /* Discover new threads (and free the slots of exited ones) */
+    pid_t before[AURORA_MAX_MONITORED_THREADS];
+    for (uint32_t i = 0; i < AURORA_MAX_MONITORED_THREADS; i++)
+        before[i] = g_ts->threads[i].valid ? g_ts->threads[i].tid : 0;
     aurora_thread_discover(g_ts);
+    ebpf_forget_exited_threads(before);
 
     /* Update TID filter for newly discovered threads */
     ebpf_update_tid_filter();
