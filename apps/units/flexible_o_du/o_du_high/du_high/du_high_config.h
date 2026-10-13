@@ -6,6 +6,7 @@
 
 #include "apps/helpers/metrics/metrics_config.h"
 #include "apps/helpers/ntn/ntn_satellite_config.h"
+#include "apps/services/worker_manager/os_sched_affinity_manager.h"
 #include "ntn/du_high_unit_cell_ntn_config.h"
 #include "ocudu/ocudulog/logger.h"
 #include "ocudu/ran/band_helper.h"
@@ -1538,10 +1539,22 @@ struct du_high_unit_execution_queues_config {
   uint32_t ue_data_executor_queue_size = 8192;
 };
 
+/// Configuration of the dedicated MAC scheduler workers, one per cell.
+struct du_high_unit_mac_sched_worker_config {
+  /// \brief Whether each cell runs its MAC scheduler (slot indications, MAC cell and lower RLC tasks) on a dedicated
+  /// worker, named "mac_sched#<cell index>", instead of on a strand of the main thread pool.
+  bool enable = false;
+  /// \brief CPU affinities of the dedicated workers, indexed by cell. Cells without an entry use the main thread pool
+  /// affinity.
+  std::vector<os_sched_affinity_bitmask> cpus;
+};
+
 /// Expert configuration of the DU high.
 struct du_high_unit_expert_execution_config {
   /// \brief Task executor configuration for the DU.
   du_high_unit_execution_queues_config du_queue_cfg;
+  /// Dedicated MAC scheduler workers configuration.
+  du_high_unit_mac_sched_worker_config mac_sched_worker;
 };
 
 /// RLC UM TX configuration

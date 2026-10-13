@@ -1044,6 +1044,17 @@ static YAML::Node build_du_high_testmode_section(const du_high_unit_test_mode_co
   return node;
 }
 
+static void fill_du_high_expert_execution_section(YAML::Node node, const du_high_unit_expert_execution_config& config)
+{
+  node["threads"]["mac_sched"]["enable"] = config.mac_sched_worker.enable;
+  if (!config.mac_sched_worker.cpus.empty()) {
+    YAML::Node cpus_node = node["affinities"]["mac_sched_cpus"];
+    for (const auto& mask : config.mac_sched_worker.cpus) {
+      cpus_node.push_back(fmt::format("{:n}", span<const size_t>(mask.get_cpu_ids())));
+    }
+  }
+}
+
 void ocudu::fill_du_high_config_in_yaml_schema(YAML::Node& node, const du_high_parsed_config& parsed_cfg)
 {
   const du_high_unit_config& config = parsed_cfg.config;
@@ -1056,6 +1067,7 @@ void ocudu::fill_du_high_config_in_yaml_schema(YAML::Node& node, const du_high_p
   fill_du_high_trace_section(node["trace"], config.tracer);
   fill_du_high_metrics_section(node["metrics"], config.metrics);
   fill_du_high_pcap_section(node["pcap"], config.pcaps);
+  fill_du_high_expert_execution_section(node["expert_execution"], config.expert_execution_cfg);
   node["du"] = build_du_section(config);
   if (config.test_mode_cfg.test_ue.rnti != rnti_t::INVALID_RNTI) {
     node["test_mode"] = build_du_high_testmode_section(config.test_mode_cfg);

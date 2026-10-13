@@ -1598,6 +1598,8 @@ void ocudu::fill_du_high_worker_manager_config(worker_manager_config&     config
   du_hi_cfg.is_rt_mode_enabled       = !is_blocking_mode_enabled;
   du_hi_cfg.nof_cells                = unit_cfg.cells_cfg.size();
   du_hi_cfg.executor_tracing_enable  = unit_cfg.tracer.executor_tracing_enabled;
+  du_hi_cfg.dedicated_cell_workers   = unit_cfg.expert_execution_cfg.mac_sched_worker.enable;
+  du_hi_cfg.cell_worker_affinities   = unit_cfg.expert_execution_cfg.mac_sched_worker.cpus;
 
   auto& pcap_cfg = config.pcap_cfg;
   if (unit_cfg.pcaps.f1ap.enabled) {

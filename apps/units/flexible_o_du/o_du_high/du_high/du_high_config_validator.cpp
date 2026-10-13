@@ -2449,6 +2449,25 @@ static bool validate_qos_config(span<const du_high_unit_qos_config> config)
   return true;
 }
 
+static bool validate_expert_execution_config(const du_high_unit_config& config)
+{
+  const du_high_unit_mac_sched_worker_config& mac_sched = config.expert_execution_cfg.mac_sched_worker;
+  if (mac_sched.cpus.size() > config.cells_cfg.size()) {
+    fmt::print("Invalid number of MAC scheduler worker CPU affinities, i.e. {}. It must not exceed the number of "
+               "cells, i.e. {}.\n",
+               mac_sched.cpus.size(),
+               config.cells_cfg.size());
+    return false;
+  }
+
+  if (!mac_sched.enable and !mac_sched.cpus.empty()) {
+    fmt::print("MAC scheduler worker CPU affinities are set, but the dedicated MAC scheduler workers are disabled.\n");
+    return false;
+  }
+
+  return true;
+}
+
 bool ocudu::validate_du_high_config(const du_high_unit_config& config)
 {
   if (!validate_rlc_config(config.rlc_cfg)) {
@@ -2484,6 +2503,10 @@ bool ocudu::validate_du_high_config(const du_high_unit_config& config)
   }
 
   if (!validate_ntn_satellite_refs(config.cells_cfg, config.ntn_satellites)) {
+    return false;
+  }
+
+  if (!validate_expert_execution_config(config)) {
     return false;
   }
 

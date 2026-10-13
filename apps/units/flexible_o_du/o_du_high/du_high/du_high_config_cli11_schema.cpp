@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "du_high_config_cli11_schema.h"
+#include "apps/services/worker_manager/cli11_cpu_affinities_parser_helper.h"
 #include "apps/helpers/logger/logger_appconfig_cli11_utils.h"
 #include "apps/helpers/metrics/metrics_config_cli11_schema.h"
 #include "apps/helpers/ntn/ntn_config_cli11_schema.h"
@@ -164,6 +165,28 @@ static void configure_cli11_expert_execution_args(CLI::App& app, du_high_unit_ex
              config.du_queue_cfg.ue_data_executor_queue_size,
              "DU's UE executor task queue size for PDU processing")
       ->capture_default_str();
+
+  CLI::App* threads_subcmd = add_subcommand(app, "threads", "Threads configuration")->configurable();
+  CLI::App* mac_sched_subcmd =
+      add_subcommand(*threads_subcmd, "mac_sched", "Dedicated MAC scheduler workers configuration")->configurable();
+  add_option(*mac_sched_subcmd,
+             "--enable",
+             config.mac_sched_worker.enable,
+             "Run the MAC scheduler of each cell on a dedicated worker instead of on the main thread pool")
+      ->capture_default_str();
+
+  CLI::App* affinities_subcmd = add_subcommand(app, "affinities", "CPU affinities configuration")->configurable();
+  add_option_function<std::vector<std::string>>(
+      *affinities_subcmd,
+      "--mac_sched_cpus",
+      [&config](const std::vector<std::string>& values) {
+        config.mac_sched_worker.cpus.resize(values.size());
+        for (unsigned i = 0, e = values.size(); i != e; ++i) {
+          parse_affinity_mask(config.mac_sched_worker.cpus[i], values[i], "mac_sched_cpus");
+        }
+      },
+      "CPU affinities of the dedicated MAC scheduler workers, one entry per cell. Cells without an entry use the main "
+      "thread pool CPUs");
 }
 
 static void configure_cli11_pdcch_common_args(CLI::App& app, pdcch_common_unit_config& common_params)

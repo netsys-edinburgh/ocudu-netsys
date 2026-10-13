@@ -9,6 +9,7 @@ set(SOURCES
         worker_manager_appconfig_validator.cpp)
 
 add_library(ocudu_cpu_affinities_helper STATIC cli11_cpu_affinities_parser_helper.cpp)
+target_link_libraries(ocudu_cpu_affinities_helper ocudu_support)
 
 add_library(ocudu_worker_manager_app_service STATIC ${SOURCES})
 target_include_directories(ocudu_worker_manager_app_service PRIVATE ${CMAKE_SOURCE_DIR})
