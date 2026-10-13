@@ -62,18 +62,20 @@ void rx_window_checker::on_new_symbol(const slot_symbol_point_context& symbol_po
   slot_raw_value.store(ota_symbol_point.to_uint(), std::memory_order_relaxed);
 }
 
-void rx_window_checker::update_rx_window_statistics(slot_symbol_point symbol_point)
+std::optional<int> rx_window_checker::update_rx_window_statistics(slot_symbol_point symbol_point,
+                                                                  unsigned          arrival_age_symbols)
 {
   if (is_disabled) {
-    return;
+    return std::nullopt;
   }
 
   // Store the ota symbol point to use the same value for the early and late points.
   slot_symbol_point ota_point(
       symbol_point.get_numerology(), slot_raw_value.load(std::memory_order_relaxed), symbol_point.get_nof_symbols());
 
-  // Calculate the distance between the 2 slot symbol points in symbols.
-  int diff = calculate_slot_symbol_point_distance(ota_point, symbol_point);
+  // Calculate the distance between the 2 slot symbol points in symbols, at processing time and at arrival time.
+  const int processing_diff = calculate_slot_symbol_point_distance(ota_point, symbol_point);
+  const int diff            = processing_diff - static_cast<int>(arrival_age_symbols);
   // Update earliest and latest
   statistics.update_rx_timing_stats(diff);
 
@@ -81,18 +83,20 @@ void rx_window_checker::update_rx_window_statistics(slot_symbol_point symbol_poi
   if (int symb_end = timing_parameters.sym_end; diff > symb_end) {
     statistics.increment_late_counter();
 
-    return;
+    return processing_diff;
   }
 
   // Early detected.
   if (int symb_start = timing_parameters.sym_start; diff < symb_start) {
     statistics.increment_early_counter();
 
-    return;
+    return processing_diff;
   }
 
   // On time detected.
   statistics.increment_on_time_counter();
+
+  return processing_diff;
 }
 
 void rx_window_checker::collect_metrics(received_messages_metrics& metrics)

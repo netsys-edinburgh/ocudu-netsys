@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
 #include "ethernet_receiver_impl.h"
+#include "../support/ofh_ul_rx_diagnostics.h"
 #include "ethernet_rx_buffer_impl.h"
 #include "ocudu/instrumentation/traces/ofh_traces.h"
 #include "ocudu/ofh/ethernet/ethernet_frame_notifier.h"
@@ -11,9 +12,13 @@
 #include "ocudu/support/executors/task_executor.h"
 #include "ocudu/support/synchronization/sync_event.h"
 #include <arpa/inet.h>
+#include <cerrno>
 #include <cstring>
+#include <ctime>
+#include <linux/if_packet.h>
 #include <net/if.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
 
@@ -33,6 +38,14 @@ class dummy_frame_notifier : public frame_notifier
 /// This dummy object is passed to the constructor of the receiver implementation as a placeholder for the
 /// actual frame notifier, which will be later set up through the \ref start() method.
 static dummy_frame_notifier dummy_notifier;
+
+/// Returns the given clock in nanoseconds.
+static uint64_t clock_now_ns(clockid_t clock)
+{
+  ::timespec ts = {};
+  ::clock_gettime(clock, &ts);
+  return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + static_cast<uint64_t>(ts.tv_nsec);
+}
 
 receiver_impl::receiver_impl(const receiver_config& config, task_executor& executor_, ocudulog::basic_logger& logger_) :
   logger(logger_),
@@ -68,9 +81,27 @@ receiver_impl::receiver_impl(const receiver_config& config, task_executor& execu
     report_error("Unable to bind socket to the NIC interface '{}' in Ethernet receiver", config.interface);
   }
 
-  logger.info("Opened successfully the NIC interface '{}' (fd = '{}') used by the Ethernet receiver",
+  // Size the receive queue for bursts (see SOCKET_RECEIVE_BUFFER_SIZE).
+  if (::setsockopt(
+          socket_fd, SOL_SOCKET, SO_RCVBUFFORCE, &SOCKET_RECEIVE_BUFFER_SIZE, sizeof(SOCKET_RECEIVE_BUFFER_SIZE)) < 0) {
+    ::setsockopt(socket_fd, SOL_SOCKET, SO_RCVBUF, &SOCKET_RECEIVE_BUFFER_SIZE, sizeof(SOCKET_RECEIVE_BUFFER_SIZE));
+  }
+  int       receive_buffer_size = 0;
+  socklen_t optlen              = sizeof(receive_buffer_size);
+  ::getsockopt(socket_fd, SOL_SOCKET, SO_RCVBUF, &receive_buffer_size, &optlen);
+
+  // Kernel receive timestamps (CLOCK_REALTIME) let the reception window be evaluated at the time the frame arrived
+  // rather than when it is processed.
+  const int enable_timestamps = 1;
+  if (::setsockopt(socket_fd, SOL_SOCKET, SO_TIMESTAMPNS, &enable_timestamps, sizeof(enable_timestamps)) < 0) {
+    logger.warning("Could not enable kernel receive timestamps on the Ethernet receiver socket: {}", ::strerror(errno));
+  }
+
+  logger.info("Opened successfully the NIC interface '{}' (fd = '{}', receive buffer = {} bytes) used by the Ethernet "
+              "receiver",
               config.interface,
-              socket_fd);
+              socket_fd,
+              receive_buffer_size);
 }
 
 receiver_impl::~receiver_impl()
@@ -134,10 +165,30 @@ static bool wait_for_data(int socket, std::chrono::microseconds timeout)
 
 void receiver_impl::receive()
 {
+  ofh::ul_rx_diagnostics& diagnostics = ofh::ul_rx_diagnostics::get();
+  const uint64_t          now_ns      = clock_now_ns(CLOCK_MONOTONIC);
+  const uint64_t          poll_gap_ns = (last_poll_ns != 0) ? (now_ns - last_poll_ns) : 0;
+  last_poll_ns                        = now_ns;
+  if (diagnostics.enabled() && (now_ns - last_socket_drops_report_ns >= 1000000000ULL)) {
+    last_socket_drops_report_ns = now_ns;
+    report_socket_drops();
+    diagnostics.report_if_due(logger);
+  }
+
   if (!wait_for_data(socket_fd, std::chrono::microseconds(5))) {
+    diagnostics.on_rx_wakeup(0, poll_gap_ns);
     return;
   }
 
+  unsigned nof_frames = 0;
+  while ((nof_frames != MAX_FRAMES_PER_WAKEUP) && receive_frame()) {
+    ++nof_frames;
+  }
+  diagnostics.on_rx_wakeup(nof_frames, poll_gap_ns);
+}
+
+bool receiver_impl::receive_frame()
+{
   auto        meas = metrics_collector.create_time_execution_measurer();
   trace_point tp   = ofh_tracer.now();
 
@@ -152,7 +203,7 @@ void receiver_impl::receive()
                      socket_fd,
                      nof_consecutive_buffer_exhaustions);
     }
-    return;
+    return false;
   }
   if (nof_consecutive_buffer_exhaustions != 0) {
     logger.warning("Ethernet packet reception on the port bound to fd = '{}' recovered after '{}' failed buffer "
@@ -163,19 +214,53 @@ void receiver_impl::receive()
   }
   ethernet_rx_buffer_impl buffer    = std::move(*exp_buffer);
   span<uint8_t>           data_span = buffer.storage();
-  auto                    nof_bytes = ::recvfrom(socket_fd, data_span.data(), BUFFER_SIZE, 0, nullptr, nullptr);
 
+  ::iovec                    iov = {data_span.data(), BUFFER_SIZE};
+  alignas(::cmsghdr) uint8_t control[CMSG_SPACE(sizeof(::timespec))];
+  ::msghdr                   msg = {};
+  msg.msg_iov                    = &iov;
+  msg.msg_iovlen                 = 1;
+  msg.msg_control                = control;
+  msg.msg_controllen             = sizeof(control);
+
+  auto nof_bytes = ::recvmsg(socket_fd, &msg, MSG_DONTWAIT);
   if (nof_bytes < 0) {
-    logger.warning("Ethernet receiver call to recvfrom failed, fd = '{}'", socket_fd);
-    metrics_collector.update_stats(meas.stop());
-    return;
+    if ((errno != EAGAIN) && (errno != EWOULDBLOCK)) {
+      logger.warning("Ethernet receiver call to recvmsg failed, fd = '{}': {}", socket_fd, ::strerror(errno));
+      metrics_collector.update_stats(meas.stop());
+    }
+    return false;
   }
+  const uint64_t read_ns = clock_now_ns(CLOCK_REALTIME);
+
+  uint64_t kernel_rx_ns = 0;
+  for (::cmsghdr* cmsg = CMSG_FIRSTHDR(&msg); cmsg != nullptr; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+    if ((cmsg->cmsg_level == SOL_SOCKET) && (cmsg->cmsg_type == SCM_TIMESTAMPNS)) {
+      ::timespec ts;
+      std::memcpy(&ts, CMSG_DATA(cmsg), sizeof(ts));
+      kernel_rx_ns = static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + static_cast<uint64_t>(ts.tv_nsec);
+    }
+  }
+
   buffer.resize(nof_bytes);
+  buffer.set_timestamps(kernel_rx_ns, read_ns);
 
   metrics_collector.update_stats(meas.stop(), nof_bytes);
+  ofh::ul_rx_diagnostics::get().on_rx_frame((kernel_rx_ns != 0) ? static_cast<int64_t>(read_ns - kernel_rx_ns) : -1);
 
   notifier->on_new_frame(unique_rx_buffer(std::move(buffer)));
   ofh_tracer << trace_event("ofh_receiver", tp);
+  return true;
+}
+
+void receiver_impl::report_socket_drops()
+{
+  // The kernel resets the counters on every read.
+  ::tpacket_stats stats  = {};
+  socklen_t       optlen = sizeof(stats);
+  if (::getsockopt(socket_fd, SOL_PACKET, PACKET_STATISTICS, &stats, &optlen) == 0) {
+    ofh::ul_rx_diagnostics::get().on_socket_drops(stats.tp_drops);
+  }
 }
 
 receiver_metrics_collector* receiver_impl::get_metrics_collector()

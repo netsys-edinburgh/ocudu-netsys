@@ -3,12 +3,26 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
 #include "ofh_message_receiver_impl.h"
+#include "../support/ofh_ul_rx_diagnostics.h"
 #include "ofh_rx_window_checker.h"
 #include "ocudu/adt/format.h"
 #include "ocudu/instrumentation/traces/ofh_traces.h"
+#include <ctime>
 
 using namespace ocudu;
 using namespace ofh;
+
+/// Upper bound of the arrival age correction, in symbols. A larger age means a clock step between the kernel timestamp
+/// and the processing; the correction is then not applied.
+static constexpr uint64_t max_arrival_age_symbols = 1000;
+
+/// Returns CLOCK_REALTIME in nanoseconds, the clock of the kernel receive timestamps.
+static uint64_t realtime_now_ns()
+{
+  ::timespec ts = {};
+  ::clock_gettime(CLOCK_REALTIME, &ts);
+  return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + static_cast<uint64_t>(ts.tv_nsec);
+}
 
 message_receiver_impl::message_receiver_impl(const message_receiver_config&  config,
                                              message_receiver_dependencies&& dependencies) :
@@ -16,6 +30,7 @@ message_receiver_impl::message_receiver_impl(const message_receiver_config&  con
   sector_id(config.sector),
   nof_symbols(config.nof_symbols),
   scs(config.scs),
+  symbol_duration_ns(1000000ULL / (get_nof_slots_per_subframe(config.scs) * config.nof_symbols)),
   vlan_params(config.vlan_params),
   ul_prach_eaxc(config.prach_eaxc),
   ul_eaxc(config.ul_eaxc),
@@ -37,6 +52,8 @@ message_receiver_impl::message_receiver_impl(const message_receiver_config&  con
   ocudu_assert(data_flow_uplink, "Invalid uplink IQ data flow");
   ocudu_assert(data_flow_prach, "Invalid uplink PRACH IQ data flow");
   ocudu_assert(seq_id_checker, "Invalid sequence id checker");
+
+  ul_rx_diagnostics::get().set_symbol_duration(std::chrono::nanoseconds(symbol_duration_ns));
 }
 
 void message_receiver_impl::on_new_frame(ether::unique_rx_buffer buffer)
@@ -47,6 +64,20 @@ void message_receiver_impl::on_new_frame(ether::unique_rx_buffer buffer)
 void message_receiver_impl::process_new_frame(ether::unique_rx_buffer buffer)
 {
   span<const uint8_t> payload = buffer.data();
+
+  // Time the frame spent between the kernel and this point (socket queue, receive thread, executor queue).
+  const uint64_t kernel_rx_ns        = buffer.get_kernel_rx_timestamp_ns();
+  const uint64_t read_ns             = buffer.get_read_timestamp_ns();
+  const uint64_t now_ns              = ((kernel_rx_ns != 0) || (read_ns != 0)) ? realtime_now_ns() : 0;
+  unsigned       arrival_age_symbols = 0;
+  int64_t        read_to_process_ns  = -1;
+  if ((kernel_rx_ns != 0) && (now_ns > kernel_rx_ns)) {
+    const uint64_t age_symbols = (now_ns - kernel_rx_ns) / symbol_duration_ns;
+    arrival_age_symbols        = (age_symbols <= max_arrival_age_symbols) ? static_cast<unsigned>(age_symbols) : 0;
+  }
+  if ((read_ns != 0) && (now_ns > read_ns)) {
+    read_to_process_ns = static_cast<int64_t>(now_ns - read_ns);
+  }
 
   // Creates and starts the execution time measurer.
   time_execution_measurer meas(metrics_collector.enabled());
@@ -101,8 +132,12 @@ void message_receiver_impl::process_new_frame(ether::unique_rx_buffer buffer)
     return;
   }
 
-  // Fill the reception window statistics.
-  window_checker.update_rx_window_statistics(*slot_point);
+  // Fill the reception window statistics, evaluated at the kernel arrival time of the frame.
+  std::optional<int> processing_offset = window_checker.update_rx_window_statistics(*slot_point, arrival_age_symbols);
+  if (processing_offset) {
+    ul_rx_diagnostics::get().on_frame_processed(
+        read_to_process_ns, *processing_offset - static_cast<int>(arrival_age_symbols), *processing_offset);
+  }
 
   // Peek the filter index and check that it is valid.
   std::optional<filter_index_type> filter_type = uplane_peeker::peek_filter_index(ofh_pdu);

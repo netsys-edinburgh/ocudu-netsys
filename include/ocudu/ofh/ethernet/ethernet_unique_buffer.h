@@ -58,6 +58,13 @@ public:
 
   /// Returns a span of bytes received from the NIC.
   virtual span<const uint8_t> data() const = 0;
+
+  /// Returns the time the kernel received the frame (CLOCK_REALTIME, nanoseconds since the epoch), or zero if unknown.
+  virtual uint64_t get_kernel_rx_timestamp_ns() const { return 0; }
+
+  /// Returns the time the frame was read from the receive queue (CLOCK_REALTIME, nanoseconds since the epoch), or
+  /// zero if unknown.
+  virtual uint64_t get_read_timestamp_ns() const { return 0; }
 };
 
 /// Receive buffer wrapper enforcing unique ownership of the stored buffer.
@@ -105,6 +112,24 @@ public:
       return {};
     }
     return static_cast<const rx_buffer*>(static_cast<void*>(&buffer))->data();
+  }
+
+  /// Returns the kernel receive time of the stored buffer, or zero if unknown. See \ref rx_buffer.
+  uint64_t get_kernel_rx_timestamp_ns() const
+  {
+    if (storage_ptr->empty()) {
+      return 0;
+    }
+    return static_cast<const rx_buffer*>(static_cast<void*>(&buffer))->get_kernel_rx_timestamp_ns();
+  }
+
+  /// Returns the time the stored buffer was read from the receive queue, or zero if unknown. See \ref rx_buffer.
+  uint64_t get_read_timestamp_ns() const
+  {
+    if (storage_ptr->empty()) {
+      return 0;
+    }
+    return static_cast<const rx_buffer*>(static_cast<void*>(&buffer))->get_read_timestamp_ns();
   }
 
 private:

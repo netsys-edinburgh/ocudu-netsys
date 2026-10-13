@@ -101,6 +101,8 @@ private:
   const unsigned                                        sector_id;
   const unsigned                                        nof_symbols;
   const subcarrier_spacing                              scs;
+  /// Average OFDM symbol duration (cyclic prefix included) in nanoseconds.
+  const uint64_t                                        symbol_duration_ns;
   const ether::vlan_frame_params                        vlan_params;
   const static_vector<unsigned, MAX_NOF_SUPPORTED_EAXC> ul_prach_eaxc;
   const static_vector<unsigned, MAX_NOF_SUPPORTED_EAXC> ul_eaxc;

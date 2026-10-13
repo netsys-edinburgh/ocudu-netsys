@@ -31,8 +31,18 @@ class ethernet_rx_buffer_pool
 
   unsigned number_of_buffers;
 
+public:
+  /// Receive timestamps of a buffer (CLOCK_REALTIME nanoseconds, zero if unknown).
+  struct rx_timestamps {
+    uint64_t kernel_rx_ns = 0;
+    uint64_t read_ns      = 0;
+  };
+
+private:
   std::vector<std::vector<uint8_t>> entries;
-  rx_buffer_id_list                 free_list;
+  // Kept next to the entries rather than in the buffer object, which must fit the small storage of unique_rx_buffer.
+  std::vector<rx_timestamps> timestamps;
+  rx_buffer_id_list          free_list;
 
 public:
   /// Constructor allocates buffers with given size, assigns an ID to each of them and puts them into a list of free
@@ -40,6 +50,7 @@ public:
   explicit ethernet_rx_buffer_pool(unsigned buffer_size) :
     number_of_buffers(divide_ceil(ETH_BUFFER_POOL_SIZE.value(), buffer_size)),
     entries(number_of_buffers),
+    timestamps(number_of_buffers),
     free_list(number_of_buffers)
   {
     for (unsigned i = 0; i != number_of_buffers; ++i) {
@@ -65,6 +76,20 @@ public:
     // Push identifier back in the pool.
     while (!free_list.try_push(buffer_id)) {
     }
+  }
+
+  /// Sets the receive timestamps of the buffer with the given ID.
+  void set_timestamps(unsigned id, uint64_t kernel_rx_ns, uint64_t read_ns)
+  {
+    ocudu_assert(id < timestamps.size(), "Buffer index ({}) is out of range ({}).", id, timestamps.size());
+    timestamps[id] = {kernel_rx_ns, read_ns};
+  }
+
+  /// Returns the receive timestamps of the buffer with the given ID.
+  const rx_timestamps& get_timestamps(unsigned id) const
+  {
+    ocudu_assert(id < timestamps.size(), "Buffer index ({}) is out of range ({}).", id, timestamps.size());
+    return timestamps[id];
   }
 
   /// Returns the span of data belonging to a buffer with the given ID.

@@ -50,6 +50,24 @@ void ethernet_rx_buffer_impl::resize(unsigned used_size)
   size = used_size;
 }
 
+void ethernet_rx_buffer_impl::set_timestamps(uint64_t kernel_rx_ns, uint64_t read_ns)
+{
+  ocudu_assert(id >= 0, "Invalid Ethernet rx buffer accessed");
+  pool.set_timestamps(id, kernel_rx_ns, read_ns);
+}
+
+uint64_t ethernet_rx_buffer_impl::get_kernel_rx_timestamp_ns() const
+{
+  ocudu_assert(id >= 0, "Invalid Ethernet rx buffer accessed");
+  return pool.get_timestamps(id).kernel_rx_ns;
+}
+
+uint64_t ethernet_rx_buffer_impl::get_read_timestamp_ns() const
+{
+  ocudu_assert(id >= 0, "Invalid Ethernet rx buffer accessed");
+  return pool.get_timestamps(id).read_ns;
+}
+
 ethernet_rx_buffer_impl::~ethernet_rx_buffer_impl()
 {
   if (id >= 0) {

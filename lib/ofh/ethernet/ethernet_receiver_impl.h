@@ -22,6 +22,18 @@ namespace ether {
 class receiver_impl : public receiver, private receiver_operation_controller
 {
   static constexpr unsigned BUFFER_SIZE = 9600;
+  /// \brief Maximum number of frames read in one receive wake-up.
+  ///
+  /// Reading the queued frames in one wake-up keeps up with bursts of U-Plane frames (a 2-port 40 MHz uplink slot is
+  /// tens of frames within a few hundred microseconds), where one frame per wake-up let the socket queue overflow.
+  /// The bound keeps the transmit tasks that share the executor on time: at a few microseconds per frame it delays
+  /// them by a few tens of microseconds at most, well inside a downlink U-Plane transmission window.
+  static constexpr unsigned MAX_FRAMES_PER_WAKEUP = 8;
+  /// \brief Requested socket receive buffer size in bytes.
+  ///
+  /// Absorbs a scheduling stall of the receiver (the default net.core.rmem_default, typically 208 KiB, holds a few
+  /// dozen jumbo frames). Set with SO_RCVBUFFORCE when permitted (CAP_NET_ADMIN), SO_RCVBUF otherwise.
+  static constexpr int SOCKET_RECEIVE_BUFFER_SIZE = 16 * 1024 * 1024;
 
 public:
   receiver_impl(const receiver_config& config, task_executor& executor_, ocudulog::basic_logger& logger_);
@@ -49,6 +61,12 @@ private:
   /// \note This function will block until new frames become available.
   void receive();
 
+  /// Reads one frame from the socket without blocking and notifies it. Returns false if no frame was read.
+  bool receive_frame();
+
+  /// Reports the frames the kernel dropped on this socket since the previous call.
+  void report_socket_drops();
+
 private:
   ocudulog::basic_logger&         logger;
   task_executor&                  executor;
@@ -58,6 +76,10 @@ private:
   ethernet_rx_buffer_pool         buffer_pool;
   receiver_metrics_collector_impl metrics_collector;
   uint64_t                        nof_consecutive_buffer_exhaustions = 0;
+  /// Monotonic time of the previous receive poll, in nanoseconds.
+  uint64_t last_poll_ns = 0;
+  /// Monotonic time of the previous socket drop report, in nanoseconds.
+  uint64_t last_socket_drops_report_ns = 0;
 };
 
 } // namespace ether

@@ -43,6 +43,15 @@ public:
   /// Sets the actually used size.
   void resize(unsigned used_size);
 
+  /// Sets the kernel receive time and the read time of the frame (CLOCK_REALTIME nanoseconds, zero if unknown).
+  void set_timestamps(uint64_t kernel_rx_ns, uint64_t read_ns);
+
+  // See interface for documentation.
+  uint64_t get_kernel_rx_timestamp_ns() const override;
+
+  // See interface for documentation.
+  uint64_t get_read_timestamp_ns() const override;
+
 private:
   ethernet_rx_buffer_pool& pool;
   int                      id = -1;

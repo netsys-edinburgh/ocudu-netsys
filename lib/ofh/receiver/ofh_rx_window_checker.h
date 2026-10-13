@@ -9,6 +9,7 @@
 #include "ocudu/ofh/receiver/ofh_receiver_timing_parameters.h"
 #include "ocudu/ofh/timing/ofh_ota_symbol_boundary_notifier.h"
 #include <atomic>
+#include <optional>
 
 namespace ocudu {
 namespace ofh {
@@ -73,8 +74,15 @@ public:
   /// Returns true if the Rx window checker is disabled, otherwise returns false.
   bool disabled() const { return is_disabled; }
 
-  /// Updates the Rx window statistics.
-  void update_rx_window_statistics(slot_symbol_point symbol_point);
+  /// \brief Updates the Rx window statistics.
+  ///
+  /// \param[in] symbol_point        Slot and symbol of the received message.
+  /// \param[in] arrival_age_symbols Whole symbols elapsed between the reception of the message by the kernel and this
+  ///                                call. The message is classified at its arrival time, i.e., this many symbols before
+  ///                                the current OTA symbol, so that queueing in the receiver does not count as late.
+  /// \return The arrival of the message relative to its symbol, in symbols, at processing time (i.e., without the
+  ///         arrival age correction), or nothing if the checker is disabled.
+  std::optional<int> update_rx_window_statistics(slot_symbol_point symbol_point, unsigned arrival_age_symbols = 0);
 
   /// Getters to the number of messages.
   uint64_t nof_on_time_messages() const { return statistics.nof_on_time_messages(); }
