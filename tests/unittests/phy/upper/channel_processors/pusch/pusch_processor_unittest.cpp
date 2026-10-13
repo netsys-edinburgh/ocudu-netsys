@@ -414,6 +414,9 @@ TEST_P(PuschProcessorFixture, PuschProcessorUnittest)
   ASSERT_EQ(false, demodulator_entry.config.enable_transform_precoding);
   ASSERT_EQ(span<const uint8_t>(pdu.rx_ports), span<const uint8_t>(demodulator_entry.config.rx_ports));
   ASSERT_EQ(pdu.n_rapid, demodulator_entry.config.n_rapid);
+  // The demodulator generates the DMRS for the accelerated paths, so it takes the same transmission slot as the
+  // channel estimator.
+  ASSERT_EQ(pdu.slot - pdu.slot_offset, demodulator_entry.config.slot);
 
   // Assert demux if UCI is multiplexed.
   ASSERT_EQ(1, demux_spy->get_demultiplex_entries().size());

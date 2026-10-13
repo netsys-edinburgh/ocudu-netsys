@@ -39,6 +39,15 @@ using namespace ocudu;
 }
 
 namespace {
+
+/// \brief Gets the slot in which the UE transmitted the PUSCH.
+///
+/// The DMRS sequences depend on it. It precedes the reception slot by the PDU slot offset, which is non-zero in NTN.
+slot_point get_transmission_slot(const pusch_processor::pdu_t& pdu)
+{
+  return pdu.slot - pdu.slot_offset;
+}
+
 bool supports_resident_accelerated_pusch_demodulation(const pusch_processor::pdu_t& pdu)
 {
   unsigned nof_rx_ports = static_cast<unsigned>(pdu.rx_ports.size());
@@ -403,7 +412,7 @@ void pusch_processor_impl::process(span<uint8_t>                    data,
 
   // Configure the channel estimator.
   dmrs_pusch_estimator::configuration ch_est_config;
-  ch_est_config.slot = pdu.slot - pdu.slot_offset;
+  ch_est_config.slot = get_transmission_slot(pdu);
   if (enable_transform_precoding) {
     ch_est_config.sequence_config = dmrs_pusch_estimator::low_papr_sequence_configuration{.n_rs_id = n_rs_id};
   } else {
@@ -625,7 +634,7 @@ void pusch_processor_impl::process_data(span<uint8_t>                          d
     const auto& dmrs_cfg = std::get<ocudu::pusch_processor::dmrs_transform_precoding_configuration>(pdu.dmrs);
     demod_config.n_rs_id = dmrs_cfg.n_rs_id;
   }
-  demod_config.slot     = pdu.slot;
+  demod_config.slot     = get_transmission_slot(pdu);
   demod_config.rx_ports = pdu.rx_ports;
   demod_config.n_rapid  = pdu.n_rapid;
   if (use_resident_sch_with_uci) {
