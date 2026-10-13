@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ocudu/f1u/cu_up/f1u_tx_metrics.h"
+#include "ocudu/aurora/aurora.h"
 #include "ocudu/support/ocudu_assert.h"
 
 namespace ocudu::ocuup {
@@ -30,6 +31,7 @@ public:
 
   void add_dropped_sdus(uint32_t num_sdus)
   {
+    aurora::on_f1u_event(aurora::f1u_side::cu_up, aurora::f1u_event::dl_dropped, num_sdus);
     if (not enabled) {
       return;
     }
@@ -38,6 +40,7 @@ public:
 
   void add_sdu_discards(uint32_t num_sdus)
   {
+    aurora::on_f1u_event(aurora::f1u_side::cu_up, aurora::f1u_event::dl_discard, num_sdus);
     if (not enabled) {
       return;
     }
@@ -46,6 +49,7 @@ public:
 
   void add_pdus(uint32_t num_pdus_)
   {
+    aurora::on_f1u_event(aurora::f1u_side::cu_up, aurora::f1u_event::dl_pdu, num_pdus_);
     if (not enabled) {
       return;
     }

@@ -36,6 +36,15 @@ f1u_bearer_impl::f1u_bearer_impl(uint32_t                       ue_index,
   logger.log_info("F1-U bearer configured. {} {}", cfg, dl_tnl_info);
 }
 
+/// Reports an NR-U UL message sent to the CU-UP to AURORA (counted only in a process without a CU-UP).
+static void aurora_report_ul_message(const nru_ul_message& msg)
+{
+  aurora::on_f1u_event(aurora::f1u_side::du, aurora::f1u_event::ul_pdu);
+  if (msg.data_delivery_status.has_value()) {
+    aurora::on_f1u_event(aurora::f1u_side::du, aurora::f1u_event::dds);
+  }
+}
+
 void f1u_bearer_impl::handle_sdu(byte_buffer_chain sdu)
 {
   logger.log_debug("F1-U bearer received SDU with size={}", sdu.length());
@@ -51,6 +60,7 @@ void f1u_bearer_impl::handle_sdu(byte_buffer_chain sdu)
   if (buffering) {
     logger.log_debug("Buffering UL PDU. ul_buffer_size={}", ul_buffer.size());
     if (not ul_buffer.try_push(std::move(msg))) {
+      aurora::on_f1u_event(aurora::f1u_side::du, aurora::f1u_event::ul_dropped);
       if (cfg.warn_on_drop) {
         logger.log_warning("Dropped UL PDU, UL buffer full. ul_buffer_size={}", ul_buffer.size());
       } else {
@@ -60,6 +70,7 @@ void f1u_bearer_impl::handle_sdu(byte_buffer_chain sdu)
       logger.log_debug("Buffering UL PDU. ul_buffer_size={}", ul_buffer.size());
     }
   } else {
+    aurora_report_ul_message(msg);
     tx_pdu_notifier.on_new_pdu(std::move(msg));
   }
 }
@@ -67,6 +78,7 @@ void f1u_bearer_impl::handle_sdu(byte_buffer_chain sdu)
 void f1u_bearer_impl::handle_pdu(nru_dl_message msg)
 {
   if (!ue_executor.execute([this, m = std::move(msg)]() mutable { handle_pdu_impl(std::move(m)); })) {
+    aurora::on_f1u_event(aurora::f1u_side::du, aurora::f1u_event::dl_dropped);
     if (!cfg.warn_on_drop) {
       logger.log_info("Dropped F1-U PDU, queue is full");
     } else {
@@ -86,6 +98,7 @@ void f1u_bearer_impl::stop()
 void f1u_bearer_impl::handle_pdu_impl(nru_dl_message msg)
 {
   logger.log_debug("F1-U bearer received PDU");
+  aurora::on_f1u_event(aurora::f1u_side::du, aurora::f1u_event::dl_pdu);
   // handle polling of delivery status report
   if (msg.dl_user_data.report_polling) {
     if (send_data_delivery_status(/* force = */ true)) {
@@ -102,6 +115,7 @@ void f1u_bearer_impl::handle_pdu_impl(nru_dl_message msg)
       const nru_pdcp_sn_discard_block& block = blocks[block_idx];
       logger.log_debug("Notifying PDU discard for pdcp_sn={}..{}", block.pdcp_sn_start, block.block_size);
       rx_sdu_notifier.on_discard_sdu(block.pdcp_sn_start, block.block_size);
+      aurora::on_f1u_event(aurora::f1u_side::du, aurora::f1u_event::dl_discard, block.block_size);
     }
   }
   // handle T-PDU
@@ -120,6 +134,7 @@ void f1u_bearer_impl::flush_ul_buffer()
   logger.log_debug("Flushing UL PDUs. ul_buffer_size={}", ul_buffer.size());
   while (not ul_buffer.empty()) {
     nru_ul_message& ul_msg = ul_buffer.top();
+    aurora_report_ul_message(ul_msg);
     tx_pdu_notifier.on_new_pdu(std::move(ul_msg));
     ul_buffer.pop();
   }
@@ -268,6 +283,7 @@ bool f1u_bearer_impl::send_data_delivery_status(bool force)
   if (!fresh_values && !force) {
     return false;
   }
+  aurora_report_ul_message(msg);
   tx_pdu_notifier.on_new_pdu(std::move(msg));
   return true;
 }

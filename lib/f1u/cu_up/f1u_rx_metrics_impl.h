@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ocudu/f1u/cu_up/f1u_rx_metrics.h"
+#include "ocudu/aurora/aurora.h"
 #include "ocudu/support/ocudu_assert.h"
 
 namespace ocudu::ocuup {
@@ -21,6 +22,7 @@ public:
 
   void add_pdus(uint32_t num_pdus_)
   {
+    aurora::on_f1u_event(aurora::f1u_side::cu_up, aurora::f1u_event::ul_pdu, num_pdus_);
     if (not enabled) {
       return;
     }
@@ -29,6 +31,7 @@ public:
 
   void add_dropped_pdus(uint32_t num_pdus_)
   {
+    aurora::on_f1u_event(aurora::f1u_side::cu_up, aurora::f1u_event::ul_dropped, num_pdus_);
     if (not enabled) {
       return;
     }
@@ -46,6 +49,7 @@ public:
 
   void add_dds(uint32_t num_dds_)
   {
+    aurora::on_f1u_event(aurora::f1u_side::cu_up, aurora::f1u_event::dds, num_dds_);
     if (not enabled) {
       return;
     }
@@ -54,6 +58,7 @@ public:
 
   void add_dds_failures(uint32_t num_dds_failures_)
   {
+    aurora::on_f1u_event(aurora::f1u_side::cu_up, aurora::f1u_event::dds_failure, num_dds_failures_);
     if (not enabled) {
       return;
     }
