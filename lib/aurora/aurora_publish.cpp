@@ -508,16 +508,17 @@ void publish_aggregates(aurora_metrics& m,
   set_kpm(k[2], 3, "DRB.UEThpUl", true, 0, n != 0 ? double(t.ul_tbs) / n : 0);
   set_kpm(k[3], 4, "CARR.PDSCHMCSSched", true, 0, m.dl_fapi_mcs_avg);
   set_kpm(k[4], 5, "CARR.PUSCHMCSSched", true, 0, m.ul_fapi_mcs_avg);
-  set_kpm(k[5], 6, "CARR.PRBUsageDl", false, t.dl_prbs, 0);
-  set_kpm(k[6], 7, "CARR.PRBUsageUl", false, t.ul_prbs, 0);
+  // 3GPP TS 28.552 names (clause 5.1.1.2.5): mean number of PRBs used per DL/UL slot. OAI published the PRB sum
+  // of the interval as CARR.PRBUsageDl/Ul.
+  set_kpm(k[5], 6, "RRU.PrbUsedDl", true, 0, dl_slots != 0 ? double(t.dl_prbs) / dl_slots : 0);
+  set_kpm(k[6], 7, "RRU.PrbUsedUl", true, 0, ul_slots != 0 ? double(t.ul_prbs) / ul_slots : 0);
   set_kpm(k[7], 8, "CARR.AverageCQI", true, 0, n != 0 ? double(t.csi_sum) / n : 0);
   set_kpm(k[8], 9, "DRB.PdcpSduBitrateDl", false, pdcp_tx_sdu_bytes, 0);
   set_kpm(k[9], 10, "DRB.PdcpSduBitrateUl", false, pdcp_rx_sdu_bytes, 0);
   set_kpm(k[10], 11, "L1M.UL-sinrAvg", true, 0, sinr_avg);
   set_kpm(k[11], 12, "L1M.DL-rsrpAvg", true, 0, rsrp_avg);
   set_kpm(k[12], 13, "DRB.RlcPacketDropRateDl", true, 0, rlc_tx != 0 ? double(rlc_dd) / double(rlc_tx) : 0);
-  // 3GPP TS 28.552 defines RRU.PrbTotDl/Ul as the total PRB usage in percent; the PRB counts stay available as
-  // CARR.PRBUsageDl/Ul.
+  // 3GPP TS 28.552 defines RRU.PrbTotDl/Ul as the total PRB usage in percent; the PRB counts are RRU.PrbUsedDl/Ul.
   set_kpm(k[13], 14, "RRU.PrbTotDl", true, 0, m.dl_prb_utilization_pct);
   set_kpm(k[14], 15, "RRU.PrbTotUl", true, 0, m.ul_prb_utilization_pct);
   set_kpm(k[15], 16, "L1M.UL-dtxRatio", true, 0, t.ul_harq != 0 ? double(t.ul_dtx) / double(t.ul_harq) : 0);

@@ -248,10 +248,12 @@ TEST_F(aurora_core_test, cross_ue_aggregates_kpm_and_rc_cell)
   EXPECT_STREQ(r.kpm_metrics[0].name, "RRC.ConnNumber");
   EXPECT_EQ(r.kpm_metrics[0].value, 2U);
   EXPECT_DOUBLE_EQ(r.kpm_metrics[1].value_real, 2000.0);
-  EXPECT_EQ(r.kpm_metrics[5].value, 50U);
+  // 50 PRBs used over 2 DL slots.
+  EXPECT_STREQ(r.kpm_metrics[5].name, "RRU.PrbUsedDl");
+  EXPECT_DOUBLE_EQ(r.kpm_metrics[5].value_real, 25.0);
   EXPECT_DOUBLE_EQ(r.kpm_metrics[7].value_real, 10.0);
   EXPECT_DOUBLE_EQ(r.kpm_metrics[11].value_real, -80.0);
-  // RRU.PrbTotDl is the DL PRB usage in percent (3GPP TS 28.552), CARR.PRBUsageDl the PRB count.
+  // RRU.PrbTotDl is the DL PRB usage in percent (3GPP TS 28.552), RRU.PrbUsedDl the mean PRB count.
   EXPECT_STREQ(r.kpm_metrics[13].name, "RRU.PrbTotDl");
   EXPECT_EQ(r.kpm_metrics[13].value_type, 1U);
   EXPECT_DOUBLE_EQ(r.kpm_metrics[13].value_real, 50.0);
