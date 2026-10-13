@@ -101,6 +101,8 @@ const char* aurora::default_thread_whitelist()
       "gnb,odu,ocu,ocucp,ocuup,odu_low,"
       // apps/services/worker_manager.
       "main_pool#*,phy_worker,radio,split6,ru_timing,ru_txrx_#*,ru_dummy,"
+      // Optional dedicated layer workers (expert_execution.threads.{mac_sched,pdcp,cu_cp}.enable).
+      "mac_sched#*,pdcp,cu_cp,"
       "lower_phy#*,lower_phy_tx#*,lower_phy_rx#*,lower_phy_ul#*,"
       // Support threads: IO broker, remote control server, event tracer, PHY RX grid printer.
       "io_broker_epoll,ws_server,tracer_worker,rx_symb_print,"

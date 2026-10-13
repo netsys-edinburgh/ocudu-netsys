@@ -166,6 +166,7 @@ The following stay the same as OAI:
 |--------|-------|
 | Main thread of each app | `gnb`, `odu`, `ocu`, `ocucp`, `ocuup`, `odu_low`. The ocudulog backend thread and unnamed library threads inherit this name. |
 | `apps/services/worker_manager` | `main_pool#*`, `phy_worker`, `radio`, `split6`, `ru_timing`, `ru_txrx_#*`, `ru_dummy`, `lower_phy#*`, `lower_phy_tx#*`, `lower_phy_rx#*`, `lower_phy_ul#*` |
+| Optional dedicated layer workers (`expert_execution.threads`) | `mac_sched#*` (MAC scheduler, one per cell), `pdcp` (CU-UP PDCP), `cu_cp` (CU-CP, SRB PDCP included) |
 | Support threads | `io_broker_epoll`, `ws_server` (remote control), `tracer_worker` (event tracing), `rx_symb_print` (PHY RX grid printer) |
 | `ocudu_phy_tap` and libzmq | `SRSIQDump`, `ULPhyTap`, `ZMQbg/*` |
 | AURORA | `aurora_reset` |
