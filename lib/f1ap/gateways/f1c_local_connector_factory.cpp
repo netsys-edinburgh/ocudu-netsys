@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/f1ap/gateways/f1c_local_connector_factory.h"
+#include "f1c_aurora_tap.h"
 #include "ocudu/asn1/f1ap/f1ap.h"
 #include "ocudu/f1ap/cu_cp/cu_cp_f1c_handler.h"
 #include "ocudu/f1ap/f1ap_message.h"
@@ -47,6 +48,31 @@ private:
   std::unique_ptr<f1ap_message_notifier> decorated;
 };
 
+/// Decorator for f1ap_message_notifier that reports the forwarded F1AP messages to AURORA. The co-located gateway does
+/// not encode the messages, so their size is measured by encoding them, only while AURORA is active.
+class f1ap_aurora_notifier final : public f1ap_message_notifier
+{
+public:
+  f1ap_aurora_notifier(std::unique_ptr<f1ap_message_notifier> decorated_, aurora::f1c_dir dir_) :
+    decorated(std::move(decorated_)), dir(dir_)
+  {
+  }
+
+  void on_new_message(const f1ap_message& msg) override
+  {
+    f1c_aurora::record_message(msg, dir, std::nullopt);
+    if (dir == aurora::f1c_dir::dl) {
+      link.on_dl_message(msg);
+    }
+    decorated->on_new_message(msg);
+  }
+
+private:
+  std::unique_ptr<f1ap_message_notifier> decorated;
+  aurora::f1c_dir                        dir;
+  f1c_aurora::link_tracker               link;
+};
+
 /// Implementation of a DU and CU-CP F1-C gateway for the case that the DU and CU-CP are co-located.
 class f1c_local_connector_impl final : public f1c_local_connector
 {
@@ -70,11 +96,17 @@ public:
           std::move(du_notifier), pcap_writer, ocudulog::fetch_basic_logger("DU-F1"));
     }
 
+    // Report the messages the DU receives (DL) to AURORA.
+    du_notifier = std::make_unique<f1ap_aurora_notifier>(std::move(du_notifier), aurora::f1c_dir::dl);
+
     // Create direct connection between CU-CP and DU notifier.
     auto cu_notifier = cu_cp_du_mng->handle_new_du_connection(std::move(du_notifier));
     if (cu_notifier == nullptr) {
       return nullptr;
     }
+
+    // Report the messages the CU-CP receives (UL) to AURORA.
+    cu_notifier = std::make_unique<f1ap_aurora_notifier>(std::move(cu_notifier), aurora::f1c_dir::ul);
 
     // Decorate CU-CP RX notifier with pcap writing.
     if (pcap_writer.is_write_enabled()) {

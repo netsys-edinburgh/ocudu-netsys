@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/f1ap/gateways/f1c_network_client_factory.h"
+#include "f1c_aurora_tap.h"
 #include "ocudu/asn1/f1ap/f1ap.h"
 #include "ocudu/f1ap/f1ap_message.h"
 #include "ocudu/gateways/sctp_network_client_factory.h"
@@ -31,8 +32,11 @@ public:
     f1ap_message   msg;
     if (msg.pdu.unpack(bref) != asn1::OCUDUASN_SUCCESS) {
       logger.error("Couldn't unpack F1AP PDU");
+      f1c_aurora::record_decode_error(aurora::f1c_dir::dl);
       return false;
     }
+    f1c_aurora::record_message(msg, aurora::f1c_dir::dl, sdu.length());
+    link.on_dl_message(msg);
 
     // Forward Rx PDU to pcap, if enabled.
     if (pcap_writer.is_write_enabled()) {
@@ -49,6 +53,7 @@ private:
   std::unique_ptr<f1ap_message_notifier> du_rx_pdu_notifier;
   dlt_pcap&                              pcap_writer;
   ocudulog::basic_logger&                logger;
+  f1c_aurora::link_tracker               link;
 };
 
 /// Notifier for converting unpacked F1AP PDUs coming from the DU into packed F1AP PDUs and forward them to the F1C-GW.
@@ -71,6 +76,8 @@ public:
       logger.error("Failed to pack F1AP PDU");
       return;
     }
+
+    f1c_aurora::record_message(msg, aurora::f1c_dir::ul, tx_sdu.length());
 
     // Push Tx PDU to pcap.
     if (pcap_writer.is_write_enabled()) {

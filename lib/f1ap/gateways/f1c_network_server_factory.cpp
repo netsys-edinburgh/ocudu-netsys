@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/f1ap/gateways/f1c_network_server_factory.h"
+#include "f1c_aurora_tap.h"
 #include "ocudu/asn1/f1ap/f1ap.h"
 #include "ocudu/f1ap/cu_cp/cu_cp_f1c_handler.h"
 #include "ocudu/f1ap/f1ap_message.h"
@@ -38,6 +39,9 @@ public:
       return;
     }
 
+    f1c_aurora::record_message(msg, aurora::f1c_dir::dl, tx_sdu.length());
+    link.on_dl_message(msg);
+
     // Push Tx PDU to pcap.
     if (pcap_writer.is_write_enabled()) {
       pcap_writer.push_pdu(tx_sdu.copy());
@@ -51,6 +55,7 @@ private:
   std::unique_ptr<sctp_association_sdu_notifier> sctp_sender;
   dlt_pcap&                                      pcap_writer;
   ocudulog::basic_logger&                        logger;
+  f1c_aurora::link_tracker                       link;
 };
 
 /// Notifier passed to the SCTP GW, which the GW will use to forward F1AP Rx PDUs to the CU-CP.
@@ -71,8 +76,10 @@ public:
     f1ap_message   msg;
     if (msg.pdu.unpack(bref) != asn1::OCUDUASN_SUCCESS) {
       logger.error("Couldn't unpack F1AP PDU");
+      f1c_aurora::record_decode_error(aurora::f1c_dir::ul);
       return false;
     }
+    f1c_aurora::record_message(msg, aurora::f1c_dir::ul, sdu.length());
 
     // Forward SCTP Rx SDU to pcap, if enabled.
     if (pcap_writer.is_write_enabled()) {
