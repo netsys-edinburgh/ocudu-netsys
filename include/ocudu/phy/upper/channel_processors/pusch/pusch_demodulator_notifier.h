@@ -17,8 +17,21 @@ public:
   struct demodulation_stats {
     /// Estimated Signal-to-Interference-plus-Noise Ratio (SINR) at the output of the equalizer.
     std::optional<float> sinr_dB;
+    /// \brief SINR measured by the DM-RS channel estimator, in dB.
+    ///
+    /// Set only by demodulators that estimate the channel themselves, so that the estimator SINR can be reported
+    /// when no separate DM-RS channel estimator ran.
+    std::optional<float> channel_estimator_sinr_dB;
     /// Measured EVM.
     std::optional<float> evm;
+    /// Energy Per Resource Element (EPRE) in dB.
+    std::optional<float> epre_dB;
+    /// Reference Signal Received Power (RSRP) in dB.
+    std::optional<float> rsrp_dB;
+    /// Time Alignment in seconds.
+    std::optional<float> time_alignment_s;
+    /// Carrier Frequency Offset in Hz.
+    std::optional<float> cfo_Hz;
   };
 
   /// Default destructor.

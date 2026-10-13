@@ -54,7 +54,84 @@ public:
     ocuduvec::copy(entry.input, input);
   }
 
-  void clear_demodulate_entries() { demodulate_entries.clear(); }
+  /// Describes a call to demodulate_ci16_ports().
+  struct demodulate_ports_entry {
+    const resource_grid_writer*      grid;
+    std::vector<std::vector<ci16_t>> inputs;
+    float                            input_scale;
+    std::vector<unsigned>            port_indices;
+    unsigned                         symbol_index;
+  };
+
+  bool demodulate_ci16_ports(resource_grid_writer&     grid,
+                             span<const ci16_t* const> inputs,
+                             unsigned                  nof_samples,
+                             float                     input_scale,
+                             span<const unsigned>      port_indices,
+                             unsigned                  symbol_index) override
+  {
+    demodulate_ports_entry& entry = demodulate_ports_entries.emplace_back();
+    entry.grid                    = &grid;
+    entry.input_scale             = input_scale;
+    entry.port_indices.assign(port_indices.begin(), port_indices.end());
+    entry.symbol_index = symbol_index;
+    for (const ci16_t* input : inputs) {
+      entry.inputs.emplace_back(input, input + nof_samples);
+    }
+    return accept_ports;
+  }
+
+  /// Sets whether demodulate_ci16_ports() demodulates the ports or declines them.
+  void set_accept_ports(bool accept) { accept_ports = accept; }
+
+  /// Describes a call to demodulate_ci16_symbol_batch_ports().
+  struct demodulate_batch_entry {
+    const resource_grid_writer* grid;
+    unsigned                    first_symbol_index;
+    unsigned                    nof_symbols;
+    std::vector<unsigned>       port_indices;
+    /// Samples of each port of each symbol, symbol-major.
+    std::vector<std::vector<ci16_t>> inputs;
+  };
+
+  unsigned get_max_ci16_symbol_batch_size() const override { return max_symbol_batch_size; }
+
+  bool demodulate_ci16_symbol_batch_ports(resource_grid_writer&     grid,
+                                          span<const ci16_t* const> inputs,
+                                          span<const unsigned>      symbol_sample_counts,
+                                          float                     input_scale,
+                                          span<const unsigned>      port_indices,
+                                          unsigned                  first_symbol_index,
+                                          unsigned                  nof_symbols) override
+  {
+    demodulate_batch_entry& entry = demodulate_batch_entries.emplace_back();
+    entry.grid                    = &grid;
+    entry.first_symbol_index      = first_symbol_index;
+    entry.nof_symbols             = nof_symbols;
+    entry.port_indices.assign(port_indices.begin(), port_indices.end());
+    for (unsigned i_input = 0, nof_inputs = inputs.size(); i_input != nof_inputs; ++i_input) {
+      unsigned nof_samples = symbol_sample_counts[i_input / port_indices.size()];
+      entry.inputs.emplace_back(inputs[i_input], inputs[i_input] + nof_samples);
+    }
+    return accept_batches;
+  }
+
+  /// Sets the number of OFDM symbols get_max_ci16_symbol_batch_size() reports.
+  void set_max_symbol_batch_size(unsigned size) { max_symbol_batch_size = size; }
+
+  /// Sets whether demodulate_ci16_symbol_batch_ports() demodulates the batch or declines it.
+  void set_accept_batches(bool accept) { accept_batches = accept; }
+
+  const std::vector<demodulate_batch_entry>& get_demodulate_batch_entries() const { return demodulate_batch_entries; }
+
+  const std::vector<demodulate_ports_entry>& get_demodulate_ports_entries() const { return demodulate_ports_entries; }
+
+  void clear_demodulate_entries()
+  {
+    demodulate_entries.clear();
+    demodulate_ports_entries.clear();
+    demodulate_batch_entries.clear();
+  }
 
   const ofdm_demodulator_configuration& get_configuration() const { return configuration; }
 
@@ -65,6 +142,11 @@ private:
   std::uniform_real_distribution<float> dist;
   ofdm_demodulator_configuration        configuration;
   std::vector<demodulate_entry>         demodulate_entries;
+  std::vector<demodulate_ports_entry>   demodulate_ports_entries;
+  bool                                  accept_ports = false;
+  std::vector<demodulate_batch_entry>   demodulate_batch_entries;
+  unsigned                              max_symbol_batch_size = 1;
+  bool                                  accept_batches        = false;
 };
 
 class ofdm_demodulator_factory_spy : public ofdm_demodulator_factory

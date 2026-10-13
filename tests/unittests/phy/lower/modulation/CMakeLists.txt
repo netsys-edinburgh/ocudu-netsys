@@ -15,3 +15,38 @@ add_executable(ofdm_demodulator_unittest ofdm_demodulator_unittest.cpp)
 target_include_directories(ofdm_demodulator_unittest PRIVATE ${CMAKE_SOURCE_DIR}/lib)
 target_link_libraries(ofdm_demodulator_unittest ocudulog ocudu_lower_phy_modulation GTest::gtest ocudu_gtest_main)
 add_test(ofdm_demodulator_unittest ofdm_demodulator_unittest)
+
+if(CUDA_ACCEL_FOUND)
+    add_executable(ofdm_demodulator_cuda_test ofdm_demodulator_cuda_test.cpp)
+    target_include_directories(ofdm_demodulator_cuda_test PRIVATE ${PROJECT_SOURCE_DIR}/lib/phy/upper)
+    target_link_libraries(ofdm_demodulator_cuda_test
+            ocudu_lower_phy_modulation
+            ocudu_upper_phy
+            ocudulog
+            CUDA::cudart
+            GTest::gtest
+            GTest::gtest_main)
+    add_test(ofdm_demodulator_cuda_test ofdm_demodulator_cuda_test)
+
+    add_executable(ofdm_prach_demodulator_cuda_test ofdm_prach_demodulator_cuda_test.cpp)
+    target_include_directories(ofdm_prach_demodulator_cuda_test PRIVATE ${PROJECT_SOURCE_DIR}/lib/phy/upper)
+    target_link_libraries(ofdm_prach_demodulator_cuda_test
+            ocudu_lower_phy_modulation
+            ocudu_upper_phy
+            ocudulog
+            CUDA::cudart
+            GTest::gtest
+            GTest::gtest_main)
+    add_test(ofdm_prach_demodulator_cuda_test ofdm_prach_demodulator_cuda_test)
+endif()
+
+# GPU tests must not run concurrently with each other. The CUDA runtime rejects allocations with
+# cudaErrorDevicesUnavailable while several exclusive device contexts are active, which surfaces as intermittent ctest
+# failures that look like defects in the accelerated code. The shared lock lets ctest keep running the rest of the suite
+# in parallel while serialising the tests that drive the GPU.
+if (CUDA_ACCEL_FOUND)
+    set_tests_properties(
+            ofdm_demodulator_cuda_test
+            ofdm_prach_demodulator_cuda_test
+            PROPERTIES RESOURCE_LOCK ocudu_cuda_device)
+endif ()

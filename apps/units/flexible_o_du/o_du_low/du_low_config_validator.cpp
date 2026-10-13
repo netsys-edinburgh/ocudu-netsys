@@ -86,6 +86,69 @@ static bool validate_expert_phy_unit_config(const du_low_unit_expert_upper_phy_c
     valid = false;
   }
 
+  if ((config.pusch_acceleration_mode != "auto") && (config.pusch_acceleration_mode != "enabled") &&
+      (config.pusch_acceleration_mode != "disabled")) {
+    fmt::print("Invalid PUSCH acceleration mode '{}'. Valid modes are: auto, enabled, disabled.\n",
+               config.pusch_acceleration_mode);
+    valid = false;
+  }
+
+  if ((config.ul_cuda_visible_grid_mode != "auto") && (config.ul_cuda_visible_grid_mode != "managed") &&
+      (config.ul_cuda_visible_grid_mode != "pinned")) {
+    fmt::print("Invalid CUDA-visible uplink resource-grid mode '{}'. Valid modes are: auto, managed, pinned.\n",
+               config.ul_cuda_visible_grid_mode);
+    valid = false;
+  }
+
+  if ((config.dl_cuda_visible_grid_mode != "auto") && (config.dl_cuda_visible_grid_mode != "managed") &&
+      (config.dl_cuda_visible_grid_mode != "pinned")) {
+    fmt::print("Invalid CUDA-visible downlink resource-grid mode '{}'. Valid modes are: auto, managed, pinned.\n",
+               config.dl_cuda_visible_grid_mode);
+    valid = false;
+  }
+
+  if ((config.srs_acceleration_mode != "auto") && (config.srs_acceleration_mode != "enabled") &&
+      (config.srs_acceleration_mode != "disabled")) {
+    fmt::print("Invalid SRS acceleration mode '{}'. Valid modes are: auto, enabled, disabled.\n",
+               config.srs_acceleration_mode);
+    valid = false;
+  }
+
+  if ((config.pusch_channel_equalizer_algorithm != "zf") && (config.pusch_channel_equalizer_algorithm != "mmse")) {
+    fmt::print("Invalid PUSCH channel equalizer algorithm '{}'. Valid values are: zf, mmse.\n",
+               config.pusch_channel_equalizer_algorithm);
+    valid = false;
+  }
+
+  if ((config.pdsch_acceleration_mode != "auto") && (config.pdsch_acceleration_mode != "enabled") &&
+      (config.pdsch_acceleration_mode != "disabled")) {
+    fmt::print("Invalid PDSCH acceleration mode '{}'. Valid modes are: auto, enabled, disabled.\n",
+               config.pdsch_acceleration_mode);
+    valid = false;
+  }
+
+  if ((config.prach_acceleration_mode != "auto") && (config.prach_acceleration_mode != "enabled") &&
+      (config.prach_acceleration_mode != "disabled")) {
+    fmt::print("Invalid PRACH acceleration mode '{}'. Valid modes are: auto, enabled, disabled.\n",
+               config.prach_acceleration_mode);
+    valid = false;
+  }
+
+  if ((config.ldpc_decoder_algorithm != "auto") && (config.ldpc_decoder_algorithm != "boxplus") &&
+      (config.ldpc_decoder_algorithm != "min_sum")) {
+    fmt::print("Invalid LDPC decoder algorithm '{}'. Valid values are: auto, boxplus, min_sum.\n",
+               config.ldpc_decoder_algorithm);
+    valid = false;
+  }
+
+#ifdef ENABLE_CUDA
+  if (config.nvcuda_device_id < 0) {
+    fmt::print("Invalid NVIDIA CUDA device ID '{}'. The device ID must be a non-negative integer.\n",
+               config.nvcuda_device_id);
+    valid = false;
+  }
+#endif
+
   return valid;
 }
 

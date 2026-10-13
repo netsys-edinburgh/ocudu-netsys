@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include "pdxch_baseband_modulator_accelerator.h"
 #include "pdxch_processor_modulator_notifier.h"
 #include "ocudu/gateways/baseband/buffer/baseband_gateway_buffer_dynamic.h"
 #include "ocudu/gateways/baseband/buffer/baseband_gateway_buffer_reader_view.h"
@@ -47,13 +48,18 @@ public:
   /// \param[in] beamforming_codebook_  Beamfoming coefficient codebook. It determines the number of antenna ports and
   ///                                   beams.
   /// \param[in] notifier_              Reference to the interface for notifying the completion of the processing.
-  pdxch_baseband_modulator(subcarrier_spacing                  scs,
-                           cyclic_prefix                       cp,
-                           sampling_rate                       srate,
-                           task_executor&                      executor_,
-                           ofdm_symbol_modulator&              modulator_,
-                           const beam_weights_codebook&        beamforming_codebook_,
-                           pdxch_processor_modulator_notifier& notifier_) :
+  /// \param[in] accelerator_           Optional full-slot accelerator. It is only used when the beamforming codebook
+  ///                                   maps each beam to the antenna port of the same index with unit weight, the
+  ///                                   only mapping it implements; otherwise the slots are modulated per symbol and
+  ///                                   port.
+  pdxch_baseband_modulator(subcarrier_spacing                                    scs,
+                           cyclic_prefix                                         cp,
+                           sampling_rate                                         srate,
+                           task_executor&                                        executor_,
+                           ofdm_symbol_modulator&                                modulator_,
+                           const beam_weights_codebook&                          beamforming_codebook_,
+                           pdxch_processor_modulator_notifier&                   notifier_,
+                           std::unique_ptr<pdxch_baseband_modulator_accelerator> accelerator_ = nullptr) :
     logger(ocudulog::fetch_basic_logger("PHY")),
     nof_ports(beamforming_codebook_.get_nof_antennas()),
     nof_beams(beamforming_codebook_.get_nof_beams()),
@@ -61,8 +67,14 @@ public:
     executor(executor_),
     modulator(modulator_),
     beamforming_codebook(beamforming_codebook_),
-    notifier(notifier_)
+    notifier(notifier_),
+    accelerator(std::move(accelerator_))
   {
+    if (accelerator && !is_identity_codebook(beamforming_codebook)) {
+      logger.info("Accelerated PDxCH modulation disabled: the beamforming codebook is not the identity.");
+      accelerator.reset();
+    }
+
     unsigned nof_slots_per_subframe = get_nof_slots_per_subframe(scs);
 
     // Calculate symbol sizes in a subframe.
@@ -80,6 +92,26 @@ public:
     while (current_state.load(std::memory_order_relaxed)) {
       std::this_thread::sleep_for(std::chrono::microseconds(10));
     }
+  }
+
+  /// Updates the carrier center frequency of the accelerator, if any.
+  void set_center_frequency(double center_frequency_Hz)
+  {
+    if (accelerator) {
+      accelerator->set_center_frequency(center_frequency_Hz);
+    }
+  }
+
+  /// Prepares a baseband output buffer for the accelerator before real-time operation, if any.
+  bool prepare_output_buffer(baseband_gateway_buffer_dynamic& output)
+  {
+    if (!accelerator) {
+      return true;
+    }
+    if (output.get_nof_channels() != nof_ports) {
+      return false;
+    }
+    return accelerator->prepare_output_buffer(output);
   }
 
   /// \brief Handles a transmission request.
@@ -142,6 +174,20 @@ public:
 
     // Prepare baseband buffer.
     current_buffer->resize(nof_samples_slot);
+
+    // Modulate the whole slot with the accelerator, if available. Its completion is waited for on the executor.
+    if (accelerator) {
+      span<const unsigned> symbol_sizes_slot(symbol_sizes_sf.data() + i_symbol_sf_begin, nof_symbols_per_slot);
+      if (accelerator->enqueue(*current_buffer, current_grid.get_reader(), i_symbol_sf_begin, symbol_sizes_slot)) {
+        if (!executor.defer([this]() { complete_accelerated_task(); })) {
+          logger.error(current_context.slot.sfn(),
+                       current_context.slot.slot_index(),
+                       "Failed to enqueue accelerated modulation completion task.");
+          complete_accelerated_task();
+        }
+        return true;
+      }
+    }
 
     unsigned i_symbol_start = 0;
     for (unsigned i_symbol = 0; i_symbol != nof_symbols_per_slot; ++i_symbol) {
@@ -219,6 +265,50 @@ private:
     notifier.on_modulation_completion(std::move(this_buffer), this_context);
   }
 
+  /// \brief Completes an accelerated slot modulation.
+  ///
+  /// Waits for the accelerator and notifies the completion as \ref complete_symbol_task does for the last symbol task.
+  void complete_accelerated_task()
+  {
+    if (!accelerator->wait()) {
+      logger.error(current_context.slot.sfn(),
+                   current_context.slot.slot_index(),
+                   "Accelerated PDxCH modulation failed to complete.");
+    }
+
+    // The resource grid is no longer necessary.
+    current_grid = {};
+
+    // Move context and buffer to the stack.
+    resource_grid_context       this_context = current_context;
+    baseband_gateway_buffer_ptr this_buffer  = std::move(current_buffer);
+
+    // Transition modulator state to idle which becomes available for the next use.
+    [[maybe_unused]] uint32_t prev = current_state.exchange(state_idle);
+    ocudu_assert((prev & state_modulate_mask) == state_modulate_mask, "Unexpected state 0x{:08x}.", prev);
+
+    // Notify completion of the OFDM modulation.
+    notifier.on_modulation_completion(std::move(this_buffer), this_context);
+  }
+
+  /// Returns true if the codebook maps each beam to the antenna port of the same index with unit weight.
+  static bool is_identity_codebook(const beam_weights_codebook& codebook)
+  {
+    unsigned nof_antennas = codebook.get_nof_antennas();
+    if (codebook.get_nof_beams() != nof_antennas) {
+      return false;
+    }
+    for (unsigned i_antenna = 0; i_antenna != nof_antennas; ++i_antenna) {
+      span<const cf_t> weights = codebook.get_antenna_coefficients(i_antenna);
+      for (unsigned i_beam = 0; i_beam != weights.size(); ++i_beam) {
+        if (weights[i_beam] != ((i_beam == i_antenna) ? cf_t(1.0F, 0.0F) : cf_t())) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
   /// State value for when the modulator is not processing any transmisson request.
   static constexpr uint32_t state_idle = 0x0;
   /// State mask for when the modulator is processing a transmission request and has not completed all the tasks yet.
@@ -257,6 +347,8 @@ private:
   const beam_weights_codebook& beamforming_codebook;
   /// Notifier containing the completion notification callback.
   pdxch_processor_modulator_notifier& notifier;
+  /// Optional full-slot accelerator.
+  std::unique_ptr<pdxch_baseband_modulator_accelerator> accelerator;
 };
 
 } // namespace ocudu

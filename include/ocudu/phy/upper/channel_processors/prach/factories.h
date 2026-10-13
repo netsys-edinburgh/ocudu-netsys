@@ -10,6 +10,7 @@
 #include "ocudu/phy/upper/channel_processors/prach/prach_detector.h"
 #include "ocudu/phy/upper/channel_processors/prach/prach_generator.h"
 #include <memory>
+#include <string>
 
 namespace ocudu {
 
@@ -69,6 +70,20 @@ std::shared_ptr<prach_detector_factory>
 create_prach_detector_factory_cuda(std::shared_ptr<prach_detector_factory>  fallback_factory,
                                    std::shared_ptr<prach_generator_factory> generator_factory,
                                    const prach_detector_cuda_configuration& config = {});
+
+/// Creates a PRACH detector factory with implementation-specific acceleration when requested and available.
+std::shared_ptr<prach_detector_factory>
+create_prach_detector_factory_accelerated(std::shared_ptr<dft_processor_factory>         dft_factory,
+                                          std::shared_ptr<prach_generator_factory>       prach_gen_factory,
+                                          const prach_detector_factory_sw_configuration& config,
+                                          std::string                                    acceleration_mode = "auto",
+                                          int                                            nvcuda_device_id  = 0);
+
+/// Returns true if an accelerated PRACH detector backend is available.
+bool is_prach_detector_acceleration_available();
+
+/// Resolves PRACH acceleration mode, including supported runtime overrides.
+std::string resolve_prach_detector_acceleration_mode(const std::string& configured_mode);
 
 class prach_generator_factory
 {

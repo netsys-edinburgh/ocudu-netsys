@@ -80,6 +80,9 @@ void pdxch_processor_impl::on_modulation_completion(baseband_gateway_buffer_ptr 
 bool pdxch_processor_impl::set_carrier_center_frequency(double carrier_center_frequency_Hz)
 {
   common_ofdm_modulator->set_center_frequency(carrier_center_frequency_Hz);
+  for (auto& modulator : modulators) {
+    modulator->set_center_frequency(carrier_center_frequency_Hz);
+  }
   return true;
 }
 

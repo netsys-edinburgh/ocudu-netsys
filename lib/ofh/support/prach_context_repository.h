@@ -21,6 +21,7 @@
 #include <mutex>
 #include <numeric>
 #include <optional>
+#include <utility>
 
 namespace ocudu {
 namespace ofh {
@@ -123,6 +124,12 @@ public:
   /// Gets the maximum number of ports supported in PRACH buffer.
   unsigned get_max_nof_ports() const { return empty() ? 0U : context_info.buffer->get_max_nof_ports(); }
 
+  /// Returns true if the context buffer accepts device-resident writes.
+  bool supports_device_prach_buffer_mapping() const
+  {
+    return context_info.buffer && context_info.buffer->supports_device_prach_buffer_mapping();
+  }
+
   /// Returns a span of bitmaps that indicate the REs that have been written for the given symbol. Each element of the
   /// span corresponds to a port.
   span<const bounded_bitset<prach_constants::LONG_SEQUENCE_LENGTH>> get_symbol_re_written(unsigned symbol) const
@@ -162,6 +169,36 @@ public:
 
     // Update statistics.
     buffer_stats[symbol].re_written[port].fill(re_start, re_start + iq_buffer.size());
+  }
+
+  /// Writes the given IQ range through a device-capable PRACH buffer writer.
+  template <typename WriteFunc>
+  bool write_iq_device(unsigned port, unsigned symbol, unsigned re_start, unsigned nof_re, WriteFunc&& write_func)
+  {
+    if (is_long_preamble(context_info.context.format)) {
+      if (symbol >= start_symbol) {
+        symbol -= start_symbol;
+      }
+    } else {
+      symbol -= start_symbol;
+    }
+
+    ocudu_assert(context_info.buffer, "No valid PRACH buffer in the context");
+    ocudu_assert(symbol < nof_symbols, "Invalid symbol index");
+
+    if ((port >= context_info.buffer->get_max_nof_ports()) ||
+        !context_info.buffer->supports_device_prach_buffer_mapping()) {
+      return false;
+    }
+
+    unsigned td_occasion = context_info.context.nof_td_occasions - 1;
+    unsigned fd_occasion = context_info.context.nof_fd_occasions - 1;
+    if (!write_func(*context_info.buffer, port, td_occasion, fd_occasion, symbol)) {
+      return false;
+    }
+
+    buffer_stats[symbol].re_written[port].fill(re_start, re_start + nof_re);
+    return true;
   }
 
   /// Tries to get a complete PRACH buffer. A PRACH buffer is considered completed when all the PRBs for all the ports
@@ -255,6 +292,19 @@ public:
   {
     std::lock_guard<std::mutex> lock(mutex);
     entry(slot).write_iq(port, symbol, re_start, iq_buffer);
+  }
+
+  /// Function to write the uplink PRACH buffer using a device-capable writer callback.
+  template <typename WriteFunc>
+  bool write_iq_device(slot_point  slot,
+                       unsigned    port,
+                       unsigned    symbol,
+                       unsigned    re_start,
+                       unsigned    nof_re,
+                       WriteFunc&& write_func)
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    return entry(slot).write_iq_device(port, symbol, re_start, nof_re, std::forward<WriteFunc>(write_func));
   }
 
   /// Returns the entry of the repository for the given slot.

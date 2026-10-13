@@ -212,6 +212,13 @@ bool receiver_impl::receive_frame()
                    nof_consecutive_buffer_exhaustions);
     nof_consecutive_buffer_exhaustions = 0;
   }
+  if (nof_consecutive_buffer_exhaustions != 0) {
+    logger.warning("Ethernet packet reception on the port bound to fd = '{}' recovered after '{}' failed buffer "
+                   "reservation attempts",
+                   socket_fd,
+                   nof_consecutive_buffer_exhaustions);
+    nof_consecutive_buffer_exhaustions = 0;
+  }
   ethernet_rx_buffer_impl buffer    = std::move(*exp_buffer);
   span<uint8_t>           data_span = buffer.storage();
 

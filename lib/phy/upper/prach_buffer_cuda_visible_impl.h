@@ -1,0 +1,519 @@
+// SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
+// SPDX-FileCopyrightText: Copyright (C) 2026 OCUDU contributors
+// SPDX-License-Identifier: BSD-3-Clause-Open-MPI
+// Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
+
+/// \file
+/// \brief PRACH buffer with CUDA-visible managed backing memory.
+
+#pragma once
+
+#include "phy_acceleration_runtime_options.h"
+#include "ocudu/adt/tensor.h"
+#include "ocudu/phy/support/prach_buffer.h"
+#include "ocudu/support/error_handling.h"
+#include "fmt/format.h"
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
+#include <cstring>
+#include <cuda_runtime.h>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <numeric>
+#include <sched.h>
+#include <type_traits>
+#include <vector>
+
+namespace ocudu {
+
+namespace detail {
+
+template <unsigned NDIMS, typename Type, typename IndexType = unsigned>
+class prach_external_tensor : public tensor<NDIMS, Type, IndexType>
+{
+public:
+  using dimensions_size_type = typename tensor<NDIMS, Type, IndexType>::dimensions_size_type;
+
+  prach_external_tensor(Type* data_, const dimensions_size_type& dimensions_) : data(data_) { resize(dimensions_); }
+
+  void resize(const dimensions_size_type& dimensions_) override { dimensions = dimensions_; }
+
+  const dimensions_size_type& get_dimensions_size() const override { return dimensions; }
+
+protected:
+  span<Type> get_data() override { return span<Type>(data, size()); }
+
+  span<const Type> get_data() const override { return span<const Type>(data, size()); }
+
+private:
+  unsigned size() const { return std::accumulate(dimensions.begin(), dimensions.end(), 1U, std::multiplies<>()); }
+
+  Type*                data = nullptr;
+  dimensions_size_type dimensions;
+};
+
+} // namespace detail
+
+/// PRACH buffer whose host API and device API share a CUDA managed allocation.
+class cuda_visible_prach_buffer : public prach_buffer
+{
+public:
+  cuda_visible_prach_buffer(unsigned max_nof_ports_,
+                            unsigned max_nof_td_occasions_,
+                            unsigned max_nof_fd_occasions_,
+                            unsigned max_nof_symbols_,
+                            unsigned sequence_length_,
+                            int      nvcuda_device_id = 0) :
+    max_nof_ports(max_nof_ports_),
+    max_nof_td_occasions(max_nof_td_occasions_),
+    max_nof_fd_occasions(max_nof_fd_occasions_),
+    max_nof_symbols(max_nof_symbols_),
+    sequence_length(sequence_length_)
+  {
+    // Bind to the configured device so backing allocations and events land on the right GPU.
+    device_id = nvcuda_device_id;
+    (void)cudaSetDevice(device_id);
+
+    // On coherent unified-memory platforms (device shares the host page tables, e.g. GB10/Grace)
+    // managed prefetch performs no page migration and only adds a per-occasion stream
+    // synchronization, which measurably stalls the multi-sector DL pipeline. Keep it for devices
+    // that actually migrate pages; the env flag still forces either behavior.
+    int uses_host_page_tables = 0;
+    if (cudaDeviceGetAttribute(&uses_host_page_tables, cudaDevAttrPageableMemoryAccessUsesHostPageTables, device_id) ==
+        cudaSuccess) {
+      prefetch_enabled =
+          phy_acceleration_env_flag_enabled("OCUDU_CUDA_VISIBLE_PRACH_BUFFER_PREFETCH", uses_host_page_tables == 0);
+    }
+
+    static constexpr unsigned initial_ready_events = 16;
+    buffer_ready_events.reserve(initial_ready_events);
+    pending_buffer_ready_events.reserve(initial_ready_events);
+    for (unsigned i_event = 0; i_event != initial_ready_events; ++i_event) {
+      cudaEvent_t event = nullptr;
+      if (cudaEventCreateWithFlags(&event, cudaEventDisableTiming) != cudaSuccess) {
+        break;
+      }
+      if (buffer_ready_event == nullptr) {
+        buffer_ready_event = event;
+      }
+      buffer_ready_events.push_back(event);
+    }
+
+    managed_bytes = static_cast<size_t>(max_nof_ports) * max_nof_td_occasions * max_nof_fd_occasions * max_nof_symbols *
+                    sequence_length * sizeof(cbf16_t);
+    if ((buffer_ready_event == nullptr) || (managed_bytes == 0) ||
+        (cudaMallocManaged(&managed_data, managed_bytes) != cudaSuccess)) {
+      managed_data = nullptr;
+      return;
+    }
+
+    advise_managed_memory();
+    data = std::make_unique<managed_tensor>(
+        static_cast<cbf16_t*>(managed_data),
+        managed_tensor::dimensions_size_type{
+            sequence_length, max_nof_symbols, max_nof_fd_occasions, max_nof_td_occasions, max_nof_ports});
+  }
+
+  ~cuda_visible_prach_buffer() override
+  {
+    for (void* event : buffer_ready_events) {
+      cudaEventDestroy(static_cast<cudaEvent_t>(event));
+    }
+    buffer_ready_events.clear();
+    pending_buffer_ready_events.clear();
+    buffer_ready_event = nullptr;
+    if (managed_data != nullptr) {
+      cudaFree(managed_data);
+      managed_data = nullptr;
+    }
+  }
+
+  bool is_valid() const { return managed_data != nullptr; }
+
+  unsigned get_max_nof_ports() const override { return max_nof_ports; }
+
+  unsigned get_max_nof_td_occasions() const override { return max_nof_td_occasions; }
+
+  unsigned get_max_nof_fd_occasions() const override { return max_nof_fd_occasions; }
+
+  unsigned get_max_nof_symbols() const override { return max_nof_symbols; }
+
+  unsigned get_sequence_length() const override { return sequence_length; }
+
+  /// \remark When the buffer cannot be synchronized for host access, the write goes to a scratch symbol and is lost.
+  span<cbf16_t> get_symbol(unsigned i_port, unsigned i_td_occasion, unsigned i_fd_occasion, unsigned i_symbol) override
+  {
+    if (!prepare_host_access()) {
+      note_host_access_failure("write");
+      static thread_local std::vector<cbf16_t> discarded_symbol;
+      discarded_symbol.assign(sequence_length, cbf16_t{});
+      return discarded_symbol;
+    }
+    return data->get_view({i_symbol, i_fd_occasion, i_td_occasion, i_port});
+  }
+
+  /// \remark When the buffer cannot be synchronized for host access, the symbol reads as zeros, so the detector does
+  /// not process samples of an earlier window.
+  span<const cbf16_t>
+  get_symbol(unsigned i_port, unsigned i_td_occasion, unsigned i_fd_occasion, unsigned i_symbol) const override
+  {
+    if (!prepare_host_access()) {
+      note_host_access_failure("read");
+      return zero_symbol;
+    }
+    return data->get_view({i_symbol, i_fd_occasion, i_td_occasion, i_port});
+  }
+
+  /// \remark When the buffer cannot be synchronized for host access, the buffer reads as zeros, so the detector does
+  /// not process samples of an earlier window.
+  span<const cbf16_t> get_buffer() const override
+  {
+    unsigned nof_samples =
+        sequence_length * max_nof_symbols * max_nof_fd_occasions * max_nof_td_occasions * max_nof_ports;
+    if (!prepare_host_access()) {
+      note_host_access_failure("read");
+      static thread_local std::vector<cbf16_t> zero_buffer;
+      zero_buffer.assign(nof_samples, cbf16_t{});
+      return zero_buffer;
+    }
+    return {static_cast<const cbf16_t*>(managed_data), nof_samples};
+  }
+
+  // See interface for documentation. The layout matches the device buffer.
+  unsigned
+  get_symbol_offset(unsigned i_port, unsigned i_td_occasion, unsigned i_fd_occasion, unsigned i_symbol) const override
+  {
+    return get_device_prach_symbol_offset(i_port, i_td_occasion, i_fd_occasion, i_symbol);
+  }
+
+  /// Gets the number of symbol accesses that could not synchronize the buffer for host access.
+  unsigned get_nof_host_access_failures() const { return host_access_failures.load(std::memory_order_relaxed); }
+
+  bool supports_device_prach_buffer_reading() const override { return managed_data != nullptr; }
+
+  bool supports_device_prach_buffer_mapping() const override { return managed_data != nullptr; }
+
+  const void* get_device_prach_buffer_cbf16() const override { return managed_data; }
+
+  void* get_device_prach_buffer_cbf16() override { return managed_data; }
+
+  unsigned get_device_prach_symbol_offset(unsigned i_port,
+                                          unsigned i_td_occasion,
+                                          unsigned i_fd_occasion,
+                                          unsigned i_symbol) const override
+  {
+    ocudu_assert(i_port < max_nof_ports,
+                 "The port index (i.e., {}) exceeds the maximum number of ports (i.e., {}).",
+                 i_port,
+                 max_nof_ports);
+    ocudu_assert(i_td_occasion < max_nof_td_occasions,
+                 "The time-domain occasion (i.e., {}) exceeds the maximum number of time-domain occasions (i.e., {}).",
+                 i_td_occasion,
+                 max_nof_td_occasions);
+    ocudu_assert(
+        i_fd_occasion < max_nof_fd_occasions,
+        "The frequency-domain occasion (i.e., {}) exceeds the maximum number of frequency-domain occasions (i.e., {}).",
+        i_fd_occasion,
+        max_nof_fd_occasions);
+    ocudu_assert(i_symbol < max_nof_symbols,
+                 "The symbol index (i.e., {}) exceeds the maximum number of symbols (i.e., {}).",
+                 i_symbol,
+                 max_nof_symbols);
+
+    return sequence_length *
+           (i_symbol +
+            max_nof_symbols * (i_fd_occasion + max_nof_fd_occasions * (i_td_occasion + max_nof_td_occasions * i_port)));
+  }
+
+  bool prepare_device_prach_buffer_reading(void* stream) const override { return prepare_device_access(stream); }
+
+  bool prepare_device_prach_buffer_mapping(void* stream) override { return prepare_device_mapping(stream); }
+
+  bool on_device_prach_buffer_mapping_enqueued(void* stream) override { return record_device_mapping(stream); }
+
+  bool cancel_device_prach_buffer_mapping() override { return cancel_device_mapping(); }
+
+  bool synchronize_device_prach_buffer_mapping() const override { return prepare_host_access(); }
+
+private:
+  enum class dims : unsigned {
+    re          = 0,
+    symbol      = 1,
+    fd_occasion = 2,
+    td_occasion = 3,
+    port        = 4,
+    count       = 5,
+  };
+
+  using managed_tensor =
+      detail::prach_external_tensor<static_cast<std::underlying_type_t<dims>>(dims::count), cbf16_t, dims>;
+
+  bool record_device_mapping(void* stream)
+  {
+    std::lock_guard<std::mutex> lock(buffer_ready_mutex);
+    void*                       event = get_next_buffer_ready_event();
+    if (event == nullptr) {
+      device_mapping_active = false;
+      buffer_ready_recorded = false;
+      return false;
+    }
+    if (cudaEventRecord(static_cast<cudaEvent_t>(event), static_cast<cudaStream_t>(stream)) != cudaSuccess) {
+      device_mapping_active = false;
+      buffer_ready_recorded = false;
+      return false;
+    }
+    pending_buffer_ready_events.push_back(event);
+    buffer_ready_event    = event;
+    buffer_ready_recorded = !pending_buffer_ready_events.empty();
+    device_mapping_active = false;
+    return true;
+  }
+
+  bool prepare_device_mapping(void* stream)
+  {
+    std::unique_lock<std::mutex> lock(buffer_ready_mutex);
+    if (managed_data == nullptr) {
+      return false;
+    }
+    if (!wait_for_active_device_mapping_locked(lock) || !wait_for_device_mapping_locked(stream)) {
+      return false;
+    }
+    if (!prefetch_managed_memory(device_location(), stream)) {
+      return false;
+    }
+    device_mapping_active = true;
+    return true;
+  }
+
+  bool cancel_device_mapping()
+  {
+    std::lock_guard<std::mutex> lock(buffer_ready_mutex);
+    device_mapping_active = false;
+    return true;
+  }
+
+  bool prepare_device_access(void* stream) const
+  {
+    std::unique_lock<std::mutex> lock(buffer_ready_mutex);
+    if (managed_data == nullptr) {
+      return false;
+    }
+    if (!wait_for_active_device_mapping_locked(lock) || !wait_for_device_mapping_locked(stream)) {
+      return false;
+    }
+    if (!prefetch_managed_memory(device_location(), stream)) {
+      return false;
+    }
+
+    // Collapse the producer fences into a single consumer-completion fence.
+    //
+    // The waits above ordered *this* stream behind every producer, so carrying the
+    // whole list forward is wasteful: each later detection would wait on the entire
+    // history, and device-only pipelines would grow one CUDA event per received
+    // section. Releasing them back to the bounded pool is the right idea.
+    //
+    // Dropping the record entirely is not. pending_buffer_ready_events is the only
+    // evidence that this buffer still has work outstanding, and a stream wait orders
+    // one stream -- not the host, and not a second consumer. With the list empty,
+    // prepare_host_access() takes its early-out and skips both the wait and, more
+    // importantly, prefetch_managed_memory(host_location()): the call that migrates
+    // the pages back before the CPU reads them.
+    //
+    // That asymmetry is platform-visible. Where the host can read device-resident
+    // managed pages directly (cudaDevAttrDirectManagedMemAccessFromHost, true on
+    // GH200) the missing prefetch is invisible. On a part that reports 0 for it --
+    // GB10 does -- the pages were just pushed device-resident by the prefetch above,
+    // and the host then reads them with no migration and no ordering.
+    //
+    // So keep exactly one fence: recorded on the consumer stream, it still says
+    // "outstanding" to everyone else, and the pool stays bounded at one event.
+    pending_buffer_ready_events.clear();
+    buffer_ready_recorded = false;
+    if (!buffer_ready_events.empty()) {
+      auto consumer_done = static_cast<cudaEvent_t>(buffer_ready_events[0]);
+      if (cudaEventRecord(consumer_done, static_cast<cudaStream_t>(stream)) == cudaSuccess) {
+        pending_buffer_ready_events.push_back(consumer_done);
+        buffer_ready_recorded = true;
+      }
+    }
+    return true;
+  }
+
+  bool prepare_host_access() const
+  {
+    std::unique_lock<std::mutex> lock(buffer_ready_mutex);
+    if (!wait_for_active_device_mapping_locked(lock)) {
+      return false;
+    }
+    if (!buffer_ready_recorded || pending_buffer_ready_events.empty()) {
+      return true;
+    }
+    for (void* event : pending_buffer_ready_events) {
+      if (cuda_event_synchronize_yielding(static_cast<cudaEvent_t>(event)) != cudaSuccess) {
+        return false;
+      }
+    }
+    if (!prefetch_managed_memory(host_location(), nullptr)) {
+      return false;
+    }
+    pending_buffer_ready_events.clear();
+    buffer_ready_recorded = false;
+    return true;
+  }
+
+  bool wait_for_device_mapping_locked(void* stream) const
+  {
+    if (!buffer_ready_recorded || pending_buffer_ready_events.empty()) {
+      return managed_data != nullptr;
+    }
+    for (void* event : pending_buffer_ready_events) {
+      if (cudaStreamWaitEvent(static_cast<cudaStream_t>(stream), static_cast<cudaEvent_t>(event), 0) != cudaSuccess) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /// \brief Waits for an active device mapping to finish, for at most the GPU wait timeout.
+  /// \return True if no device mapping is active anymore, false if the wait timed out.
+  bool wait_for_active_device_mapping_locked(std::unique_lock<std::mutex>& lock) const
+  {
+    const auto deadline = std::chrono::steady_clock::now() + phy_acceleration_gpu_wait_timeout();
+    while (device_mapping_active) {
+      if (std::chrono::steady_clock::now() >= deadline) {
+        return false;
+      }
+      lock.unlock();
+      sched_yield();
+      lock.lock();
+    }
+    return true;
+  }
+
+  /// \brief Accounts for a symbol access that could not synchronize the buffer for host access.
+  ///
+  /// The warning is printed on the first failure and whenever the count doubles, so a persistent fault stays visible
+  /// without flooding the log.
+  void note_host_access_failure(const char* what) const
+  {
+    const unsigned count = host_access_failures.fetch_add(1, std::memory_order_relaxed) + 1;
+    if ((count & (count - 1)) != 0) {
+      return;
+    }
+    fmt::print(stderr,
+               "OCUDU WARNING: Failed to synchronize the CUDA-visible PRACH buffer for a host {} ({} failures so far): "
+               "a device mapping did not finish within the GPU wait timeout, or a CUDA operation failed. The symbol "
+               "is {}.\n",
+               what,
+               count,
+               (std::strcmp(what, "read") == 0) ? "read as zeros" : "discarded");
+  }
+
+  void* get_next_buffer_ready_event()
+  {
+    if (pending_buffer_ready_events.size() < buffer_ready_events.size()) {
+      return buffer_ready_events[pending_buffer_ready_events.size()];
+    }
+
+    cudaEvent_t event = nullptr;
+    if (cudaEventCreateWithFlags(&event, cudaEventDisableTiming) != cudaSuccess) {
+      return nullptr;
+    }
+    buffer_ready_events.push_back(event);
+    return event;
+  }
+
+  /// Waits for \c event while yielding, for at most the GPU wait timeout; returns cudaErrorTimeout if it expires.
+  static cudaError_t cuda_event_synchronize_yielding(cudaEvent_t event)
+  {
+    const auto  deadline = std::chrono::steady_clock::now() + phy_acceleration_gpu_wait_timeout();
+    cudaError_t status;
+    while ((status = cudaEventQuery(event)) == cudaErrorNotReady) {
+      if (std::chrono::steady_clock::now() >= deadline) {
+        return cudaErrorTimeout;
+      }
+      sched_yield();
+    }
+    return status;
+  }
+
+  void advise_managed_memory() const
+  {
+    if (managed_data == nullptr) {
+      return;
+    }
+    (void)cudaMemAdvise(managed_data, managed_bytes, cudaMemAdviseSetAccessedBy, device_location());
+    if (phy_acceleration_env_flag_enabled("OCUDU_CUDA_VISIBLE_PRACH_BUFFER_PREFER_DEVICE", false)) {
+      (void)cudaMemAdvise(managed_data, managed_bytes, cudaMemAdviseSetPreferredLocation, device_location());
+    }
+  }
+
+#if CUDART_VERSION >= 13000
+  cudaMemLocation device_location() const { return cudaMemLocation{cudaMemLocationTypeDevice, device_id}; }
+
+  static cudaMemLocation host_location() { return cudaMemLocation{cudaMemLocationTypeHost, 0}; }
+
+  static bool is_host_location(cudaMemLocation destination)
+  {
+    return (destination.type == cudaMemLocationTypeHost) || (destination.type == cudaMemLocationTypeHostNuma) ||
+           (destination.type == cudaMemLocationTypeHostNumaCurrent);
+  }
+#else
+  int device_location() const { return device_id; }
+
+  static int host_location() { return cudaCpuDeviceId; }
+
+  static bool is_host_location(int destination) { return destination == cudaCpuDeviceId; }
+#endif
+
+  bool prefetch_managed_memory(decltype(host_location()) destination, void* stream) const
+  {
+    if (!prefetch_enabled || (managed_data == nullptr)) {
+      return true;
+    }
+#if CUDART_VERSION >= 13000
+    cudaError_t status =
+        cudaMemPrefetchAsync(managed_data, managed_bytes, destination, 0, static_cast<cudaStream_t>(stream));
+#else
+    cudaError_t status =
+        cudaMemPrefetchAsync(managed_data, managed_bytes, destination, static_cast<cudaStream_t>(stream));
+#endif
+    if (status == cudaErrorNotSupported) {
+      return true;
+    }
+    if (status != cudaSuccess) {
+      return false;
+    }
+    if (is_host_location(destination)) {
+      return cudaStreamSynchronize(static_cast<cudaStream_t>(stream)) == cudaSuccess;
+    }
+    return true;
+  }
+
+  void*                      managed_data       = nullptr;
+  size_t                     managed_bytes      = 0;
+  void*                      buffer_ready_event = nullptr;
+  std::vector<void*>         buffer_ready_events;
+  mutable std::vector<void*> pending_buffer_ready_events;
+  mutable std::mutex         buffer_ready_mutex;
+  mutable bool               buffer_ready_recorded = false;
+  mutable bool               device_mapping_active = false;
+  // PRACH is timing-critical and the GPU-resident path should not pay managed-memory page migration on first access.
+  bool     prefetch_enabled     = phy_acceleration_env_flag_enabled("OCUDU_CUDA_VISIBLE_PRACH_BUFFER_PREFETCH", true);
+  int      device_id            = 0;
+  unsigned max_nof_ports        = 0;
+  unsigned max_nof_td_occasions = 0;
+  unsigned max_nof_fd_occasions = 0;
+  unsigned max_nof_symbols      = 0;
+  unsigned sequence_length      = 0;
+  /// Symbol returned to readers when the buffer cannot be synchronized for host access. Declared after
+  /// sequence_length, which sizes it.
+  std::vector<cbf16_t> zero_symbol = std::vector<cbf16_t>(sequence_length);
+  /// Number of symbol accesses that could not synchronize the buffer for host access.
+  mutable std::atomic<unsigned>   host_access_failures{0};
+  std::unique_ptr<managed_tensor> data;
+};
+
+} // namespace ocudu

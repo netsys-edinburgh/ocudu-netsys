@@ -615,6 +615,274 @@ TEST_P(LowerPhyUplinkProcessorFixture, OutOfOrderDemodulation)
   ASSERT_TRUE(buffer_pool.get());
 }
 
+// A grid with a device destination, such as a CUDA-visible grid, is demodulated with one call per OFDM symbol that
+// offers all the ports to the demodulator, so that an accelerated demodulator processes them together. When the
+// demodulator declines the call, it demodulates each port.
+TEST_P(LowerPhyUplinkProcessorFixture, DeviceGridOffersAllPortsOfASymbolTogether)
+{
+  unsigned           nof_rx_ports = std::get<0>(GetParam());
+  sampling_rate      srate        = std::get<1>(GetParam());
+  subcarrier_spacing scs          = std::get<2>(GetParam());
+  cyclic_prefix      cp           = std::get<3>(GetParam());
+
+  unsigned base_symbol_size     = srate.get_dft_size(scs);
+  unsigned nof_symbols_per_slot = get_nsymb_per_slot(cp);
+
+  baseband_gateway_buffer_pool buffer_pool(1, nof_rx_ports, 2 * base_symbol_size);
+  baseband_gateway_buffer_ptr  buffer = buffer_pool.get();
+  ASSERT_TRUE(buffer);
+
+  // The processor is created after the notifier, so that it is destroyed first even if an assertion fails.
+  puxch_processor_notifier_spy     notifier_spy;
+  manual_task_worker               executor(MAX_NSYMB_PER_SLOT * MAX_PORTS);
+  std::unique_ptr<puxch_processor> processor = puxch_proc_factory->create(config, executor);
+  ASSERT_NE(processor, nullptr);
+  ofdm_symbol_demodulator_spy& demod_spy = *ofdm_demod_factory_spy->get_demodulators().back();
+  processor->connect(notifier_spy);
+  rg_writer_spy.set_supports_device_grid_mapping(true);
+
+  slot_point slot(to_numerology_value(scs), 0);
+  for (bool accept_ports : {true, false}) {
+    SCOPED_TRACE(accept_ports ? "demodulator accepts the ports" : "demodulator declines the ports");
+    demod_spy.set_accept_ports(accept_ports);
+
+    resource_grid_context rg_context = {.slot = slot, .sector = dist_sector_id(rgen)};
+    processor->get_request_handler().handle_request(shared_rg_spy.get_grid(), rg_context);
+
+    for (unsigned i_symbol = 0; i_symbol != nof_symbols_per_slot; ++i_symbol) {
+      unsigned i_symbol_sf = i_symbol + slot.subframe_slot_index() * nof_symbols_per_slot;
+      buffer->resize(cp.get_length(i_symbol_sf, scs).to_samples(srate.to_Hz()) + base_symbol_size);
+      for (unsigned i_port = 0; i_port != nof_rx_ports; ++i_port) {
+        span<ci16_t> port_buffer = (*buffer)[i_port];
+        std::generate(port_buffer.begin(), port_buffer.end(), []() {
+          return to_ci16(cf_t(dist_sample(rgen) * INT16_MAX, dist_sample(rgen) * INT16_MAX));
+        });
+      }
+      demod_spy.clear_demodulate_entries();
+      notifier_spy.clear_notifications();
+
+      lower_phy_rx_symbol_context context = {
+          .slot = slot, .sector = rg_context.sector, .nof_symbols = i_symbol, .is_valid = true};
+      processor->get_baseband().process_symbol(
+          baseband_gateway_buffer_ptr_view(buffer.clone(), 0, buffer->get_nof_samples()), context);
+
+      // A single port keeps the per-port demodulation; several ports make one task.
+      unsigned nof_tasks = 0;
+      for (; executor.try_run_next(); ++nof_tasks) {
+      }
+      bool all_ports_together = (nof_rx_ports > 1);
+      ASSERT_EQ(nof_tasks, all_ports_together ? 1 : nof_rx_ports);
+
+      const auto& ports_entries = demod_spy.get_demodulate_ports_entries();
+      ASSERT_EQ(ports_entries.size(), all_ports_together ? 1 : 0);
+      if (all_ports_together) {
+        const auto& entry = ports_entries.front();
+        ASSERT_EQ(static_cast<const void*>(entry.grid), static_cast<const void*>(&rg_writer_spy));
+        ASSERT_EQ(entry.symbol_index, i_symbol_sf);
+        ASSERT_EQ(entry.input_scale, ocuduvec::scaling_factor_ci16_to_cf);
+        ASSERT_EQ(entry.port_indices.size(), nof_rx_ports);
+        ASSERT_EQ(entry.inputs.size(), nof_rx_ports);
+        for (unsigned i_port = 0; i_port != nof_rx_ports; ++i_port) {
+          ASSERT_EQ(entry.port_indices[i_port], i_port);
+          error_type<std::string> compare_result =
+              compare_sequences(span<const ci16_t>(entry.inputs[i_port]), span<const ci16_t>((*buffer)[i_port]));
+          ASSERT_TRUE(compare_result.has_value()) << compare_result.error();
+        }
+      }
+
+      // Without the multi-port call, each port is demodulated on its own.
+      const auto& port_entries   = demod_spy.get_demodulate_entries();
+      unsigned    nof_port_calls = (all_ports_together && accept_ports) ? 0 : nof_rx_ports;
+      ASSERT_EQ(port_entries.size(), nof_port_calls);
+      for (unsigned i_port = 0; i_port != nof_port_calls; ++i_port) {
+        ASSERT_EQ(port_entries[i_port].port_index, i_port);
+        ASSERT_EQ(port_entries[i_port].symbol_index, i_symbol_sf);
+      }
+
+      // The symbol is notified once, as valid.
+      ASSERT_EQ(notifier_spy.get_rx_symbol().size(), 1);
+      ASSERT_TRUE(notifier_spy.get_rx_symbol().front().context.is_valid);
+    }
+    ++slot;
+  }
+}
+
+// A grid with a device destination is demodulated in batches of consecutive OFDM symbols of the size the demodulator
+// supports, the last one cut at the end of the slot. A batch the demodulator declines is demodulated symbol by symbol.
+TEST_P(LowerPhyUplinkProcessorFixture, DeviceGridDemodulatesSymbolBatches)
+{
+  static constexpr unsigned max_batch_size = 4;
+
+  unsigned           nof_rx_ports = std::get<0>(GetParam());
+  sampling_rate      srate        = std::get<1>(GetParam());
+  subcarrier_spacing scs          = std::get<2>(GetParam());
+  cyclic_prefix      cp           = std::get<3>(GetParam());
+
+  unsigned base_symbol_size     = srate.get_dft_size(scs);
+  unsigned nof_symbols_per_slot = get_nsymb_per_slot(cp);
+
+  // The processor is created after the notifier, so that it is destroyed first even if an assertion fails.
+  puxch_processor_notifier_spy     notifier_spy;
+  manual_task_worker               executor(MAX_NSYMB_PER_SLOT * MAX_PORTS);
+  std::unique_ptr<puxch_processor> processor = puxch_proc_factory->create(config, executor);
+  ASSERT_NE(processor, nullptr);
+  ofdm_symbol_demodulator_spy& demod_spy = *ofdm_demod_factory_spy->get_demodulators().back();
+  processor->connect(notifier_spy);
+  rg_writer_spy.set_supports_device_grid_mapping(true);
+  demod_spy.set_max_symbol_batch_size(max_batch_size);
+  demod_spy.set_accept_ports(true);
+
+  baseband_gateway_buffer_pool buffer_pool(nof_symbols_per_slot, nof_rx_ports, 2 * base_symbol_size);
+
+  slot_point slot(to_numerology_value(scs), 0);
+  for (bool accept_batches : {true, false}) {
+    SCOPED_TRACE(accept_batches ? "demodulator accepts the batches" : "demodulator declines the batches");
+    demod_spy.set_accept_batches(accept_batches);
+    demod_spy.clear_demodulate_entries();
+    notifier_spy.clear_notifications();
+
+    resource_grid_context rg_context = {.slot = slot, .sector = dist_sector_id(rgen)};
+    processor->get_request_handler().handle_request(shared_rg_spy.get_grid(), rg_context);
+
+    unsigned                                      first_symbol_sf = slot.subframe_slot_index() * nof_symbols_per_slot;
+    std::vector<std::vector<std::vector<ci16_t>>> sent(nof_symbols_per_slot);
+    unsigned                                      nof_tasks = 0;
+    for (unsigned i_symbol = 0; i_symbol != nof_symbols_per_slot; ++i_symbol) {
+      unsigned symbol_size =
+          cp.get_length(first_symbol_sf + i_symbol, scs).to_samples(srate.to_Hz()) + base_symbol_size;
+      baseband_gateway_buffer_ptr buffer = buffer_pool.get();
+      ASSERT_TRUE(buffer);
+      buffer->resize(symbol_size);
+      for (unsigned i_port = 0; i_port != nof_rx_ports; ++i_port) {
+        span<ci16_t> port_buffer = (*buffer)[i_port];
+        std::generate(port_buffer.begin(), port_buffer.end(), []() {
+          return to_ci16(cf_t(dist_sample(rgen) * INT16_MAX, dist_sample(rgen) * INT16_MAX));
+        });
+        sent[i_symbol].emplace_back(port_buffer.begin(), port_buffer.end());
+      }
+
+      lower_phy_rx_symbol_context context = {
+          .slot = slot, .sector = rg_context.sector, .nof_symbols = i_symbol, .is_valid = true};
+      processor->get_baseband().process_symbol(baseband_gateway_buffer_ptr_view(std::move(buffer), 0, symbol_size),
+                                               context);
+
+      // The symbols of a batch are demodulated, and notified, once the batch is complete.
+      bool batch_complete = ((i_symbol + 1) % max_batch_size == 0) || (i_symbol == nof_symbols_per_slot - 1);
+      for (; executor.try_run_next(); ++nof_tasks) {
+      }
+      ASSERT_EQ(notifier_spy.get_rx_symbol().size(),
+                batch_complete ? i_symbol + 1 : (i_symbol / max_batch_size) * max_batch_size);
+    }
+    unsigned nof_batches = divide_ceil(nof_symbols_per_slot, max_batch_size);
+    ASSERT_EQ(nof_tasks, nof_batches);
+
+    // Each batch is offered with all its symbols and ports.
+    const auto& batch_entries = demod_spy.get_demodulate_batch_entries();
+    ASSERT_EQ(batch_entries.size(), nof_batches);
+    for (unsigned i_batch = 0; i_batch != nof_batches; ++i_batch) {
+      const auto& entry        = batch_entries[i_batch];
+      unsigned    first_symbol = i_batch * max_batch_size;
+      ASSERT_EQ(static_cast<const void*>(entry.grid), static_cast<const void*>(&rg_writer_spy));
+      ASSERT_EQ(entry.first_symbol_index, first_symbol_sf + first_symbol);
+      ASSERT_EQ(entry.nof_symbols, std::min(max_batch_size, nof_symbols_per_slot - first_symbol));
+      ASSERT_EQ(entry.port_indices.size(), nof_rx_ports);
+      for (unsigned i_symbol = 0; i_symbol != entry.nof_symbols; ++i_symbol) {
+        for (unsigned i_port = 0; i_port != nof_rx_ports; ++i_port) {
+          ASSERT_EQ(entry.inputs[i_symbol * nof_rx_ports + i_port], sent[first_symbol + i_symbol][i_port]);
+        }
+      }
+    }
+
+    // A declined batch is offered symbol by symbol with all the ports, or port by port for a single port.
+    unsigned nof_symbol_fallbacks = accept_batches ? 0 : nof_symbols_per_slot;
+    if (nof_rx_ports > 1) {
+      ASSERT_EQ(demod_spy.get_demodulate_ports_entries().size(), nof_symbol_fallbacks);
+      ASSERT_EQ(demod_spy.get_demodulate_entries().size(), 0);
+    } else {
+      ASSERT_EQ(demod_spy.get_demodulate_ports_entries().size(), 0);
+      ASSERT_EQ(demod_spy.get_demodulate_entries().size(), nof_symbol_fallbacks);
+    }
+
+    // All the symbols are notified once, in order, as valid.
+    const auto& rx_symbols = notifier_spy.get_rx_symbol();
+    ASSERT_EQ(rx_symbols.size(), nof_symbols_per_slot);
+    for (unsigned i_symbol = 0; i_symbol != nof_symbols_per_slot; ++i_symbol) {
+      ASSERT_EQ(rx_symbols[i_symbol].context.nof_symbols, i_symbol);
+      ASSERT_TRUE(rx_symbols[i_symbol].context.is_valid);
+    }
+    ++slot;
+  }
+}
+
+// A batch holds consecutive OFDM symbols: a missing symbol ends it. The OFDM symbols waiting for their batch are
+// demodulated when the slot closes.
+TEST_P(LowerPhyUplinkProcessorFixture, DeviceGridBatchesStopAtMissingSymbols)
+{
+  unsigned           nof_rx_ports = std::get<0>(GetParam());
+  sampling_rate      srate        = std::get<1>(GetParam());
+  subcarrier_spacing scs          = std::get<2>(GetParam());
+  cyclic_prefix      cp           = std::get<3>(GetParam());
+
+  unsigned base_symbol_size     = srate.get_dft_size(scs);
+  unsigned nof_symbols_per_slot = get_nsymb_per_slot(cp);
+
+  puxch_processor_notifier_spy     notifier_spy;
+  manual_task_worker               executor(MAX_NSYMB_PER_SLOT * MAX_PORTS);
+  std::unique_ptr<puxch_processor> processor = puxch_proc_factory->create(config, executor);
+  ASSERT_NE(processor, nullptr);
+  ofdm_symbol_demodulator_spy& demod_spy = *ofdm_demod_factory_spy->get_demodulators().back();
+  processor->connect(notifier_spy);
+  rg_writer_spy.set_supports_device_grid_mapping(true);
+  demod_spy.set_max_symbol_batch_size(MAX_NSYMB_PER_SLOT);
+  demod_spy.set_accept_batches(true);
+
+  baseband_gateway_buffer_pool buffer_pool(nof_symbols_per_slot, nof_rx_ports, 2 * base_symbol_size);
+  slot_point                   slot(to_numerology_value(scs), 0);
+  unsigned                     sector_id = dist_sector_id(rgen);
+  processor->get_request_handler().handle_request(shared_rg_spy.get_grid(), {.slot = slot, .sector = sector_id});
+
+  // Receive the OFDM symbols 0, 1, 3 and 4 of the slot, and then the first OFDM symbol of the next slot, which closes
+  // the slot.
+  for (unsigned i_symbol : {0U, 1U, 3U, 4U}) {
+    unsigned                    symbol_size = cp.get_length(i_symbol, scs).to_samples(srate.to_Hz()) + base_symbol_size;
+    baseband_gateway_buffer_ptr buffer      = buffer_pool.get();
+    ASSERT_TRUE(buffer);
+    buffer->resize(symbol_size);
+    lower_phy_rx_symbol_context context = {
+        .slot = slot, .sector = sector_id, .nof_symbols = i_symbol, .is_valid = true};
+    processor->get_baseband().process_symbol(baseband_gateway_buffer_ptr_view(std::move(buffer), 0, symbol_size),
+                                             context);
+  }
+  {
+    unsigned                    symbol_size = cp.get_length(0, scs).to_samples(srate.to_Hz()) + base_symbol_size;
+    baseband_gateway_buffer_ptr buffer      = buffer_pool.get();
+    ASSERT_TRUE(buffer);
+    buffer->resize(symbol_size);
+    lower_phy_rx_symbol_context context = {.slot = slot + 1, .sector = sector_id, .nof_symbols = 0, .is_valid = true};
+    processor->get_baseband().process_symbol(baseband_gateway_buffer_ptr_view(std::move(buffer), 0, symbol_size),
+                                             context);
+  }
+  while (executor.try_run_next()) {
+  }
+
+  // Two batches: symbols 0 and 1, ended by the missing symbol 2, and symbols 3 and 4, ended by the closing slot.
+  const auto& batch_entries = demod_spy.get_demodulate_batch_entries();
+  ASSERT_EQ(batch_entries.size(), 2);
+  ASSERT_EQ(batch_entries[0].first_symbol_index, 0);
+  ASSERT_EQ(batch_entries[0].nof_symbols, 2);
+  ASSERT_EQ(batch_entries[1].first_symbol_index, 3);
+  ASSERT_EQ(batch_entries[1].nof_symbols, 2);
+
+  // Every symbol of the slot is notified in order, the received ones as valid.
+  const auto& rx_symbols = notifier_spy.get_rx_symbol();
+  ASSERT_EQ(rx_symbols.size(), nof_symbols_per_slot);
+  for (unsigned i_symbol = 0; i_symbol != nof_symbols_per_slot; ++i_symbol) {
+    ASSERT_EQ(rx_symbols[i_symbol].context.nof_symbols, i_symbol);
+    bool received = (i_symbol < 2) || (i_symbol == 3) || (i_symbol == 4);
+    ASSERT_EQ(rx_symbols[i_symbol].context.is_valid, received) << "symbol " << i_symbol;
+  }
+}
+
 TEST_P(LowerPhyUplinkProcessorFixture, ConcurrentSlots)
 {
   static constexpr unsigned nof_concurrent_slots = puxch_processor::max_nof_concurrent_slots;

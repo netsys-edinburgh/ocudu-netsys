@@ -6,6 +6,7 @@
 #include "../support/logger_utils.h"
 #include "helpers.h"
 #include "ocudu/adt/format.h"
+#include "ocudu/adt/span.h"
 #include "ocudu/instrumentation/traces/ofh_traces.h"
 #include "ocudu/ofh/ofh_error_notifier.h"
 #include "ocudu/phy/support/resource_grid_context.h"
@@ -171,11 +172,20 @@ void downlink_handler_impl::handle_dl_data(const resource_grid_context& context,
     cplane_context.beam_id = to_beam_id(i_beam);
     data_flow_cplane->enqueue_section_type_1_message(cplane_context);
 
-    // User-Plane data flow. Note that the port of the resource grid is a beam-port, which in Category A, where no
-    // beamforming is applied, coincides with the antenna port.
-    uplane_context.port = i_beam;
-    uplane_context.eaxc = eaxc;
-    data_flow_uplane->enqueue_section_type_1_message(uplane_context, grid);
+    // User-Plane data flow, Category B: the port of the resource grid is a beam-port, transmitted on its eAxC.
+    if (is_cat_b_enabled) {
+      uplane_context.port = i_beam;
+      uplane_context.eaxc = eaxc;
+      data_flow_uplane->enqueue_section_type_1_message(uplane_context, grid);
+    }
+  }
+
+  // User-Plane data flow, Category A: every configured eAxC is transmitted from the resource grid port of the same
+  // index (no beamforming, so the beam-port is the antenna port). The ports of the slot are enqueued together, so that
+  // the data flow can build all their messages in one pass (one device compression call per slot for device grids).
+  if (!is_cat_b_enabled) {
+    data_flow_uplane->enqueue_section_type_1_messages(
+        uplane_context, 0, span<const unsigned>(dl_eaxc.data(), dl_eaxc.size()), grid);
   }
 
   ofh_tracer << trace_event("ofh_handle_downlink", tp);

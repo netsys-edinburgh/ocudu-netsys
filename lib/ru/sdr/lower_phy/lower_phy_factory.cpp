@@ -4,8 +4,52 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "lower_phy_factory.h"
+#ifdef ENABLE_CUDA
+#include "../../../phy/lower/processors/downlink/pdxch/pdxch_processor_factories_cuda.h"
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#endif
 
 using namespace ocudu;
+
+#ifdef ENABLE_CUDA
+namespace {
+
+bool is_disabled_value(const char* value)
+{
+  return value &&
+         ((std::strcmp(value, "0") == 0) || (std::strcmp(value, "false") == 0) || (std::strcmp(value, "off") == 0) ||
+          (std::strcmp(value, "no") == 0) || (std::strcmp(value, "disabled") == 0));
+}
+
+bool is_enabled_value(const char* value)
+{
+  return value &&
+         ((std::strcmp(value, "1") == 0) || (std::strcmp(value, "true") == 0) || (std::strcmp(value, "on") == 0) ||
+          (std::strcmp(value, "yes") == 0) || (std::strcmp(value, "enabled") == 0));
+}
+
+std::string resolve_lowphy_tx_acceleration_mode(const std::string& configured_mode)
+{
+  if (configured_mode != "auto") {
+    return configured_mode;
+  }
+  const char* value = std::getenv("OCUDU_LOWPHY_TX_ACCELERATION");
+  if (is_disabled_value(value)) {
+    return "disabled";
+  }
+  if (is_enabled_value(value)) {
+    return "enabled";
+  }
+  if (value && ((std::strcmp(value, "auto") == 0) || (std::strcmp(value, "AUTO") == 0))) {
+    return "auto";
+  }
+  return configured_mode;
+}
+
+} // namespace
+#endif
 
 static std::shared_ptr<lower_phy_factory> create_lower_phy_factory(const lower_phy_configuration& config,
                                                                    task_executor&                 prach_async_executor)
@@ -35,7 +79,7 @@ static std::shared_ptr<lower_phy_factory> create_lower_phy_factory(const lower_p
 
   // Create OFDM demodulator factory.
   std::shared_ptr<ofdm_demodulator_factory> demodulator_factory =
-      create_ofdm_demodulator_factory_generic(ofdm_common_config);
+      create_ofdm_demodulator_factory_accelerated(ofdm_common_config, config.rx_acceleration_mode);
   report_fatal_error_if_not(demodulator_factory, "Failed to create OFDM demodulator factory.");
 
   // Wrap the OFDM demodulator factory with a pool factory.
@@ -45,12 +89,30 @@ static std::shared_ptr<lower_phy_factory> create_lower_phy_factory(const lower_p
 
   // Create OFDM PRACH demodulator factory.
   std::shared_ptr<ofdm_prach_demodulator_factory> prach_demodulator_factory =
-      create_ofdm_prach_demodulator_factory_sw(dft_factory, config.srate, fr);
+      create_ofdm_prach_demodulator_factory_accelerated(
+          dft_factory, config.srate, fr, config.prach_demodulation_acceleration_mode);
   report_fatal_error_if_not(prach_demodulator_factory, "Failed to create PRACH demodulator factory.");
 
   // Create PDxCH processor factory.
-  std::shared_ptr<pdxch_processor_factory> pdxch_proc_factory =
-      create_pdxch_processor_factory_sw(modulator_factory, config.gain_backoff_dB);
+  std::shared_ptr<pdxch_processor_factory> pdxch_proc_factory;
+#ifdef ENABLE_CUDA
+  const std::string tx_acceleration_mode = resolve_lowphy_tx_acceleration_mode(config.tx_acceleration_mode);
+  if (tx_acceleration_mode == "enabled") {
+    report_fatal_error_if_not(is_pdxch_processor_factory_cuda_available(),
+                              "Accelerated lower-PHY TX requested but CUDA is not available.");
+    pdxch_proc_factory = create_pdxch_processor_factory_cuda(modulator_factory, config.gain_backoff_dB);
+  } else if ((tx_acceleration_mode == "auto") && is_pdxch_processor_factory_cuda_available()) {
+    pdxch_proc_factory = create_pdxch_processor_factory_cuda(modulator_factory, config.gain_backoff_dB);
+  } else
+#endif
+  {
+#ifndef ENABLE_CUDA
+    if (config.tx_acceleration_mode == "enabled") {
+      report_fatal_error("Accelerated lower-PHY TX requested but CUDA support is not compiled.");
+    }
+#endif
+    pdxch_proc_factory = create_pdxch_processor_factory_sw(modulator_factory, config.gain_backoff_dB);
+  }
   report_fatal_error_if_not(pdxch_proc_factory, "Failed to create PDxCH processor factory.");
 
   // Create PRACH processor factory.

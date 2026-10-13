@@ -170,7 +170,9 @@ public:
       std::reference_wrapper<task_executor> dl_exec       = *config.high_prio_executor;
       std::reference_wrapper<task_executor> ul_exec       = inline_executor;
       std::reference_wrapper<task_executor> ul_demod_exec = *config.high_prio_executor;
-      std::reference_wrapper<task_executor> prach_exec    = *config.high_prio_executor;
+      // A dedicated PRACH executor, if configured, keeps the PRACH demodulation off the downlink modulation executor.
+      std::reference_wrapper<task_executor> prach_exec =
+          (baseband_exec.prach_exec != nullptr) ? *baseband_exec.prach_exec : *config.high_prio_executor;
       std::reference_wrapper<task_executor> tx_exec       = *baseband_exec.tx_exec;
       std::reference_wrapper<task_executor> rx_exec       = *baseband_exec.rx_exec;
 
@@ -208,7 +210,9 @@ public:
       std::reference_wrapper<task_executor> dl_exec       = *config.high_prio_executor;
       std::reference_wrapper<task_executor> ul_exec       = *baseband_exec.ul_exec;
       std::reference_wrapper<task_executor> ul_demod_exec = *config.high_prio_executor;
-      std::reference_wrapper<task_executor> prach_exec    = *config.high_prio_executor;
+      // A dedicated PRACH executor, if configured, keeps the PRACH demodulation off the downlink modulation executor.
+      std::reference_wrapper<task_executor> prach_exec =
+          (baseband_exec.prach_exec != nullptr) ? *baseband_exec.prach_exec : *config.high_prio_executor;
       std::reference_wrapper<task_executor> tx_exec       = *baseband_exec.tx_exec;
       std::reference_wrapper<task_executor> rx_exec       = *baseband_exec.rx_exec;
 

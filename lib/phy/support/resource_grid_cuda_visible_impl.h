@@ -51,6 +51,9 @@ public:
   void set_all_zero() override;
 
   // See interface for documentation.
+  bool is_empty() const override { return reader->is_empty(); }
+
+  // See interface for documentation.
   resource_grid_writer& get_writer() override;
 
   // See interface for documentation.

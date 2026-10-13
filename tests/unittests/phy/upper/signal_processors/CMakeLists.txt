@@ -23,3 +23,20 @@ if (TARGET ocudu_doa_estimator)
     target_link_libraries(doa_estimator_test ocudu_doa_estimator ocudu_support ocudulog GTest::gtest ocudu_gtest_main)
     gtest_discover_tests(doa_estimator_test)
 endif (TARGET ocudu_doa_estimator)
+
+if(CUDA_ACCEL_FOUND)
+    add_executable(srs_estimator_cuda_test srs/srs_estimator_cuda_test.cpp)
+    target_include_directories(srs_estimator_cuda_test PRIVATE ${PROJECT_SOURCE_DIR}/lib/phy/upper ${CUDA_ACCEL_INCLUDE_DIRS})
+    target_link_libraries(srs_estimator_cuda_test
+            ocudu_srs_estimator
+            ocudu_upper_phy
+            ocudu_phy_support
+            ocudu_sequence_generators
+            ocudu_dft
+            ocudulog
+            GTest::gtest
+            GTest::gtest_main)
+    # Serialise GPU tests: the CUDA runtime rejects allocations with cudaErrorDevicesUnavailable while several
+    # exclusive device contexts are active, which surfaces as intermittent failures rather than real defects.
+    gtest_discover_tests(srs_estimator_cuda_test PROPERTIES RESOURCE_LOCK ocudu_cuda_device)
+endif()

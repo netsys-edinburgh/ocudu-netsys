@@ -24,6 +24,12 @@ if (ZEROMQ_FOUND OR UHD_FOUND)
     if (ZEROMQ_FOUND AND BUILD_TESTING)
         add_test(radio_ssb_zmq_20MHz_n7 radio_ssb -P zmq_20MHz_n7 -D 10 -L 1 -v warning -du)
         add_test(radio_ssb_zmq_20MHz_n78 radio_ssb -P zmq_20MHz_n78 -D 10 -L 1 -v warning -du)
+        # The tests drive the GPU on CUDA builds. Serialise them with the other GPU tests, see
+        # tests/unittests/phy/upper/channel_coding/ldpc/CMakeLists.txt.
+        if (CUDA_ACCEL_FOUND)
+            set_tests_properties(radio_ssb_zmq_20MHz_n7 radio_ssb_zmq_20MHz_n78
+                                 PROPERTIES RESOURCE_LOCK ocudu_cuda_device)
+        endif ()
     endif (ZEROMQ_FOUND AND BUILD_TESTING)
 
 endif (ZEROMQ_FOUND OR UHD_FOUND)

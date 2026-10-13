@@ -126,6 +126,67 @@ public:
   ///
   /// \return A read-only span containing the entire data of the resource grid.
   virtual span<const cbf16_t> get_buffer() const = 0;
+
+  /// Returns true if the reader can expose a device-visible BF16 resource grid.
+  virtual bool supports_device_grid_reading() const { return false; }
+
+  /// Returns a device-visible BF16 resource grid pointer with layout `[port][symbol][subcarrier]`.
+  virtual const void* get_device_grid_cbf16() const { return nullptr; }
+
+  /// Returns an opaque completion token recorded after the device-visible grid is ready, if available.
+  virtual void* get_device_grid_ready_event() const { return nullptr; }
+
+  /// Prepares the device-visible grid for consumption on an opaque execution stream.
+  virtual bool prepare_device_grid_reading(void*) const { return true; }
+
+  /// Records that device-grid reading has been enqueued on an opaque execution stream.
+  virtual bool on_device_grid_reading_enqueued(void*) const { return true; }
+
+  /// Drops a prepare_device_grid_reading() hold when the caller will not enqueue.
+  virtual void release_device_grid_reading() const {}
+
+  /// Copies the live grid into an owned cudaMalloc snapshot on \p stream.
+  /// Call only on the GPU-producer stream while a device-read hold is active.
+  virtual bool capture_owned_device_snapshot(void*) const { return false; }
+
+  /// Next owned cudaMalloc destination for a producer that writes from registers.
+  /// Invalidates the advertised snapshot until complete_owned_device_snapshot().
+  virtual void* begin_owned_device_snapshot() const { return nullptr; }
+
+  /// Records the apply-stream event after the producer finished writing the snapshot.
+  virtual bool complete_owned_device_snapshot(void*) const { return false; }
+
+  /// Owned snapshot pointer (CBF16 [port][symbol][subcarrier]), or nullptr.
+  virtual const void* get_owned_device_snapshot_cbf16() const { return nullptr; }
+
+  /// Event recorded after the latest owned snapshot copy completed.
+  virtual void* get_owned_device_snapshot_ready_event() const { return nullptr; }
+
+  /// True when the advertised snapshot is a complete PUSCH-compatible grid.
+  virtual bool owned_device_snapshot_is_pusch_compatible() const { return false; }
+
+  /// Orders \p stream after the latest owned-snapshot producer.
+  virtual bool prepare_owned_device_snapshot_reading(void*) const { return false; }
+
+  /// Records that owned-snapshot reading has been enqueued on \p stream.
+  virtual bool on_owned_device_snapshot_reading_enqueued(void*) const { return true; }
+
+  /// Drops a prepare_owned_device_snapshot_reading() hold when the caller will not enqueue.
+  virtual void release_owned_device_snapshot_reading() const {}
+
+  /// Home the live UL VA (PUCCH-safe), CPU-copy into pinned, H2D into the owned
+  /// cudaMalloc snapshot. Never GPU-loads the live managed pointer.
+  virtual bool stage_owned_snapshot_from_host() const { return false; }
+
+  /// Device pointer to the mapped-pinned host buffer for the in-flight
+  /// begin_owned_device_snapshot() slot, or nullptr.
+  virtual void* get_owned_host_mapped_device_ptr() const { return nullptr; }
+
+  /// Prepares any device-visible writes for host-side resource-grid consumption.
+  virtual bool synchronize_device_grid_reading() const { return true; }
+
+  /// Returns the complete host-visible grid in `[port][symbol][subcarrier]` order when storage is contiguous.
+  virtual span<const cbf16_t> get_contiguous_view() const { return {}; }
 };
 
 } // namespace ocudu

@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <vector>
+
 namespace ocudu {
 
 class task_executor;
@@ -32,10 +34,12 @@ struct upper_phy_executor {
 struct upper_phy_execution_configuration {
   /// PDCCH executor.
   upper_phy_executor pdcch_executor;
-  /// PDSCH task executor.
+  /// PDSCH task executor (shared fallback).
   upper_phy_executor pdsch_executor;
   /// PDSCH asynchronous codeblock task executor.
   upper_phy_executor pdsch_codeblock_executor;
+  /// Optional per-cell PDSCH executors for multi-sector fairness (one lane per cell/slot group).
+  std::vector<task_executor*> pdsch_cell_executors;
   /// SSB task executor.
   upper_phy_executor ssb_executor;
   /// NZP-CSI-RS task executor.

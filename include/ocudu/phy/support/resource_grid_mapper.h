@@ -10,8 +10,10 @@
 #include "ocudu/phy/support/rb_allocation.h"
 #include "ocudu/phy/support/re_buffer.h"
 #include "ocudu/phy/support/resource_grid_writer.h"
+#include "ocudu/ran/precoding/precoding_weight_matrix.h"
 #include "ocudu/ran/resource_allocation/ofdm_symbol_range.h"
 #include "ocudu/support/ocudu_assert.h"
+#include <cstdint>
 
 namespace ocudu {
 
@@ -43,6 +45,41 @@ public:
 
     /// Pops \c block_size number of symbols.
     virtual span<const ci8_t> pop_symbols(unsigned block_size) = 0;
+
+    /// Returns true if this buffer can map its device-resident symbols to a device grid.
+    virtual bool supports_device_grid_mapping() const { return false; }
+
+    /// \brief Optionally maps device-resident symbols into a device resource grid.
+    ///
+    /// The RE offsets are linear offsets within one port of a host-compatible
+    /// full resource-grid layout, ordered exactly as this buffer would be
+    /// consumed by \ref pop_symbols.
+    ///
+    /// \param[in] re_offsets           RE offsets within one port, in mapping order.
+    /// \param[in] device_grid          Device BF16 grid, or null to use the buffer's own scratch grid.
+    /// \param[in] nof_ports            Number of grid ports to write.
+    /// \param[in] nof_layers           Number of layers in the symbol stream.
+    /// \param[in] nof_grid_re_per_port Number of RE in one full port grid.
+    /// \param[in] weights              Wideband precoding matrix, \c nof_layers by \c nof_ports.
+    /// \return True if the symbols were mapped; false leaves the mapping to the host.
+    virtual bool map_to_device_grid(span<const uint32_t>           re_offsets,
+                                    void*                          device_grid,
+                                    unsigned                       nof_ports,
+                                    unsigned                       nof_layers,
+                                    unsigned                       nof_grid_re_per_port,
+                                    const precoding_weight_matrix& weights)
+    {
+      (void)re_offsets;
+      (void)device_grid;
+      (void)nof_ports;
+      (void)nof_layers;
+      (void)nof_grid_re_per_port;
+      (void)weights;
+      return false;
+    }
+
+    /// Returns the opaque execution stream used by \ref map_to_device_grid.
+    virtual void* get_device_grid_mapping_stream() const { return nullptr; }
   };
 
   /// Adapts an existing symbol vector to a symbol buffer interface.

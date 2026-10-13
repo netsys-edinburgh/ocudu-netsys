@@ -8,10 +8,13 @@
 #include "puxch_baseband_demodulator_scoped.h"
 #include "puxch_processor_demodulator_notifier.h"
 #include "puxch_processor_symbol_sequencer.h"
+#include "ocudu/adt/static_vector.h"
 #include "ocudu/gateways/baseband/buffer/baseband_gateway_buffer_ptr_view.h"
 #include "ocudu/instrumentation/traces/ru_traces.h"
 #include "ocudu/ocudulog/ocudulog.h"
+#include "ocudu/ocuduvec/conversion.h"
 #include "ocudu/ocuduvec/zero.h"
+#include "ocudu/phy/antenna_ports.h"
 #include "ocudu/phy/lower/lower_phy_rx_symbol_context.h"
 #include "ocudu/phy/lower/modulation/ofdm_demodulator.h"
 #include "ocudu/phy/support/resource_grid_context.h"
@@ -19,6 +22,7 @@
 #include "ocudu/phy/support/shared_resource_grid.h"
 #include "ocudu/support/executors/task_executor.h"
 #include "ocudu/support/synchronization/stop_event.h"
+#include <algorithm>
 #include <array>
 #include <atomic>
 
@@ -114,18 +118,38 @@ private:
     ocudu_assert((received_symbols & symbol_mask) == 0, "The OFDM symbol {} is already demodulated.", i_symbol);
     received_symbols |= symbol_mask;
 
+    // A device-mapped grid (CUDA-visible) is demodulated in batches of consecutive OFDM symbols with all their ports,
+    // so that an accelerated demodulator processes them in one call. Other grids are demodulated with one task per
+    // port.
+    unsigned max_batch_symbols = std::clamp(demodulator.get_max_ci16_symbol_batch_size(), 1U, MAX_NSYMB_PER_SLOT);
+    bool     batched =
+        current_grid.get().get_writer().supports_device_grid_mapping() && ((nof_ports > 1) || (max_batch_symbols > 1));
+    unsigned nof_tasks = batched ? 1 : nof_ports;
+
     // Prepare the OFDM symbol entry for the asynchronous OFDM demodulation.
     symbol_entry& entry = symbols[i_symbol];
     entry.samples       = samples.clone();
     entry.context       = context;
-    entry.pending_ports = nof_ports;
+    entry.pending_ports = nof_tasks;
     entry.is_valid      = true;
 
     // Set the number of pending tasks.
-    current_state.fetch_add(nof_ports);
+    current_state.fetch_add(nof_tasks);
 
     // Symbol index within the subframe.
     unsigned i_symbol_sf = i_symbol + context.slot.subframe_slot_index() * nof_symbols_per_slot;
+
+    if (batched) {
+      // A batch holds consecutive OFDM symbols only.
+      if (!batch_symbols.empty() && (batch_symbols.back() + 1 != i_symbol)) {
+        flush_batch();
+      }
+      batch_symbols.push_back(i_symbol);
+      if ((batch_symbols.size() == max_batch_symbols) || (i_symbol == nof_symbols_per_slot - 1)) {
+        flush_batch();
+      }
+      return;
+    }
 
     // Demodulate asynchronously each of the ports.
     for (unsigned i_port = 0; i_port != nof_ports; ++i_port) {
@@ -167,9 +191,119 @@ private:
     }
   }
 
+  /// \brief Demodulates the OFDM symbols of the pending batch, with all their ports, in one asynchronous task.
+  ///
+  /// The task offers the whole batch to the demodulator at once, which lets an accelerated implementation process it in
+  /// one call. If the demodulator declines, it offers each OFDM symbol with all its ports, and otherwise demodulates
+  /// each port on its own.
+  void flush_batch()
+  {
+    if (batch_symbols.empty()) {
+      return;
+    }
+    static_vector<unsigned, MAX_NSYMB_PER_SLOT> batch = batch_symbols;
+    batch_symbols.clear();
+
+    // The task keeps a stop token until it is destroyed, so the demodulator does not stop with pending tasks.
+    auto token = stop_control.get_token();
+
+    // Skip the demodulation if the demodulator is stopped.
+    if (token.is_stop_requested()) {
+      discard_batch(batch);
+      return;
+    }
+
+    if (!executor.defer([this, batch, tk = std::move(token)]() {
+          trace_point tp = ru_tracer.now();
+          demodulate_batch(batch);
+          ru_tracer << trace_event("PUxCH demodulation", tp);
+
+          // Indicate the completion of each OFDM symbol.
+          for (unsigned i_symbol : batch) {
+            complete_port_task(i_symbol);
+          }
+        })) {
+      logger.error(current_context.slot.sfn(),
+                   current_context.slot.slot_index(),
+                   "Failed to enqueue demodulation task for symbols {} to {}.",
+                   batch.front(),
+                   batch.back());
+      discard_batch(batch);
+    }
+  }
+
+  /// Demodulates a batch of consecutive OFDM symbols of the current slot.
+  void demodulate_batch(span<const unsigned> batch)
+  {
+    resource_grid_writer& writer = current_grid.get().get_writer();
+    unsigned first_symbol_sf     = batch.front() + current_context.slot.subframe_slot_index() * nof_symbols_per_slot;
+
+    // Port indices and, symbol-major, the samples of each port.
+    std::array<unsigned, MAX_PORTS>                           port_indices  = {};
+    std::array<const ci16_t*, MAX_PORTS * MAX_NSYMB_PER_SLOT> inputs        = {};
+    std::array<unsigned, MAX_NSYMB_PER_SLOT>                  sample_counts = {};
+    bool                                                      uniform_ports = (nof_ports <= MAX_PORTS);
+    for (unsigned i_batch = 0, nof_batch = batch.size(); (i_batch != nof_batch) && uniform_ports; ++i_batch) {
+      const baseband_gateway_buffer_ptr_view& samples = symbols[batch[i_batch]].samples;
+      sample_counts[i_batch]                          = samples.get_channel_buffer(0).size();
+      for (unsigned i_port = 0; i_port != nof_ports; ++i_port) {
+        span<const ci16_t> port_samples      = samples.get_channel_buffer(i_port);
+        uniform_ports                        = uniform_ports && (port_samples.size() == sample_counts[i_batch]);
+        inputs[i_batch * nof_ports + i_port] = port_samples.data();
+        port_indices[i_port]                 = i_port;
+      }
+    }
+    span<const unsigned> ports(port_indices.data(), nof_ports);
+
+    if (uniform_ports && (batch.size() > 1) &&
+        demodulator.demodulate_ci16_symbol_batch_ports(
+            writer,
+            span<const ci16_t* const>(inputs.data(), batch.size() * nof_ports),
+            span<const unsigned>(sample_counts.data(), batch.size()),
+            ocuduvec::scaling_factor_ci16_to_cf,
+            ports,
+            first_symbol_sf,
+            batch.size())) {
+      return;
+    }
+
+    for (unsigned i_batch = 0, nof_batch = batch.size(); i_batch != nof_batch; ++i_batch) {
+      unsigned                                i_symbol_sf = first_symbol_sf + i_batch;
+      const baseband_gateway_buffer_ptr_view& samples     = symbols[batch[i_batch]].samples;
+      if (uniform_ports && (nof_ports > 1) &&
+          demodulator.demodulate_ci16_ports(writer,
+                                            span<const ci16_t* const>(&inputs[i_batch * nof_ports], nof_ports),
+                                            sample_counts[i_batch],
+                                            ocuduvec::scaling_factor_ci16_to_cf,
+                                            ports,
+                                            i_symbol_sf)) {
+        continue;
+      }
+      for (unsigned i_port = 0; i_port != nof_ports; ++i_port) {
+        demodulator.demodulate(writer, samples.get_channel_buffer(i_port), i_port, i_symbol_sf);
+      }
+    }
+  }
+
+  /// Zeroes the OFDM symbols of a batch that cannot be demodulated, and completes them as invalid.
+  void discard_batch(span<const unsigned> batch)
+  {
+    for (unsigned i_symbol : batch) {
+      unsigned i_symbol_sf = i_symbol + current_context.slot.subframe_slot_index() * nof_symbols_per_slot;
+      for (unsigned i_port = 0; i_port != nof_ports; ++i_port) {
+        ocuduvec::zero(current_grid.get().get_writer().get_view(i_port, i_symbol_sf));
+      }
+      symbols[i_symbol].is_valid = false;
+      complete_port_task(i_symbol);
+    }
+  }
+
   /// Closes the current slot, notifying pending symbols as invalid.
   void close() override
   {
+    // Demodulate the OFDM symbols waiting for the rest of their batch, which will not arrive.
+    flush_batch();
+
     // Notify the OFDM symbols that have not been received as invalid.
     lower_phy_rx_symbol_context context = {
         .slot = current_context.slot, .sector = current_context.sector, .nof_symbols = 0, .is_valid = false};
@@ -264,6 +398,8 @@ private:
   uint32_t received_symbols = 0;
   /// OFDM symbols under demodulation.
   std::array<symbol_entry, MAX_NSYMB_PER_SLOT> symbols;
+  /// Received OFDM symbols waiting to be demodulated together, in ascending order.
+  static_vector<unsigned, MAX_NSYMB_PER_SLOT> batch_symbols;
   /// Sequences the notifications of the demodulated OFDM symbols.
   puxch_processor_symbol_sequencer sequencer;
   /// Executor for asynchronously demodulating.

@@ -4,13 +4,19 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ocudu/adt/format.h"
+#ifdef ENABLE_CUDA
+#include "phy/upper/channel_coding/ldpc/cuda/ldpc_cuda_factories.h"
+#include "phy/upper/resource_grid_cuda_visible_impl.h"
+#endif
 #include "ocudu/phy/support/resource_grid_reader.h"
 #include "ocudu/phy/support/resource_grid_writer.h"
 #include "ocudu/phy/support/support_factories.h"
+#include "ocudu/phy/upper/channel_coding/channel_coding_factories.h"
 #include "ocudu/phy/upper/channel_processors/pusch/factories.h"
 #include "ocudu/phy/upper/channel_processors/pusch/pusch_processor_result_notifier.h"
 #include "ocudu/phy/upper/rx_buffer_pool.h"
 #include "ocudu/phy/upper/unique_rx_buffer.h"
+#include "ocudu/ran/pusch/pusch_mcs.h"
 #include "ocudu/ran/sch/sch_segmentation.h"
 #include "ocudu/ran/sch/tbs_calculator.h"
 #include "ocudu/support/benchmark_utils.h"
@@ -29,10 +35,14 @@
 #include "ocudu/hal/phy/upper/channel_processors/pusch/hw_accelerator_factories.h"
 #include "ocudu/hal/phy/upper/channel_processors/pusch/hw_accelerator_pusch_dec_factory.h"
 #endif // HWACC_PUSCH_ENABLED
+#include "../slot_latency_collector.h"
 #include <getopt.h>
 #include <random>
 
 using namespace ocudu;
+
+// Per-slot latency collector for true latency measurement.
+static std::unique_ptr<slot_latency_collector> latency_collector = nullptr;
 
 // A test case consists of a PUSCH PDU configuration and a Transport Block Size.
 using test_case_type = std::tuple<pusch_processor::pdu_t, unsigned>;
@@ -105,6 +115,7 @@ static constexpr concurrent_queue_policy queue_policy = concurrent_queue_policy:
 static uint64_t                           nof_repetitions             = 10;
 static uint64_t                           nof_threads                 = max_nof_threads;
 static uint64_t                           batch_size_per_thread       = 100;
+static uint64_t                           nof_cells                   = 1;
 static std::string                        selected_profile_name       = "default";
 static std::string                        ldpc_decoder_type           = "auto";
 static std::string                        rate_dematcher_type         = "auto";
@@ -117,16 +128,23 @@ static dmrs_config_type                   dmrs                        = dmrs_con
 static unsigned                           nof_cdm_groups_without_data = 2;
 static bounded_bitset<MAX_NSYMB_PER_SLOT> dmrs_mask =
     {false, false, true, false, false, false, false, false, false, false, false, true, false, false};
-static constexpr channel_equalizer_algorithm_type equalizer_algorithm_type = channel_equalizer_algorithm_type::zf;
+static channel_equalizer_algorithm_type equalizer_algorithm_type = channel_equalizer_algorithm_type::mmse;
 static constexpr port_channel_estimator_fd_smoothing_strategy fd_smoothing_strategy =
     port_channel_estimator_fd_smoothing_strategy::filter;
 static constexpr port_channel_estimator_td_interpolation_strategy td_interpolation_strategy =
     port_channel_estimator_td_interpolation_strategy::interpolate;
 static constexpr bool                                           compensate_cfo            = true;
 static unsigned                                                 nof_pusch_decoder_threads = 0;
+static unsigned                                                 dec_nof_iterations        = 2;
+static bool                                                     use_gpu_pipeline          = false;
+static bool                                                     mcs_index_override        = false;
+static unsigned                                                 selected_mcs_index        = 0;
+static pusch_mcs_table                                          selected_mcs_table        = pusch_mcs_table::qam64;
 static std::unique_ptr<task_worker_pool<queue_policy>>          worker_pool               = nullptr;
 static std::unique_ptr<task_worker_pool_executor<queue_policy>> executor                  = nullptr;
 static inline_task_executor                                     ch_est_executor;
+
+static channel_state_information::sinr_type sinr_calc_method = channel_state_information::sinr_type::channel_estimator;
 
 // Thread shared variables.
 static std::atomic<bool>     thread_quit   = {};
@@ -202,13 +220,69 @@ static const std::vector<test_profile> profile_set = {
      {0, 2, 3, 1},
      1,
      {1}},
+
+    {"scs30_100MHz_256qam_rv0_8port_mimo",
+     "Decodes PUSCH with 30 kHz SCS, 100 MHz of bandwidth, 256-QAM modulation, maximum code rate, RV 0, 8 ports, "
+     "and 1/2/3/4 layers (valid MIMO configurations for GPU E2E).",
+     subcarrier_spacing::kHz30,
+     cyclic_prefix::NORMAL,
+     get_nsymb_per_slot(cyclic_prefix::NORMAL),
+     {273},
+     {{modulation_scheme::QAM256, 948.0F}},
+     {0},
+     8,
+     {1, 2, 3, 4}},
+
+    {"scs30_100MHz_256qam_rv0_4port_mimo",
+     "Decodes PUSCH with 30 kHz SCS, 100 MHz of bandwidth, 256-QAM modulation, maximum code rate, RV 0, 4 ports, "
+     "and 1/2/3/4 layers (valid MIMO configurations for GPU E2E).",
+     subcarrier_spacing::kHz30,
+     cyclic_prefix::NORMAL,
+     get_nsymb_per_slot(cyclic_prefix::NORMAL),
+     {273},
+     {{modulation_scheme::QAM256, 948.0F}},
+     {0},
+     4,
+     {1, 2, 3, 4}},
+
+    {"scs30_100MHz_256qam_rv0_2port_mimo",
+     "Decodes PUSCH with 30 kHz SCS, 100 MHz of bandwidth, 256-QAM modulation, maximum code rate, RV 0, 2 ports, "
+     "and 1/2 layers (valid MIMO configurations for GPU E2E).",
+     subcarrier_spacing::kHz30,
+     cyclic_prefix::NORMAL,
+     get_nsymb_per_slot(cyclic_prefix::NORMAL),
+     {273},
+     {{modulation_scheme::QAM256, 948.0F}},
+     {0},
+     2,
+     {1, 2}},
 };
+
+static bool parse_mcs_table(std::string table, pusch_mcs_table& out)
+{
+  if (table == "qam64") {
+    out = pusch_mcs_table::qam64;
+    return true;
+  }
+  if (table == "qam256") {
+    out = pusch_mcs_table::qam256;
+    return true;
+  }
+  if ((table == "qam64LowSe") || (table == "qam64lowse")) {
+    out = pusch_mcs_table::qam64LowSe;
+    return true;
+  }
+  return false;
+}
 
 static void usage(const char* prog)
 {
-  fmt::print("Usage: {} [-m benchmark mode] [-R repetitions] [-B Batch size per thread] [-T number of threads] [-D "
+  fmt::print("Usage: {} [-m benchmark mode] [-R repetitions] [-B Batch size per thread] [-T number of threads] [-C "
+             "number of cells] [-D "
              "LDPC type] [-M rate "
-             "dematcher type] [-P profile] [-w] [-x] [-y] [-z error|warning|info|debug] [-h] [eal_args ...]\n",
+             "dematcher type] [-I iterations] [-P profile] [--mcs-index N] [--mcs-table T] [--sinr-method M] "
+             "[-u HARQ bits] "
+             "[-q CSI Part 1 bits] [-w] [-x] [-y] [-z error|warning|info|debug] [-h] [eal_args ...]\n",
              prog);
   fmt::print("\t-m Benchmark mode. [Default {}]\n", to_string(benchmark_mode));
   fmt::print("\t\t {:<20}It does not print any result.\n", to_string(benchmark_modes::silent));
@@ -220,16 +294,28 @@ static void usage(const char* prog)
   fmt::print("\t-R Repetitions [Default {}]\n", nof_repetitions);
   fmt::print("\t-B Batch size [Default {}]\n", batch_size_per_thread);
   fmt::print("\t-T Number of threads [Default {}, max. {}]\n", nof_threads, max_nof_threads);
+  fmt::print("\t-C Number of cells to simulate (shared GPU/factory resources) [Default {}]\n", nof_cells);
   fmt::print("\t-t Number of concurrent PUSCH decoder threads. Set to zero for no concurrency. [Default {}, max. {}]\n",
              nof_pusch_decoder_threads,
              max_nof_threads);
   fmt::print("\t-D LDPC decoder type. [Default {}]\n", ldpc_decoder_type);
   fmt::print("\t-M Rate dematcher type. [Default {}]\n", rate_dematcher_type);
+  fmt::print("\t-I LDPC decoder max iterations (1-25). [Default {}]\n", dec_nof_iterations);
   fmt::print("\t-E Toggle EVM enable/disable. [Default {}]\n", enable_evm ? "enable" : "disable");
+  fmt::print("\t-A Equalizer algorithm: zf or mmse. [Default {}]\n", to_string(equalizer_algorithm_type));
+  fmt::print("\t-u Number of HARQ-ACK bits multiplexed on PUSCH. [Default {}]\n", nof_harq_ack);
+  fmt::print("\t-q Number of CSI Part 1 bits multiplexed on PUSCH. [Default {}]\n", nof_csi_part1);
   fmt::print("\t-P Benchmark profile. [Default {}]\n", selected_profile_name);
   for (const test_profile& profile : profile_set) {
     fmt::print("\t\t {:<40} {}\n", profile.name, profile.description);
   }
+  fmt::print("\t--mcs-index N Override profile MCS set with PUSCH MCS index N (0-31).\n");
+  fmt::print("\t--mcs-table T  PUSCH MCS table for --mcs-index: qam64, qam256, or qam64LowSe. [Default {}]\n",
+             pusch_mcs_table_to_string(selected_mcs_table));
+  fmt::print("\t--sinr-method M PUSCH SINR reported in the CSI: channel_estimator, post_equalization, or evm. "
+             "[Default channel_estimator]\n");
+  fmt::print("\t-G Enable full GPU pipeline (demodulator + LDPC decoder, requires CUDA) [Default {}]\n",
+             use_gpu_pipeline ? "enabled" : "disabled");
 #ifdef HWACC_PUSCH_ENABLED
   fmt::print("\t-w       Force shared hardware-queue use [Default {}]\n",
              dedicated_queue ? "dedicated_queue" : "shared_queue");
@@ -277,8 +363,16 @@ static std::string capture_eal_args(int* argc, char*** argv)
 
 static int parse_args(int argc, char** argv)
 {
+  static constexpr int opt_mcs_index  = 1000;
+  static constexpr int opt_mcs_table  = 1001;
+  static constexpr int opt_sinr       = 1002;
+  static const option  long_options[] = {{"mcs-index", required_argument, nullptr, opt_mcs_index},
+                                         {"mcs-table", required_argument, nullptr, opt_mcs_table},
+                                         {"sinr-method", required_argument, nullptr, opt_sinr},
+                                         {nullptr, 0, nullptr, 0}};
+
   int opt = 0;
-  while ((opt = getopt(argc, argv, "R:T:t:B:D:M:EP:m:wxyz:h")) != -1) {
+  while ((opt = getopt_long(argc, argv, "R:T:t:B:C:D:M:I:EA:P:m:u:q:Gwxyz:h", long_options, nullptr)) != -1) {
     switch (opt) {
       case 'R':
         nof_repetitions = std::strtol(optarg, nullptr, 10);
@@ -292,14 +386,31 @@ static int parse_args(int argc, char** argv)
       case 'B':
         batch_size_per_thread = std::strtol(optarg, nullptr, 10);
         break;
+      case 'C':
+        nof_cells = std::strtol(optarg, nullptr, 10);
+        break;
       case 'D':
         ldpc_decoder_type = std::string(optarg);
         break;
       case 'M':
         rate_dematcher_type = std::string(optarg);
         break;
+      case 'I':
+        dec_nof_iterations = std::max(1u, std::min(25u, static_cast<unsigned>(std::strtol(optarg, nullptr, 10))));
+        break;
       case 'E':
         enable_evm = !enable_evm;
+        break;
+      case 'A':
+        if ((strcmp(optarg, "zf") == 0) || (strcmp(optarg, "ZF") == 0)) {
+          equalizer_algorithm_type = channel_equalizer_algorithm_type::zf;
+        } else if ((strcmp(optarg, "mmse") == 0) || (strcmp(optarg, "MMSE") == 0)) {
+          equalizer_algorithm_type = channel_equalizer_algorithm_type::mmse;
+        } else {
+          fmt::print(stderr, "Invalid equalizer algorithm '{}'. Expected zf or mmse.\n", optarg);
+          usage(argv[0]);
+          return -1;
+        }
         break;
       case 'P':
         selected_profile_name = std::string(optarg);
@@ -308,6 +419,44 @@ static int parse_args(int argc, char** argv)
         benchmark_mode = to_benchmark_mode(optarg);
         if (benchmark_mode == benchmark_modes::invalid) {
           fmt::print(stderr, "Invalid benchmark mode '{}'\n", optarg);
+          usage(argv[0]);
+          return -1;
+        }
+        break;
+      case 'u':
+        nof_harq_ack = std::strtol(optarg, nullptr, 10);
+        break;
+      case 'q':
+        nof_csi_part1 = std::strtol(optarg, nullptr, 10);
+        break;
+      case 'G':
+        use_gpu_pipeline = true;
+        break;
+      case opt_mcs_index: {
+        unsigned mcs_index = static_cast<unsigned>(std::strtol(optarg, nullptr, 10));
+        if (mcs_index > 31) {
+          fmt::print(stderr, "Invalid MCS index '{}'. Expected 0-31.\n", optarg);
+          usage(argv[0]);
+          return -1;
+        }
+        selected_mcs_index = mcs_index;
+        mcs_index_override = true;
+        break;
+      }
+      case opt_sinr: {
+        std::string method(optarg);
+        if ((method != "channel_estimator") && (method != "post_equalization") && (method != "evm")) {
+          fmt::print(
+              stderr, "Invalid SINR method '{}'. Expected channel_estimator, post_equalization, or evm.\n", optarg);
+          usage(argv[0]);
+          return -1;
+        }
+        sinr_calc_method = channel_state_information::sinr_type_from_string(method);
+        break;
+      }
+      case opt_mcs_table:
+        if (!parse_mcs_table(std::string(optarg), selected_mcs_table)) {
+          fmt::print(stderr, "Invalid MCS table '{}'. Expected qam64, qam256, or qam64LowSe.\n", optarg);
           usage(argv[0]);
           return -1;
         }
@@ -352,6 +501,23 @@ static int parse_args(int argc, char** argv)
     return -1;
   }
 
+  if (mcs_index_override) {
+    selected_profile.mcs_set = {
+        pusch_mcs_get_config(selected_mcs_table, sch_mcs_index(selected_mcs_index), false, false)};
+    if (selected_profile.mcs_set.front().target_code_rate == 0.0F) {
+      fmt::print(stderr,
+                 "MCS index {} is reserved for table {}.\n",
+                 selected_mcs_index,
+                 pusch_mcs_table_to_string(selected_mcs_table));
+      return -1;
+    }
+    fmt::print("Overriding profile MCS: table={} index={} modulation={} target_code_rate={:.0f}/1024\n",
+               pusch_mcs_table_to_string(selected_mcs_table),
+               selected_mcs_index,
+               to_string(selected_profile.mcs_set.front().modulation),
+               selected_profile.mcs_set.front().target_code_rate);
+  }
+
   return 0;
 }
 
@@ -360,10 +526,15 @@ static std::vector<test_case_type> generate_test_cases(const test_profile& profi
 {
   std::vector<test_case_type> test_case_set;
 
+  unsigned max_nof_layers = pusch_constants::MAX_NOF_LAYERS;
+
   for (sch_mcs_description mcs : profile.mcs_set) {
     for (unsigned nof_prb : profile.nof_prb_set) {
       for (unsigned rv : profile.rv_set) {
         for (unsigned nof_layers : profile.nof_layers_set) {
+          if (nof_layers > max_nof_layers) {
+            continue;
+          }
           // Determine the Transport Block Size.
           tbs_calculator_configuration tbs_config = {};
           tbs_config.mcs_descr                    = mcs;
@@ -415,11 +586,24 @@ static std::vector<test_case_type> generate_test_cases(const test_profile& profi
 static std::shared_ptr<pusch_decoder_factory>
 create_sw_pusch_decoder_factory(std::shared_ptr<crc_calculator_factory> crc_calculator_factory)
 {
-  ldpc_decoder_factory::ldpc_decoder_factory_configuration ldpc_dec_cfg = {.force_decoding      = false,
-                                                                           .early_stop_syndrome = false};
-  std::shared_ptr<ldpc_decoder_factory>                    ldpc_decoder_factory =
-      create_ldpc_decoder_factory_sw(ldpc_decoder_type, ldpc_dec_cfg);
-  report_fatal_error_if_not(ldpc_decoder_factory, "ldpc_decoder_factory");
+  const bool                            cuda_ldpc_requested        = (ldpc_decoder_type == "cuda");
+  const std::string                     fallback_ldpc_decoder_type = cuda_ldpc_requested ? "auto" : ldpc_decoder_type;
+  std::shared_ptr<ldpc_decoder_factory> ldpc_decoder_factory       = create_ldpc_decoder_factory_sw(
+      fallback_ldpc_decoder_type, {.force_decoding = false, .early_stop_syndrome = false});
+  if (cuda_ldpc_requested) {
+#ifdef ENABLE_CUDA
+    if (use_gpu_pipeline && is_cuda_available()) {
+      fmt::print("Using resident GPU LDPC decoder (CUDA); CPU LDPC fallback remains enabled\n");
+    } else if (use_gpu_pipeline) {
+      fmt::print("Resident GPU LDPC decoder requested but CUDA is unavailable, falling back to CPU\n");
+    } else {
+      fmt::print("Standalone CUDA LDPC decoder is non-resident; use -G for resident GPU LDPC. Falling back to CPU\n");
+    }
+#else
+    fmt::print("CUDA support is not compiled in, falling back to CPU\n");
+#endif
+  }
+  report_fatal_error_if_not(ldpc_decoder_factory, "Invalid ldpc_decoder_factory.");
 
   std::shared_ptr<ldpc_rate_dematcher_factory> ldpc_rate_dematcher_factory =
       create_ldpc_rate_dematcher_factory_sw(rate_dematcher_type);
@@ -436,7 +620,11 @@ create_sw_pusch_decoder_factory(std::shared_ptr<crc_calculator_factory> crc_calc
   pusch_decoder_factory_sw_config.nof_pusch_decoder_threads = nof_threads + nof_pusch_decoder_threads + 1;
   pusch_decoder_factory_sw_config.executor                  = executor.get();
   pusch_decoder_factory_sw_config.nof_prb                   = MAX_NOF_PRBS;
-  pusch_decoder_factory_sw_config.nof_layers                = pusch_constants::MAX_NOF_LAYERS;
+  unsigned max_profile_layers =
+      *std::max_element(selected_profile.nof_layers_set.begin(), selected_profile.nof_layers_set.end());
+  pusch_decoder_factory_sw_config.nof_layers                           = max_profile_layers;
+  pusch_decoder_factory_sw_config.enable_resident_acceleration_decoder = use_gpu_pipeline;
+  pusch_decoder_factory_sw_config.nof_resident_acceleration_decoders = std::max(1U, static_cast<unsigned>(nof_threads));
 
   return create_pusch_decoder_factory_sw(pusch_decoder_factory_sw_config);
 }
@@ -575,9 +763,28 @@ static std::shared_ptr<pusch_processor_factory> create_pusch_processor_factory()
   report_fatal_error_if_not(precoding_factory, "precoding_factory");
 
   // Create PUSCH demodulator factory.
-  std::shared_ptr<pusch_demodulator_factory> pusch_demod_factory = create_pusch_demodulator_factory_sw(
-      eq_factory, precoding_factory, chan_demodulation_factory, evm_calc_factory, prg_factory, MAX_NOF_PRBS, false);
-  report_fatal_error_if_not(pusch_demod_factory, "pusch_demod_factory");
+  std::shared_ptr<pusch_demodulator_factory> pusch_demod_factory;
+  if (use_gpu_pipeline && is_pusch_demodulator_acceleration_available()) {
+    pusch_demodulator_factory_accelerated_configuration gpu_config;
+    gpu_config.equalizer_factory    = eq_factory;
+    gpu_config.precoder_factory     = precoding_factory;
+    gpu_config.demodulation_factory = chan_demodulation_factory;
+    gpu_config.evm_calc_factory     = evm_calc_factory;
+    gpu_config.prg_factory          = prg_factory;
+    gpu_config.max_nof_prb          = MAX_NOF_PRBS;
+    gpu_config.enable_post_eq_sinr  = false;
+    gpu_config.equalizer_algorithm  = equalizer_algorithm_type;
+    pusch_demod_factory             = create_pusch_demodulator_factory_accelerated(gpu_config);
+    fmt::print("Using GPU PUSCH demodulator path\n");
+  }
+  if (!pusch_demod_factory) {
+    pusch_demod_factory = create_pusch_demodulator_factory_sw(
+        eq_factory, precoding_factory, chan_demodulation_factory, evm_calc_factory, prg_factory, MAX_NOF_PRBS, false);
+    if (use_gpu_pipeline) {
+      fmt::print("GPU pipeline not available, falling back to CPU\n");
+    }
+  }
+  report_fatal_error_if_not(pusch_demod_factory, "Invalid pusch_demod_factory.");
 
   // Create PUSCH demultiplexer factory.
   std::shared_ptr<ulsch_demultiplex_factory> demux_factory = create_ulsch_demultiplex_factory_sw();
@@ -615,8 +822,9 @@ static std::shared_ptr<pusch_processor_factory> create_pusch_processor_factory()
   pusch_proc_factory_config.ch_estimate_dimensions.nof_rx_ports = selected_profile.nof_rx_ports;
   pusch_proc_factory_config.ch_estimate_dimensions.nof_tx_layers =
       *std::max_element(selected_profile.nof_layers_set.begin(), selected_profile.nof_layers_set.end());
-  pusch_proc_factory_config.dec_nof_iterations         = 2;
+  pusch_proc_factory_config.dec_nof_iterations         = dec_nof_iterations;
   pusch_proc_factory_config.dec_enable_early_stop      = true;
+  pusch_proc_factory_config.csi_sinr_calc_method       = sinr_calc_method;
   pusch_proc_factory_config.max_nof_concurrent_threads = nof_threads;
   std::shared_ptr<pusch_processor_factory> pusch_proc_factory =
       create_pusch_processor_factory_sw(pusch_proc_factory_config);
@@ -641,29 +849,43 @@ static std::shared_ptr<pusch_processor_factory> create_pusch_processor_factory()
   return pusch_proc_factory;
 }
 
-// Instantiates the PUSCH processor and validator.
-static std::tuple<std::unique_ptr<pusch_processor>, std::unique_ptr<pusch_pdu_validator>> create_processor()
+// Instantiates multiple PUSCH processors and validators from a shared factory.
+// This models real multi-sector behavior where GPU resources are shared.
+static std::tuple<std::vector<std::unique_ptr<pusch_processor>>, std::vector<std::unique_ptr<pusch_pdu_validator>>>
+create_processors(uint64_t num_cells)
 {
+  // Create shared factory (only once) - this ensures GPU resources are shared across cells.
   std::shared_ptr<pusch_processor_factory> pusch_proc_factory = create_pusch_processor_factory();
 
-  // Create PUSCH processor.
-  std::unique_ptr<pusch_processor> processor = pusch_proc_factory->create();
-  report_fatal_error_if_not(processor, "processor");
+  // Create N processor instances (one per cell).
+  std::vector<std::unique_ptr<pusch_processor>>     cell_processors(num_cells);
+  std::vector<std::unique_ptr<pusch_pdu_validator>> cell_validators(num_cells);
 
-  // Create PUSCH processor validator.
-  std::unique_ptr<pusch_pdu_validator> validator = pusch_proc_factory->create_validator();
-  report_fatal_error_if_not(validator, "validator");
+  for (size_t cell_id = 0; cell_id < num_cells; ++cell_id) {
+    cell_processors[cell_id] = pusch_proc_factory->create();
+    report_fatal_error_if_not(cell_processors[cell_id], "Invalid cell_processors[cell_id].");
+    cell_validators[cell_id] = pusch_proc_factory->create_validator();
+    report_fatal_error_if_not(cell_validators[cell_id], "Invalid cell_validators[cell_id].");
+  }
 
-  return std::make_tuple(std::move(processor), std::move(validator));
+  return std::make_tuple(std::move(cell_processors), std::move(cell_validators));
 }
 
 static void thread_process(pusch_processor&              proc,
                            const pusch_processor::pdu_t& config,
                            unsigned                      tbs,
-                           const resource_grid_reader&   grid)
+                           const resource_grid_reader&   grid,
+                           unsigned                      thread_id)
 {
   // Compute the number of codeblocks.
   unsigned nof_codeblocks = compute_nof_codeblocks(units::bits(tbs), config.codeword.value().ldpc_base_graph);
+
+  // Print codeblock count once per config (thread 0 only).
+  static unsigned last_tbs = 0;
+  if (thread_id == 0 && tbs != last_tbs) {
+    fmt::print("TBS={} bits ({:.1f} KB), nof_codeblocks={}\n", tbs, tbs / 8.0 / 1024.0, nof_codeblocks);
+    last_tbs = tbs;
+  }
 
   // Buffer pool configuration.
   rx_buffer_pool_config buffer_pool_config = {};
@@ -703,6 +925,9 @@ static void thread_process(pusch_processor&              proc,
     // Reserve buffer.
     unique_rx_buffer rm_buffer = buffer_pool->get_pool().reserve(config.slot, buffer_id, nof_codeblocks, true);
 
+    // Record slot start time for per-slot latency measurement.
+    auto slot_start = slot_latency_collector::clock_type::now();
+
     // Process PDU.
     [&]() noexcept OCUDU_RTSAN_NONBLOCKING {
       proc.process(data, std::move(rm_buffer), result_notifier, grid, config);
@@ -710,6 +935,12 @@ static void thread_process(pusch_processor&              proc,
 
     // Wait for finish the task.
     result_notifier.wait_for_completion();
+
+    // Record slot end time and store latency.
+    auto slot_end = slot_latency_collector::clock_type::now();
+    if (latency_collector) {
+      latency_collector->record(thread_id, std::chrono::duration_cast<std::chrono::nanoseconds>(slot_end - slot_start));
+    }
 
     // Notify finish count.
     ++finish_count;
@@ -719,6 +950,13 @@ static void thread_process(pusch_processor&              proc,
 // Creates a resource grid.
 static std::unique_ptr<resource_grid> create_resource_grid(unsigned nof_ports, unsigned nof_symbols, unsigned nof_subc)
 {
+#ifdef ENABLE_CUDA
+  if (use_gpu_pipeline) {
+    resource_grid_cuda_visible_factory rg_factory(resource_grid_cuda_visible_factory::direction::uplink);
+    return rg_factory.create(nof_ports, nof_symbols, nof_subc);
+  }
+#endif
+
   std::shared_ptr<resource_grid_factory> rg_factory = create_resource_grid_factory();
   report_fatal_error_if_not(rg_factory != nullptr, "Invalid resource grid factory.");
 
@@ -760,14 +998,21 @@ int main(int argc, char** argv)
     if (ldpc_decoder_type == "acc100") {
       hwacc_verbose = fmt::format(" ({} VFs)", nof_threads + nof_pusch_decoder_threads + 1);
     }
-    fmt::print("Launching benchmark for {} threads, {} times per thread, and {} repetitions. Using {} profile, {} LDPC "
-               "decoder, and {} rate dematcher{}.\n",
+    // Get the actual decoder implementation that will be used based on CPU features.
+    std::string actual_decoder_impl = get_ldpc_decoder_type_str(ldpc_decoder_type);
+    fmt::print("Launching benchmark for {} threads, {} cell(s), {} times per thread, and {} repetitions. Using {} "
+               "profile, {} equalizer, {} LDPC "
+               "decoder (impl: {}), {} rate dematcher, {} max iterations{}.\n",
                nof_threads,
+               nof_cells,
                batch_size_per_thread,
                nof_repetitions,
                selected_profile_name,
+               to_string(equalizer_algorithm_type),
                ldpc_decoder_type,
+               actual_decoder_impl,
                rate_dematcher_type,
+               dec_nof_iterations,
                hwacc_verbose);
   }
 
@@ -781,9 +1026,10 @@ int main(int argc, char** argv)
   unsigned grid_nof_subcs   = MAX_NOF_SUBCARRIERS;
 
   // Create resource grid.
+  // Use nof_rx_ports (not MAX_NOF_LAYERS) to ensure grid has enough ports for all profiles.
   std::unique_ptr<resource_grid> grid =
-      create_resource_grid(pusch_constants::MAX_NOF_LAYERS, grid_nof_symbols, grid_nof_subcs);
-  report_fatal_error_if_not(grid, "grid");
+      create_resource_grid(selected_profile.nof_rx_ports, grid_nof_symbols, grid_nof_subcs);
+  report_fatal_error_if_not(grid, "Invalid grid.");
 
   unsigned nof_grid_re = grid_nof_subcs * grid_nof_symbols * selected_profile.nof_rx_ports;
 
@@ -807,13 +1053,25 @@ int main(int argc, char** argv)
     }
   }
 
-  // Create processor and validator.
-  std::unique_ptr<pusch_processor>     processor;
-  std::unique_ptr<pusch_pdu_validator> validator;
-  std::tie(processor, validator) = create_processor();
+  // Create processors and validators (one per cell, sharing factory/GPU resources).
+  std::vector<std::unique_ptr<pusch_processor>>     cell_processors;
+  std::vector<std::unique_ptr<pusch_pdu_validator>> cell_validators;
+  std::tie(cell_processors, cell_validators) = create_processors(nof_cells);
+
+  if (benchmark_mode != benchmark_modes::silent) {
+    fmt::print("Created {} cell processor(s) from shared factory.\n", nof_cells);
+  }
 
   // Generate the test cases.
   std::vector<test_case_type> test_case_set = generate_test_cases(selected_profile);
+
+  // Initialize per-slot latency collector.
+  latency_collector = std::make_unique<slot_latency_collector>(nof_threads, batch_size_per_thread * nof_repetitions);
+
+  // Print per-slot latency header if latency mode is enabled.
+  if ((benchmark_mode == benchmark_modes::latency) || (benchmark_mode == benchmark_modes::all)) {
+    fmt::print("\n--- Per-Slot Latency (process to completion) ---\n");
+  }
 
   for (const test_case_type& test_case : test_case_set) {
     // Get the PUSCH configuration.
@@ -821,24 +1079,37 @@ int main(int argc, char** argv)
     // Get the TBS in bits.
     unsigned tbs = std::get<1>(test_case);
 
-    // Make sure the configuration is valid.
-    report_fatal_error_if_not(validator->is_valid(config), "validator->is_valid(config)");
+    // Make sure the configuration is valid for all cells.
+    for (size_t cell_id = 0; cell_id < nof_cells; ++cell_id) {
+      report_fatal_error_if_not(cell_validators[cell_id]->is_valid(config),
+                                "Check failed: cell_validators[cell_id]->is_valid(config).");
+    }
 
     // Reset finish counter.
     finish_count  = 0;
     pending_count = 0;
     thread_quit   = false;
 
+    // Clear latency collector for this test case.
+    if (latency_collector) {
+      latency_collector->clear();
+    }
+
     // Prepare threads for the current case.
+    // Threads are assigned to cells in round-robin fashion.
     std::vector<unique_thread> threads(nof_threads);
     for (unsigned thread_id = 0; thread_id != nof_threads; ++thread_id) {
+      // Round-robin cell assignment.
+      unsigned cell_id = thread_id % nof_cells;
+
       // Select thread.
       unique_thread& thread = threads[thread_id];
 
-      // Create thread.
-      thread = unique_thread("thread_" + std::to_string(thread_id), [&proc = *processor, &config, &tbs, &grid] {
-        thread_process(proc, config, tbs, grid->get_reader());
-      });
+      // Create thread with assigned cell's processor.
+      thread = unique_thread("thread_" + std::to_string(thread_id),
+                             [&proc = *cell_processors[cell_id], &config, &tbs, &grid, thread_id] {
+                               thread_process(proc, config, tbs, grid->get_reader(), thread_id);
+                             });
     }
 
     // Wait for finish thread init.
@@ -878,12 +1149,13 @@ int main(int argc, char** argv)
     for (unique_thread& thread : threads) {
       thread.join();
     }
-  }
 
-  // Print latency.
-  if ((benchmark_mode == benchmark_modes::latency) || (benchmark_mode == benchmark_modes::all)) {
-    fmt::print("\n--- Average latency ---\n");
-    perf_meas.print_percentiles_time("microseconds", 1e-3 / static_cast<double>(nof_threads * batch_size_per_thread));
+    // Print per-slot latency for this test case immediately after completion.
+    if ((benchmark_mode == benchmark_modes::latency) || (benchmark_mode == benchmark_modes::all)) {
+      if (latency_collector) {
+        latency_collector->print_percentiles(to_string(meas_description));
+      }
+    }
   }
 
   // Print total aggregated throughput.
@@ -901,8 +1173,8 @@ int main(int argc, char** argv)
   if (worker_pool) {
     worker_pool->stop();
   }
-  processor.reset();
-  validator.reset();
+  cell_processors.clear();
+  cell_validators.clear();
 
   return 0;
 }

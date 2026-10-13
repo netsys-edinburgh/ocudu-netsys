@@ -275,28 +275,34 @@ static unsigned get_default_nof_workers(const worker_manager_config& worker_cfg)
     avail_cpus = cpu_architecture_info::get().get_host_nof_available_cpus();
   }
   report_fatal_error_if_not(avail_cpus > 0, "Unable to derive the number of available CPUs");
-  // Allow some spare CPUs for, e.g. processing of packets by the kernel, RU timing, etc.
-  const unsigned spare_cpus = std::min(avail_cpus, 3U);
-
-  unsigned nof_workers = 0;
-  if (worker_cfg.nof_main_pool_threads.has_value()) {
-    nof_workers = worker_cfg.nof_main_pool_threads.value();
-  } else {
-    // Estimation of minimum number of workers needed for the application using the formula:
-    // nof_workers = nof_cells * (nof_dl_antennas + nof_ul_antennas + 1) + 2
-    if (worker_cfg.du_low_cfg.has_value()) {
-      for (unsigned i = 0, e = worker_cfg.du_low_cfg->cell_nof_dl_antennas.size(); i != e; ++i) {
-        nof_workers += worker_cfg.du_low_cfg->cell_nof_dl_antennas[i] + worker_cfg.du_low_cfg->cell_nof_ul_antennas[i];
-      }
-    }
-    if (worker_cfg.du_hi_cfg.has_value()) {
-      nof_workers += worker_cfg.du_hi_cfg->nof_cells * 1;
-    }
-    nof_workers += 2;
-  }
 
   // The number of workers of the pool needs to be at least 1.
   const unsigned min_pool_workers = 1;
+
+  // Explicit main-pool thread count: honor the request up to the pinned CPU count.
+  // Do not apply the auto spare-CPU clamp here; that incorrectly reduced an explicit
+  // nof_threads=N on an N-core mask (e.g. 10→7), which also caps PDSCH accel lanes.
+  if (worker_cfg.nof_main_pool_threads.has_value()) {
+    const unsigned nof_workers = worker_cfg.nof_main_pool_threads.value();
+    return std::max(std::min(nof_workers, avail_cpus), min_pool_workers);
+  }
+
+  // Allow some spare CPUs for, e.g. processing of packets by the kernel, RU timing, etc.
+  const unsigned spare_cpus = std::min(avail_cpus, 3U);
+
+  // Estimation of minimum number of workers needed for the application using the formula:
+  // nof_workers = nof_cells * (nof_dl_antennas + nof_ul_antennas + 1) + 2
+  unsigned nof_workers = 0;
+  if (worker_cfg.du_low_cfg.has_value()) {
+    for (unsigned i = 0, e = worker_cfg.du_low_cfg->cell_nof_dl_antennas.size(); i != e; ++i) {
+      nof_workers += worker_cfg.du_low_cfg->cell_nof_dl_antennas[i] + worker_cfg.du_low_cfg->cell_nof_ul_antennas[i];
+    }
+  }
+  if (worker_cfg.du_hi_cfg.has_value()) {
+    nof_workers += worker_cfg.du_hi_cfg->nof_cells * 1;
+  }
+  nof_workers += 2;
+
   return std::max(std::min(nof_workers, avail_cpus - spare_cpus), min_pool_workers);
 }
 
@@ -309,6 +315,8 @@ static unsigned get_nof_prealloc_producers(const worker_manager_config& worker_c
     // Include RU timing thread.
     nof_producers += 1;
     // Include a TxRx thread for each RU cell.
+    nof_producers += worker_cfg.ru_ofh_cfg->nof_cells;
+    // Include the dedicated Open Fronthaul uplink workers.
     nof_producers += worker_cfg.ru_ofh_cfg->nof_cells;
   }
   if (worker_cfg.ru_dummy_cfg.has_value()) {
@@ -472,9 +480,34 @@ void worker_manager::create_ofh_executors(const worker_manager_config::ru_ofh_co
     exec_mapper_config.timing_executor = exec_mng.executors().at(exec_name);
   }
 
-  // Downlink and uplink executors.
+  // Downlink executor.
   exec_mapper_config.downlink_executor = rt_hi_prio_exec;
-  exec_mapper_config.uplink_executor   = rt_hi_prio_exec;
+
+  // Keep Open Fronthaul receive parsing and uplink decompression independent
+  // of upper-PHY and MAC bursts in the main real-time pool. The per-sector
+  // strands created by the executor mapper still serialize packet processing.
+  // A dedicated worker per cell prevents a temporarily saturated main pool
+  // from filling the receive strand and dropping already-received Ethernet
+  // frames, which is particularly important for wideband, fragmented traffic.
+  {
+    const std::string name      = "ru_uplink";
+    const std::string exec_name = "ru_uplink_exec";
+
+    std::vector<os_sched_affinity_bitmask> uplink_affinity_masks;
+    uplink_affinity_masks.reserve(config.nof_cells);
+    for (unsigned i = 0; i != config.nof_cells; ++i) {
+      uplink_affinity_masks.push_back(main_pool_affinity_mng.calcute_affinity_mask(sched_affinity_mask_types::main));
+    }
+
+    create_worker_pool(name,
+                       config.nof_cells,
+                       exec_name,
+                       task_worker_queue_size,
+                       os_thread_realtime_priority::max() - 1,
+                       uplink_affinity_masks,
+                       concurrent_queue_policy::lockfree_mpmc);
+    exec_mapper_config.uplink_executor = exec_mng.executors().at(exec_name);
+  }
 
   // Executor for Open Fronthaul messages transmission and reception.
   {
@@ -546,6 +579,10 @@ void worker_manager::create_lower_phy_executors(const worker_manager_config::ru_
 {
   using namespace execution_config_helper;
 
+  // PRACH demodulation can run in millisecond-scale bursts. Keep it below the SDR radio worker so PRACH scanning cannot
+  // preempt radio timing and trigger RF underflows.
+  const auto prach_exec_prio = os_thread_realtime_priority::max() - 5;
+
   // Radio Unit worker and executor. As the radio is unique per application, use the first cell of the affinity manager.
   create_prio_worker("radio",
                      "radio_exec",
@@ -604,10 +641,12 @@ void worker_manager::create_lower_phy_executors(const worker_manager_config::ru_
       ru_sdr_exec_map_config.executor_tracing_enable       = config.executor_tracing_enable;
 
       for (unsigned cell_id = 0; cell_id != config.nof_cells; ++cell_id) {
-        const std::string name_tx = "lower_phy_tx#" + std::to_string(cell_id);
-        const std::string exec_tx = "lower_phy_tx_exec#" + std::to_string(cell_id);
-        const std::string name_rx = "lower_phy_rx#" + std::to_string(cell_id);
-        const std::string exec_rx = "lower_phy_rx_exec#" + std::to_string(cell_id);
+        const std::string name_tx    = "lower_phy_tx#" + std::to_string(cell_id);
+        const std::string exec_tx    = "lower_phy_tx_exec#" + std::to_string(cell_id);
+        const std::string name_rx    = "lower_phy_rx#" + std::to_string(cell_id);
+        const std::string exec_rx    = "lower_phy_rx_exec#" + std::to_string(cell_id);
+        const std::string name_prach = "lphy_prach#" + std::to_string(cell_id);
+        const std::string exec_prach = "lower_phy_prach_exec#" + std::to_string(cell_id);
 
         create_prio_worker(name_tx,
                            exec_tx,
@@ -623,9 +662,18 @@ void worker_manager::create_lower_phy_executors(const worker_manager_config::ru_
                            std::chrono::microseconds{10},
                            affinity_mng[cell_id].calcute_affinity_mask(sched_affinity_mask_types::ru),
                            os_thread_realtime_priority::max() - 1);
+        create_prio_worker(name_prach,
+                           exec_prach,
+                           16,
+                           concurrent_queue_policy::lockfree_mpmc,
+                           std::chrono::microseconds{10},
+                           affinity_mng[cell_id].calcute_affinity_mask(sched_affinity_mask_types::ru),
+                           prach_exec_prio);
 
         ru_sdr_exec_map_config.baseband_exec.emplace_back(ru_sdr_executor_mapper_dual_configuration::cell_executors{
-            .tx_exec = exec_mng.executors().at(exec_tx), .rx_exec = exec_mng.executors().at(exec_rx)});
+            .tx_exec    = exec_mng.executors().at(exec_tx),
+            .rx_exec    = exec_mng.executors().at(exec_rx),
+            .prach_exec = exec_mng.executors().at(exec_prach)});
       }
       sdr_exec_mapper = create_ru_sdr_executor_mapper(ru_sdr_exec_map_config);
       break;
@@ -639,12 +687,14 @@ void worker_manager::create_lower_phy_executors(const worker_manager_config::ru_
       ru_sdr_exec_map_config.executor_tracing_enable       = config.executor_tracing_enable;
 
       for (unsigned cell_id = 0; cell_id != config.nof_cells; ++cell_id) {
-        const std::string name_tx = "lower_phy_tx#" + std::to_string(cell_id);
-        const std::string exec_tx = "lower_phy_tx_exec#" + std::to_string(cell_id);
-        const std::string name_rx = "lower_phy_rx#" + std::to_string(cell_id);
-        const std::string exec_rx = "lower_phy_rx_exec#" + std::to_string(cell_id);
-        const std::string name_ul = "lower_phy_ul#" + std::to_string(cell_id);
-        const std::string exec_ul = "lower_phy_ul_exec#" + std::to_string(cell_id);
+        const std::string name_tx    = "lower_phy_tx#" + std::to_string(cell_id);
+        const std::string exec_tx    = "lower_phy_tx_exec#" + std::to_string(cell_id);
+        const std::string name_rx    = "lower_phy_rx#" + std::to_string(cell_id);
+        const std::string exec_rx    = "lower_phy_rx_exec#" + std::to_string(cell_id);
+        const std::string name_ul    = "lower_phy_ul#" + std::to_string(cell_id);
+        const std::string exec_ul    = "lower_phy_ul_exec#" + std::to_string(cell_id);
+        const std::string name_prach = "lphy_prach#" + std::to_string(cell_id);
+        const std::string exec_prach = "lower_phy_prach_exec#" + std::to_string(cell_id);
 
         create_prio_worker(name_tx,
                            exec_tx,
@@ -667,11 +717,19 @@ void worker_manager::create_lower_phy_executors(const worker_manager_config::ru_
                            std::chrono::microseconds{10},
                            affinity_mng[cell_id].calcute_affinity_mask(sched_affinity_mask_types::ru),
                            os_thread_realtime_priority::max() - 1);
+        create_prio_worker(name_prach,
+                           exec_prach,
+                           16,
+                           concurrent_queue_policy::lockfree_mpmc,
+                           std::chrono::microseconds{10},
+                           affinity_mng[cell_id].calcute_affinity_mask(sched_affinity_mask_types::ru),
+                           prach_exec_prio);
 
-        ru_sdr_exec_map_config.baseband_exec.emplace_back(
-            ru_sdr_executor_mapper_triple_configuration::cell_executors{.tx_exec = exec_mng.executors().at(exec_tx),
-                                                                        .rx_exec = exec_mng.executors().at(exec_rx),
-                                                                        .ul_exec = exec_mng.executors().at(exec_ul)});
+        ru_sdr_exec_map_config.baseband_exec.emplace_back(ru_sdr_executor_mapper_triple_configuration::cell_executors{
+            .tx_exec    = exec_mng.executors().at(exec_tx),
+            .rx_exec    = exec_mng.executors().at(exec_rx),
+            .ul_exec    = exec_mng.executors().at(exec_ul),
+            .prach_exec = exec_mng.executors().at(exec_prach)});
       }
       sdr_exec_mapper = create_ru_sdr_executor_mapper(ru_sdr_exec_map_config);
       break;

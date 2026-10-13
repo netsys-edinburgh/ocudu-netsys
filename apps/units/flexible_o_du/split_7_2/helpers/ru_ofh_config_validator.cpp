@@ -78,6 +78,11 @@ static bool validate_beamforming_config(const ru_ofh_beamforming_config& bf_cfg)
   return true;
 }
 
+static bool validate_acceleration_mode(const std::string& mode)
+{
+  return (mode == "auto") || (mode == "enabled") || (mode == "disabled");
+}
+
 /// Validates the given Open Fronthaul Radio Unit application configuration. Returns true on success, otherwise
 /// false.
 static bool validate_ru_ofh_unit_config(span<const ru_ofh_unit_cell_config>       ofh_cells,
@@ -225,6 +230,13 @@ static bool validate_ru_ofh_unit_config(span<const ru_ofh_unit_cell_config>     
     }
 
     if (!validate_scaling_params(ofh_cell.cell.iq_scaling_config)) {
+      return false;
+    }
+
+    if (!validate_acceleration_mode(ofh_cell.cell.compression_acceleration_mode)) {
+      fmt::print("Invalid Open Fronthaul compression acceleration mode '{}'. Valid modes are: auto, enabled, "
+                 "disabled.\n",
+                 ofh_cell.cell.compression_acceleration_mode);
       return false;
     }
   }

@@ -5,12 +5,14 @@
 #pragma once
 
 #include "../support/prach_context_repository.h"
+#include "ofh_direct_write_result.h"
 #include "ocudu/ocudulog/logger.h"
 
 namespace ocudu {
 namespace ofh {
 
 struct uplane_message_decoder_results;
+class uplane_message_decoder;
 
 /// \brief Open Fronthaul User-Plane PRACH symbol data flow writer.
 ///
@@ -18,6 +20,8 @@ struct uplane_message_decoder_results;
 class uplane_prach_symbol_data_flow_writer
 {
 public:
+  using direct_write_result = ofh::direct_write_result;
+
   uplane_prach_symbol_data_flow_writer(span<const unsigned>                      prach_eaxc_,
                                        unsigned                                  sector_id_,
                                        ocudulog::basic_logger&                   logger_,
@@ -32,6 +36,13 @@ public:
 
   /// Writes the given decoder results in the corresponding PRACH buffer. Returns true on success, otherwise false.
   bool write_to_prach_buffer(unsigned eaxc, const uplane_message_decoder_results& results);
+
+  /// Writes compressed decoder results directly into the corresponding PRACH buffer when the buffer and decompressor
+  /// support a device-resident path. A fallback result means that no device write was attempted and host decoding is
+  /// safe. A failure result is terminal for the packet and must not trigger host decoding.
+  direct_write_result write_compressed_to_prach_buffer(unsigned                              eaxc,
+                                                       const uplane_message_decoder_results& results,
+                                                       uplane_message_decoder&               decoder);
 
 private:
   const static_vector<unsigned, MAX_NOF_SUPPORTED_EAXC> prach_eaxc;

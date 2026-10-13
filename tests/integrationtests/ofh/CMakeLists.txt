@@ -52,3 +52,17 @@ set_property(TEST ofh_integration_test_non_rt_8x8 ofh_integration_test_non_rt_8x
              APPEND PROPERTY LABELS "MVP-FUNC-PHY-16-9")
 set_property(TEST ofh_integration_test_non_rt_cat_b_4x2 ofh_integration_test_non_rt_cat_b_8x8
              APPEND PROPERTY LABELS "RU-OFH-CATB-WDBF")
+
+# The tests drive the GPU on CUDA builds. Serialise them with the other GPU tests, see
+# tests/unittests/phy/upper/channel_coding/ldpc/CMakeLists.txt.
+if (CUDA_ACCEL_FOUND)
+    set_tests_properties(ofh_integration_test_non_rt
+                         ofh_integration_test_non_rt_4x2
+                         ofh_integration_test_non_rt_8x8
+                         ofh_integration_test_non_rt_8x8_100MHz
+                         ofh_integration_test_non_rt_custom_eaxc
+                         ofh_integration_test_non_rt_fragmented_no_compr
+                         ofh_integration_test_non_rt_cat_b_4x2
+                         ofh_integration_test_non_rt_cat_b_8x8
+                         PROPERTIES RESOURCE_LOCK ocudu_cuda_device)
+endif ()

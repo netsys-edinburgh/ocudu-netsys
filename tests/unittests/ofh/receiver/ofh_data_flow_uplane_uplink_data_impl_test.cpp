@@ -7,13 +7,41 @@
 #include "helpers.h"
 #include "ocudu/adt/format.h"
 #include "ocudu/ocudulog/ocudulog.h"
+#include "ocudu/ofh/compression/compression_properties.h"
 #include <gtest/gtest.h>
+#include <vector>
 
 using namespace ocudu;
 using namespace ofh;
 using namespace ofh::testing;
 
 namespace {
+class resource_grid_device_writer_spy : public resource_grid_writer_bool_spy
+{
+public:
+  explicit resource_grid_device_writer_spy(unsigned nof_prbs) : resource_grid_writer_bool_spy(nof_prbs) {}
+
+  bool supports_device_grid_mapping() const override { return device_mapping_enabled; }
+
+  void* get_device_grid_bf16() override { return this; }
+
+  bool prepare_device_grid_mapping(void*) override
+  {
+    ++prepare_count;
+    return true;
+  }
+
+  bool on_device_grid_mapping_enqueued(void*) override
+  {
+    ++enqueue_count;
+    return true;
+  }
+
+  bool     device_mapping_enabled = false;
+  unsigned prepare_count          = 0;
+  unsigned enqueue_count          = 0;
+};
+
 class uplane_message_decoder_spy : public uplane_message_decoder
 {
   uplane_message_decoder_results spy_results;
@@ -21,12 +49,42 @@ class uplane_message_decoder_spy : public uplane_message_decoder
 public:
   bool decode(uplane_message_decoder_results& results, span<const uint8_t> message) override
   {
+    ++host_decode_count;
     results = spy_results;
 
     return true;
   }
 
+  bool supports_resource_grid_decompression() const override { return direct_decompression_enabled; }
+
+  bool prefers_full_symbol_decompression(const ru_compression_params&) const override { return assemble_fragments; }
+
+  iq_decompression_result decompress_to_resource_grid(resource_grid_writer&,
+                                                      unsigned,
+                                                      unsigned,
+                                                      unsigned,
+                                                      unsigned,
+                                                      const uplane_section_params&) override
+  {
+    ++direct_decompression_count;
+    return iq_decompression_result::success;
+  }
+
+  bool decode_with_compressed_iq(uplane_message_decoder_results& results, span<const uint8_t> message) override
+  {
+    ++compressed_decode_count;
+    results = spy_results;
+    return compressed_decode_succeeds;
+  }
+
   void set_results(const uplane_message_decoder_results& results) { spy_results = results; }
+
+  bool     direct_decompression_enabled = false;
+  bool     assemble_fragments           = false;
+  bool     compressed_decode_succeeds   = true;
+  unsigned host_decode_count            = 0;
+  unsigned compressed_decode_count      = 0;
+  unsigned direct_decompression_count   = 0;
 };
 
 } // namespace
@@ -40,7 +98,7 @@ protected:
   unsigned                                              nof_prbs = 51;
   unsigned                                              sector   = 0;
   unsigned                                              eaxc     = 5;
-  resource_grid_writer_bool_spy                         rg_writer;
+  resource_grid_device_writer_spy                       rg_writer;
   resource_grid_reader_spy                              rg_reader;
   resource_grid_spy                                     grid;
   shared_resource_grid_spy                              shared_grid;
@@ -78,8 +136,10 @@ public:
 
   data_flow_uplane_uplink_data_impl_config get_config()
   {
-    data_flow_uplane_uplink_data_impl_config config;
-    config.ul_eaxc = ul_eaxc;
+    data_flow_uplane_uplink_data_impl_config config{};
+    config.ul_eaxc             = ul_eaxc;
+    config.sector              = sector;
+    config.are_metrics_enabled = false;
 
     return config;
   }
@@ -133,6 +193,114 @@ TEST_F(data_flow_uplane_uplink_data_impl_fixture, valid_message_containing_all_s
   ASSERT_TRUE(notifier->has_new_uplink_symbol_function_been_called());
   ASSERT_FALSE(notifier->has_new_prach_function_been_called());
   ASSERT_EQ(nof_prbs, rg_writer.get_nof_prbs_written());
+}
+
+TEST_F(data_flow_uplane_uplink_data_impl_fixture, expired_cuda_packet_is_not_decoded_on_host)
+{
+  uplane_message_decoder_results deco_results      = build_valid_decoder_results();
+  deco_results.sections.front().compressed_iq_data = span<const uint8_t>(reinterpret_cast<const uint8_t*>("x"), 1);
+  uplane_decoder->set_results(deco_results);
+  uplane_decoder->direct_decompression_enabled = true;
+  ul_context_repo->clear();
+
+  data_flow.decode_type1_message(eaxc, {}, true);
+
+  ASSERT_EQ(1U, uplane_decoder->compressed_decode_count);
+  ASSERT_EQ(0U, uplane_decoder->host_decode_count);
+  ASSERT_FALSE(notifier->has_new_uplink_symbol_function_been_called());
+  rx_data_flow_perf_metrics metrics{};
+  data_flow.get_metrics_collector().collect_metrics(metrics);
+  ASSERT_EQ(1U, metrics.direct_decompression.nof_missing_contexts);
+}
+
+TEST_F(data_flow_uplane_uplink_data_impl_fixture, buffered_cuda_fragment_is_not_notified_or_decoded_on_host)
+{
+  constexpr ru_compression_params compression = {compression_type::BFP, 9};
+  unsigned                        prb_size    = get_compressed_prb_size(compression).value();
+  std::vector<uint8_t>            compressed_payload(25 * prb_size);
+  uplane_message_decoder_results  deco_results = build_valid_decoder_results();
+  auto&                           section      = deco_results.sections.front();
+  section.nof_prbs                             = 25;
+  section.ud_comp_hdr                          = compression;
+  section.compressed_iq_data                   = compressed_payload;
+  uplane_decoder->set_results(deco_results);
+  uplane_decoder->direct_decompression_enabled = true;
+  uplane_decoder->assemble_fragments           = true;
+  rg_writer.device_mapping_enabled             = true;
+
+  data_flow.decode_type1_message(eaxc, {}, true);
+
+  ASSERT_EQ(1U, uplane_decoder->compressed_decode_count);
+  ASSERT_EQ(0U, uplane_decoder->host_decode_count);
+  ASSERT_EQ(0U, uplane_decoder->direct_decompression_count);
+  ASSERT_FALSE(notifier->has_new_uplink_symbol_function_been_called());
+  ASSERT_EQ(0U, rg_writer.prepare_count);
+  rx_data_flow_perf_metrics metrics{};
+  data_flow.get_metrics_collector().collect_metrics(metrics);
+  ASSERT_EQ(1U, metrics.direct_decompression.nof_buffered_fragments);
+  ASSERT_EQ(0U, metrics.nof_dropped_messages);
+  ul_context_repo->clear();
+}
+
+TEST_F(data_flow_uplane_uplink_data_impl_fixture, unavailable_device_grid_falls_back_before_writing)
+{
+  uplane_message_decoder_results deco_results      = build_valid_decoder_results();
+  deco_results.sections.front().compressed_iq_data = span<const uint8_t>(reinterpret_cast<const uint8_t*>("x"), 1);
+  uplane_decoder->set_results(deco_results);
+  uplane_decoder->direct_decompression_enabled = true;
+
+  data_flow.decode_type1_message(eaxc, {}, true);
+
+  ASSERT_EQ(1U, uplane_decoder->compressed_decode_count);
+  ASSERT_EQ(1U, uplane_decoder->host_decode_count);
+  ASSERT_TRUE(notifier->has_new_uplink_symbol_function_been_called());
+  ASSERT_EQ(nof_prbs, rg_writer.get_nof_prbs_written());
+  rx_data_flow_perf_metrics metrics{};
+  data_flow.get_metrics_collector().collect_metrics(metrics);
+  ASSERT_EQ(1U, metrics.direct_decompression.nof_unsupported_destinations);
+}
+
+TEST_F(data_flow_uplane_uplink_data_impl_fixture, required_direct_decompression_does_not_fallback_for_host_grid)
+{
+  auto config               = get_config();
+  config.host_decompression = host_decompression_policy::forbid;
+  data_flow_uplane_uplink_data_impl strict_data_flow(config, get_dependencies());
+
+  uplane_message_decoder_results deco_results      = build_valid_decoder_results();
+  deco_results.sections.front().compressed_iq_data = span<const uint8_t>(reinterpret_cast<const uint8_t*>("x"), 1);
+  uplane_decoder->set_results(deco_results);
+  uplane_decoder->direct_decompression_enabled = true;
+
+  strict_data_flow.decode_type1_message(eaxc, {}, true);
+
+  ASSERT_EQ(1U, uplane_decoder->compressed_decode_count);
+  ASSERT_EQ(0U, uplane_decoder->host_decode_count);
+  ASSERT_FALSE(notifier->has_new_uplink_symbol_function_been_called());
+  ASSERT_FALSE(rg_writer.has_grid_been_written());
+  rx_data_flow_perf_metrics metrics{};
+  strict_data_flow.get_metrics_collector().collect_metrics(metrics);
+  ASSERT_EQ(1U, metrics.direct_decompression.nof_unsupported_destinations);
+  ASSERT_EQ(1U, metrics.nof_dropped_messages);
+}
+
+TEST_F(data_flow_uplane_uplink_data_impl_fixture, required_direct_decompression_drops_decode_failure)
+{
+  auto config               = get_config();
+  config.host_decompression = host_decompression_policy::forbid;
+  data_flow_uplane_uplink_data_impl strict_data_flow(config, get_dependencies());
+
+  uplane_decoder->direct_decompression_enabled = true;
+  uplane_decoder->compressed_decode_succeeds   = false;
+
+  strict_data_flow.decode_type1_message(eaxc, {}, true);
+
+  ASSERT_EQ(1U, uplane_decoder->compressed_decode_count);
+  ASSERT_EQ(0U, uplane_decoder->host_decode_count);
+  ASSERT_FALSE(notifier->has_new_uplink_symbol_function_been_called());
+  rx_data_flow_perf_metrics metrics{};
+  strict_data_flow.get_metrics_collector().collect_metrics(metrics);
+  ASSERT_EQ(1U, metrics.direct_decompression.nof_invalid_inputs);
+  ASSERT_EQ(1U, metrics.nof_dropped_messages);
 }
 
 TEST_F(data_flow_uplane_uplink_data_impl_fixture, invalid_filter_index_does_not_write_grid)

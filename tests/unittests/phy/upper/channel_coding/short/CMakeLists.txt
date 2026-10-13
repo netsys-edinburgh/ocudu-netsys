@@ -9,3 +9,31 @@ set_directory_properties(PROPERTIES LABELS "phy")
 add_executable(short_block_chain_test short_block_chain_test.cpp)
 target_link_libraries(short_block_chain_test ocudu_channel_coding ocudu_upper_phy_support ocudulog GTest::gtest GTest::gtest_main)
 add_test(short_block_chain_test short_block_chain_test)
+
+if(CUDA_ACCEL_FOUND)
+    add_executable(short_block_detector_cuda_test short_block_detector_cuda_test.cu)
+    target_link_libraries(short_block_detector_cuda_test
+        ocudu_ldpc_cuda
+        ocudu_channel_coding
+        ocudu_upper_phy_support
+        ocudulog
+        CUDA::cudart
+        GTest::gtest
+        GTest::gtest_main)
+    target_include_directories(short_block_detector_cuda_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/lib/phy/upper/channel_coding/ldpc)
+    set_target_properties(short_block_detector_cuda_test PROPERTIES
+        CUDA_SEPARABLE_COMPILATION OFF
+        CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
+    add_test(short_block_detector_cuda_test short_block_detector_cuda_test)
+endif()
+
+# GPU tests must not run concurrently with each other. The CUDA runtime rejects allocations with
+# cudaErrorDevicesUnavailable while several exclusive device contexts are active, which surfaces as intermittent ctest
+# failures that look like defects in the accelerated code. The shared lock lets ctest keep running the rest of the suite
+# in parallel while serialising the tests that drive the GPU.
+if (CUDA_ACCEL_FOUND)
+    set_tests_properties(
+            short_block_detector_cuda_test
+            PROPERTIES RESOURCE_LOCK ocudu_cuda_device)
+endif ()

@@ -7,6 +7,9 @@
 #include "downlink_processor_multi_executor_impl.h"
 #include "downlink_processor_pool_impl.h"
 #include "metrics/upper_phy_metrics_collector_impl.h"
+#include "phy_acceleration_prach_buffer_factory.h"
+#include "phy_acceleration_resource_grid_factory.h"
+#include "phy_acceleration_runtime_options.h"
 #include "uplink_processor_impl.h"
 #include "uplink_processor_pool_impl.h"
 #include "uplink_processor_printer_decorator.h"
@@ -30,7 +33,11 @@
 #include "ocudu/phy/upper/signal_processors/srs/doa_estimator_factory.h"
 #include "ocudu/phy/upper/signal_processors/srs/srs_estimator_factory.h"
 #include "ocudu/support/error_handling.h"
+#include "ocudu/support/executors/inline_task_executor.h"
 #include <algorithm>
+#include <cstdlib>
+#include <limits>
+#include <vector>
 
 using namespace ocudu;
 
@@ -51,6 +58,47 @@ create_ul_processor_factory(const upper_phy_factory_configuration& config,
                             std::shared_ptr<resource_grid_factory> rg_factory,
                             upper_phy_metrics_notifiers*           metric_notifier);
 
+static bool use_pdsch_acceleration_in_auto_mode(int nvcuda_device_id, const std::string& dl_grid_mode)
+{
+  if (!is_pdsch_block_processor_acceleration_available()) {
+    return false;
+  }
+
+  if (phy_acceleration_pdsch_auto_enable_discrete_configured()) {
+    return phy_acceleration_pdsch_auto_enable_discrete_requested();
+  }
+
+  bool managed_grid_requested = dl_grid_mode == "managed";
+  if (dl_grid_mode == "auto") {
+    managed_grid_requested = phy_acceleration_cuda_visible_grid_managed_requested("OCUDU_DL_CUDA_VISIBLE_GRID");
+  }
+  if (managed_grid_requested) {
+    return true;
+  }
+
+  if (phy_acceleration_cuda_current_device_is_discrete(nvcuda_device_id)) {
+    ocudulog::fetch_basic_logger("PHY").warning(
+        "PDSCH acceleration auto mode selected host backend on a discrete CUDA device. Set "
+        "OCUDU_PDSCH_AUTO_ENABLE_DISCRETE=1 or use pdsch_acceleration_mode=enabled for the accelerated GPU path.");
+    return false;
+  }
+
+  return true;
+}
+
+static phy_acceleration_resource_grid_memory_mode parse_cuda_visible_grid_mode(const std::string& mode,
+                                                                               const char*        direction)
+{
+  if (mode == "managed") {
+    return phy_acceleration_resource_grid_memory_mode::managed;
+  }
+  if (mode == "pinned") {
+    return phy_acceleration_resource_grid_memory_mode::pinned;
+  }
+  report_fatal_error_if_not(mode == "auto", "Invalid CUDA-visible {} resource-grid mode '{}'", direction, mode);
+  return phy_acceleration_resource_grid_memory_mode::auto_select;
+}
+
 static std::unique_ptr<uplink_processor_pool>
 create_ul_processor_pool(uplink_processor_factory&              factory,
                          rx_buffer_pool&                        rm_buffer_pool,
@@ -58,7 +106,8 @@ create_ul_processor_pool(uplink_processor_factory&              factory,
                          const upper_phy_factory_configuration& factory_config,
                          const upper_phy_configuration&         config);
 
-static std::vector<std::unique_ptr<prach_buffer>> create_prach_buffers(const upper_phy_configuration& config);
+static std::vector<std::unique_ptr<prach_buffer>>
+create_prach_buffers(const upper_phy_configuration& config, bool enable_accelerated_prach_buffer, int nvcuda_device_id);
 
 namespace {
 
@@ -102,7 +151,7 @@ public:
 
     std::unique_ptr<resource_grid> grid =
         grid_factory->create(config.nof_rx_ports, MAX_NSYMB_PER_SLOT, config.nof_rb * NOF_SUBCARRIERS_PER_RB);
-    report_fatal_error_if_not(grid, "Invalid SRS estimator.");
+    report_fatal_error_if_not(grid, "Invalid uplink resource grid.");
 
     // If a TAP factory is provided, create the PHY TAP and pass it to the uplink processor.
     std::unique_ptr<phy_tap> ul_tap;
@@ -141,7 +190,7 @@ public:
 
     std::unique_ptr<resource_grid> grid =
         grid_factory->create(config.nof_rx_ports, MAX_NSYMB_PER_SLOT, config.nof_rb * NOF_SUBCARRIERS_PER_RB);
-    report_fatal_error_if_not(grid, "Invalid SRS estimator.");
+    report_fatal_error_if_not(grid, "Invalid uplink resource grid.");
 
     // If a TAP factory is provided, create the PHY TAP and pass it to the uplink processor.
     std::unique_ptr<phy_tap> ul_tap;
@@ -192,9 +241,11 @@ public:
     std::shared_ptr<prs_generator_factory>        prs_gen_factory;
     task_executor*                                pdcch_executor;
     task_executor*                                pdsch_executor;
+    std::vector<task_executor*>                   pdsch_cell_executors;
     task_executor*                                ssb_executor;
     task_executor*                                csi_rs_executor;
     task_executor*                                prs_executor;
+    bool                                          use_pdsch_device_grid_writer = false;
   };
 
   downlink_processor_single_executor_factory(factory_configuration& config) :
@@ -205,15 +256,26 @@ public:
     prs_gen_factory(std::move(config.prs_gen_factory)),
     pdcch_executor(*config.pdcch_executor),
     pdsch_executor(*config.pdsch_executor),
+    pdsch_cell_executors(std::move(config.pdsch_cell_executors)),
     ssb_executor(*config.ssb_executor),
     csi_rs_executor(*config.csi_rs_executor),
-    prs_executor(*config.prs_executor)
+    prs_executor(*config.prs_executor),
+    use_pdsch_device_grid_writer(config.use_pdsch_device_grid_writer)
   {
     ocudu_assert(pdcch_proc_factory, "Invalid PDCCH processor factory.");
     ocudu_assert(pdsch_proc_factory, "Invalid PDSCH processor factory.");
     ocudu_assert(ssb_proc_factory, "Invalid SSB processor factory.");
     ocudu_assert(nzp_csi_rs_factory, "Invalid NZP-CSI-RS generator factory.");
     ocudu_assert(prs_gen_factory, "Invalid PRS generator factory.");
+  }
+
+  /// Selects the shared PDSCH executor, or a per-cell lane when \c pdsch_cell_executors is populated.
+  task_executor& select_pdsch_executor(unsigned cell_id) const
+  {
+    if (pdsch_cell_executors.empty()) {
+      return pdsch_executor;
+    }
+    return *pdsch_cell_executors[cell_id % pdsch_cell_executors.size()];
   }
 
   // See interface for documentation.
@@ -241,11 +303,12 @@ public:
                                                                     std::move(nzp_csi),
                                                                     std::move(prs_gen),
                                                                     pdcch_executor,
-                                                                    pdsch_executor,
+                                                                    select_pdsch_executor(config.cell_id),
                                                                     ssb_executor,
                                                                     csi_rs_executor,
                                                                     prs_executor,
-                                                                    ocudulog::fetch_basic_logger("PHY"));
+                                                                    ocudulog::fetch_basic_logger("PHY"),
+                                                                    use_pdsch_device_grid_writer);
   }
 
   // See interface for documentation.
@@ -289,11 +352,12 @@ public:
                                                                     std::move(nzp_csi),
                                                                     std::move(prs_gen),
                                                                     pdcch_executor,
-                                                                    pdsch_executor,
+                                                                    select_pdsch_executor(config.cell_id),
                                                                     ssb_executor,
                                                                     csi_rs_executor,
                                                                     prs_executor,
-                                                                    ocudulog::fetch_basic_logger("PHY"));
+                                                                    ocudulog::fetch_basic_logger("PHY"),
+                                                                    use_pdsch_device_grid_writer);
   }
 
   std::unique_ptr<downlink_pdu_validator> create_pdu_validator() override
@@ -313,9 +377,11 @@ private:
   std::shared_ptr<prs_generator_factory>        prs_gen_factory;
   task_executor&                                pdcch_executor;
   task_executor&                                pdsch_executor;
+  std::vector<task_executor*>                   pdsch_cell_executors;
   task_executor&                                ssb_executor;
   task_executor&                                csi_rs_executor;
   task_executor&                                prs_executor;
+  bool                                          use_pdsch_device_grid_writer = false;
 };
 
 /// Generic upper physical layer receive symbol handler factory.
@@ -445,15 +511,22 @@ public:
     }
 
     downlink_processor_factory_sw_config dl_fact_config = {
-        .ldpc_encoder_type   = factory_config.ldpc_encoder_type,
-        .crc_calculator_type = factory_config.crc_calculator_type,
-        .pdsch_processor     = factory_config.pdsch_processor,
-        .hw_encoder_factory  = factory_deps.hw_encoder_factory,
-        .pdcch_executor      = factory_deps.executors.pdcch_executor,
-        .pdsch_executor      = factory_deps.executors.pdsch_executor,
-        .ssb_executor        = factory_deps.executors.ssb_executor,
-        .csi_rs_executor     = factory_deps.executors.csi_rs_executor,
-        .prs_executor        = factory_deps.executors.prs_executor,
+        .ldpc_encoder_type            = factory_config.ldpc_encoder_type,
+        .crc_calculator_type          = factory_config.crc_calculator_type,
+        .pdsch_processor              = factory_config.pdsch_processor,
+        .pdsch_acceleration_mode      = factory_config.pdsch_acceleration_mode,
+        .dl_cuda_visible_grid_mode    = factory_config.dl_cuda_visible_grid_mode,
+        .pdsch_acceleration_nof_lanes = factory_config.pdsch_acceleration_nof_lanes,
+#ifdef ENABLE_CUDA
+        .nvcuda_device_id = factory_config.nvcuda_device_id,
+#endif
+        .hw_encoder_factory   = factory_deps.hw_encoder_factory,
+        .pdcch_executor       = factory_deps.executors.pdcch_executor,
+        .pdsch_executor       = factory_deps.executors.pdsch_executor,
+        .pdsch_cell_executors = factory_deps.executors.pdsch_cell_executors,
+        .ssb_executor         = factory_deps.executors.ssb_executor,
+        .csi_rs_executor      = factory_deps.executors.csi_rs_executor,
+        .prs_executor         = factory_deps.executors.prs_executor,
     };
 
     downlink_processor_factory_sw_dependencies dl_fact_deps = {.pdsch_codeblock_executor =
@@ -504,7 +577,22 @@ public:
     phy_config.rx_symbol_request_notifier  = deps.rx_symbol_request_notifier;
     phy_config.nof_slots_ul_pdu_repository = config.nof_ul_rg;
 
-    phy_config.dl_rg_pool = create_dl_resource_grid_pool(factory_deps, config, rg_factory);
+    const phy_acceleration_resource_grid_memory_mode dl_grid_memory_mode =
+        parse_cuda_visible_grid_mode(factory_config.dl_cuda_visible_grid_mode, "downlink");
+    const bool use_accelerated_dl_grid =
+        (dl_grid_memory_mode == phy_acceleration_resource_grid_memory_mode::managed) ||
+        (factory_config.pdsch_acceleration_mode == "enabled") ||
+        ((factory_config.pdsch_acceleration_mode == "auto") && is_pdsch_block_processor_acceleration_available());
+    std::shared_ptr<resource_grid_factory> dl_rg_factory =
+        create_phy_acceleration_resource_grid_factory(rg_factory,
+                                                      phy_acceleration_resource_grid_direction::downlink,
+                                                      use_accelerated_dl_grid,
+                                                      factory_config.nvcuda_device_id,
+                                                      dl_grid_memory_mode);
+    ocudulog::fetch_basic_logger("APP").info("Downlink CUDA-visible resource-grid manifest: requested={}",
+                                             factory_config.dl_cuda_visible_grid_mode);
+
+    phy_config.dl_rg_pool = create_dl_resource_grid_pool(factory_deps, config, dl_rg_factory);
     report_fatal_error_if_not(phy_config.dl_rg_pool, "Invalid downlink resource grid pool.");
 
     phy_config.dl_processor_pool = create_downlink_processor_pool(downlink_proc_factory, factory_config, config, deps);
@@ -522,7 +610,13 @@ public:
                                                             config);
     report_fatal_error_if_not(phy_config.ul_processor_pool, "Invalid uplink processor pool.");
 
-    phy_config.prach_buffers = create_prach_buffers(config);
+    const std::string resolved_prach_acceleration_mode =
+        resolve_prach_detector_acceleration_mode(factory_config.prach_acceleration_mode);
+    const bool use_accelerated_prach_buffer =
+        (resolved_prach_acceleration_mode == "enabled") ||
+        ((resolved_prach_acceleration_mode == "auto") && is_prach_detector_acceleration_available());
+    phy_config.prach_buffers =
+        create_prach_buffers(config, use_accelerated_prach_buffer, factory_config.nvcuda_device_id);
     report_fatal_error_if_not(!phy_config.prach_buffers.empty(), "Invalid PRACH buffers.");
 
     // Create the validators.
@@ -570,7 +664,8 @@ create_downlink_processor_pool(std::shared_ptr<downlink_processor_factory> facto
     downlink_processor_pool_config::downlink_processor_set info = {to_subcarrier_spacing(numerology), {}};
 
     for (unsigned i_proc = 0, nof_procs = config.nof_dl_processors; i_proc != nof_procs; ++i_proc) {
-      downlink_processor_config processor_config = {.id = i_proc, .gateway = dependencies.rg_gateway};
+      downlink_processor_config processor_config = {
+          .id = i_proc, .gateway = dependencies.rg_gateway, .cell_id = dependencies.cell_id};
 
       std::unique_ptr<downlink_processor_base> dl_proc;
       if (factory_config.log_level == ocudulog::basic_levels::none) {
@@ -664,8 +759,21 @@ create_ul_processor_factory(const upper_phy_factory_configuration& config,
   prach_detector_factory_sw_configuration prach_detector_factory_cfg;
   prach_detector_factory_cfg.threshold_scaling = config.prach_th_correction_factor;
   std::shared_ptr<prach_detector_factory> prach_factory =
-      create_prach_detector_factory_sw(dft_factory, prach_gen_factory, prach_detector_factory_cfg);
+      create_prach_detector_factory_accelerated(dft_factory,
+                                                prach_gen_factory,
+                                                prach_detector_factory_cfg,
+                                                config.prach_acceleration_mode,
+                                                config.nvcuda_device_id);
   report_fatal_error_if_not(prach_factory, "Invalid PRACH detector factory.");
+
+  const std::string resolved_prach_acceleration_mode =
+      resolve_prach_detector_acceleration_mode(config.prach_acceleration_mode);
+  const bool use_prach_acceleration =
+      (resolved_prach_acceleration_mode == "enabled") ||
+      ((resolved_prach_acceleration_mode == "auto") && is_prach_detector_acceleration_available());
+  ocudulog::fetch_basic_logger("APP").info("PRACH acceleration manifest: requested={} backend={}",
+                                           config.prach_acceleration_mode,
+                                           use_prach_acceleration ? "CUDA" : "host");
 
   // Create PRACH detector pool factory if more than one thread is used.
   if (dependencies.executors.prach_executor.max_concurrency > 1) {
@@ -684,9 +792,38 @@ create_ul_processor_factory(const upper_phy_factory_configuration& config,
     doa_factory = create_doa_estimator_factory(doa_config);
     report_fatal_error_if_not(doa_factory, "Invalid DOA estimator factory.");
   }
+  std::string resolved_srs_acceleration_mode = resolve_srs_estimator_acceleration_mode(config.srs_acceleration_mode);
+  bool        use_srs_acceleration           = false;
+  if (resolved_srs_acceleration_mode == "enabled") {
+    if (!is_srs_estimator_acceleration_available()) {
+      report_fatal_error("Accelerated SRS estimator requested but not available");
+    }
+    use_srs_acceleration = true;
+  } else if (resolved_srs_acceleration_mode == "auto") {
+    use_srs_acceleration = is_srs_estimator_acceleration_available();
+  }
+  // "disabled" means use_srs_acceleration stays false.
+  // The accelerated SRS estimator does not estimate the direction of arrival, so "auto" keeps the software estimator
+  // when it is configured ("enabled" is rejected by the estimator factory).
+  if (doa_factory && (resolved_srs_acceleration_mode == "auto")) {
+    use_srs_acceleration = false;
+  }
+
   std::shared_ptr<srs_estimator_factory> srs_factory =
-      create_srs_estimator_generic_factory(sequence_factory, ta_est_factory, doa_factory, config.ul_bw_rb);
+      create_srs_estimator_generic_factory(sequence_factory,
+                                           ta_est_factory,
+                                           doa_factory,
+                                           config.ul_bw_rb,
+                                           resolved_srs_acceleration_mode,
+                                           config.nvcuda_device_id);
   report_fatal_error_if_not(srs_factory, "Invalid SRS estimator factory.");
+  if (use_srs_acceleration) {
+    ocudulog::fetch_basic_logger("PHY").info("Using accelerated SRS estimator");
+  }
+  ocudulog::fetch_basic_logger("APP").info("SRS acceleration manifest: requested={} resolved={} backend={}",
+                                           config.srs_acceleration_mode,
+                                           resolved_srs_acceleration_mode,
+                                           use_srs_acceleration ? "CUDA" : "host");
 
   // Create SRS estimator pool factory if more than one thread is used.
   if (dependencies.executors.srs_executor.max_concurrency > 1) {
@@ -806,6 +943,28 @@ create_ul_processor_factory(const upper_phy_factory_configuration& config,
     report_fatal_error_if_not(pusch_channel_estimator_factory, "Failed to create factory.");
   }
 
+  // Determine acceleration mode early so we can enable the resident decoder if appropriate.
+  bool use_pusch_acceleration = false;
+  if (config.pusch_acceleration_mode == "enabled") {
+    if (!is_pusch_demodulator_acceleration_available(config.nvcuda_device_id)) {
+      report_fatal_error("Accelerated PUSCH demodulator requested but not available on CUDA device {}",
+                         config.nvcuda_device_id);
+    }
+    use_pusch_acceleration = true;
+  } else if (config.pusch_acceleration_mode == "auto") {
+    use_pusch_acceleration = is_pusch_demodulator_acceleration_available(config.nvcuda_device_id);
+  }
+  // "disabled" means use_pusch_acceleration stays false.
+
+  // If PUSCH decoders operate in asynchronous mode the number of PUSCH regular processors is equal to the maximum
+  // number of enqueued PUSCH transmissions in one slot. Otherwise, the number of PUSCH regular processors is equal to
+  // the PUSCH executor maximum concurrency. Size the resident decoder pool to this capacity to avoid slot-path
+  // backpressure after SCH LLRs have intentionally stayed on device.
+  unsigned nof_regular_pusch_processors = MAX_PUSCH_PDUS_PER_SLOT;
+  if (dependencies.executors.pusch_decoder_executor.max_concurrency == 0) {
+    nof_regular_pusch_processors = dependencies.executors.pusch_executor.max_concurrency;
+  }
+
   // Check if a hardware-accelerated PUSCH processor is requested.
   pusch_processor_factory_sw_configuration pusch_config;
   if (!dependencies.hw_decoder_factory) {
@@ -821,10 +980,19 @@ create_ul_processor_factory(const upper_phy_factory_configuration& config,
                               config.ldpc_rate_dematcher_type);
     decoder_config.segmenter_factory = create_ldpc_segmenter_rx_factory_sw();
     report_fatal_error_if_not(decoder_config.segmenter_factory, "Invalid LDPC Rx segmenter factory.");
-    decoder_config.nof_pusch_decoder_threads = dependencies.executors.pusch_decoder_executor.max_concurrency;
-    decoder_config.executor                  = dependencies.executors.pusch_decoder_executor.executor;
-    decoder_config.nof_prb                   = config.ul_bw_rb;
-    decoder_config.nof_layers                = config.pusch_max_nof_layers;
+    decoder_config.nof_pusch_decoder_threads          = dependencies.executors.pusch_decoder_executor.max_concurrency;
+    decoder_config.executor                           = dependencies.executors.pusch_decoder_executor.executor;
+    decoder_config.nof_prb                            = config.ul_bw_rb;
+    decoder_config.nof_layers                         = config.pusch_max_nof_layers;
+    decoder_config.nof_resident_acceleration_decoders = nof_regular_pusch_processors;
+    // Enable resident accelerated decoding for the resident PUSCH route. The processor gates runtime use to layer
+    // counts with validated FP16 demodulator support.
+    decoder_config.enable_resident_acceleration_decoder = use_pusch_acceleration;
+    decoder_config.ldpc_decoder_algorithm               = config.ldpc_decoder_algorithm;
+    decoder_config.nvcuda_device_id                     = config.nvcuda_device_id;
+    if (decoder_config.enable_resident_acceleration_decoder) {
+      ocudulog::fetch_basic_logger("PHY").info("Resident LDPC decoder enabled for PUSCH acceleration");
+    }
 
     if (metric_notifier) {
       decoder_config.decoder_factory = create_ldpc_decoder_metric_decorator_factory(
@@ -866,16 +1034,42 @@ create_ul_processor_factory(const upper_phy_factory_configuration& config,
   bool enable_eq_sinr = (config.pusch_sinr_calc_method == channel_state_information::sinr_type::post_equalization) ||
                         (config.log_level == ocudulog::basic_levels::debug);
 
-  // Create PUSCH demodulator.
-  std::shared_ptr<pusch_demodulator_factory> pusch_demod_factory =
-      create_pusch_demodulator_factory_sw(pusch_equalizer_factory,
-                                          pusch_precoding_factory,
-                                          pusch_demodulation_factory,
-                                          (enable_evm) ? pusch_evm_calc_factory : nullptr,
-                                          pusch_scrambling_factory,
-                                          config.ul_bw_rb,
-                                          enable_eq_sinr);
-  report_fatal_error_if_not(uci_dec_factory, "Invalid PUSCH demodulator.");
+  // Create PUSCH demodulator. Acceleration mode selects the accelerated factory when available.
+  std::shared_ptr<pusch_demodulator_factory> pusch_demod_factory;
+  if (use_pusch_acceleration) {
+    pusch_demodulator_factory_accelerated_configuration accel_config;
+    accel_config.equalizer_factory         = pusch_equalizer_factory;
+    accel_config.precoder_factory          = pusch_precoding_factory;
+    accel_config.demodulation_factory      = pusch_demodulation_factory;
+    accel_config.evm_calc_factory          = (enable_evm) ? pusch_evm_calc_factory : nullptr;
+    accel_config.prg_factory               = pusch_scrambling_factory;
+    accel_config.max_nof_prb               = config.ul_bw_rb;
+    accel_config.enable_post_eq_sinr       = enable_eq_sinr;
+    accel_config.compensate_cfo            = config.pusch_channel_estimator_compensate_cfo;
+    accel_config.equalizer_algorithm       = pusch_equalizer_algorithm_type;
+    accel_config.td_interpolation_strategy = pusch_chan_estimator_td_strategy;
+    accel_config.nvcuda_device_id          = config.nvcuda_device_id;
+    pusch_demod_factory                    = create_pusch_demodulator_factory_accelerated(accel_config);
+    ocudulog::fetch_basic_logger("PHY").info("Using accelerated PUSCH demodulator");
+  }
+
+  if (!pusch_demod_factory) {
+    pusch_demod_factory = create_pusch_demodulator_factory_sw(pusch_equalizer_factory,
+                                                              pusch_precoding_factory,
+                                                              pusch_demodulation_factory,
+                                                              (enable_evm) ? pusch_evm_calc_factory : nullptr,
+                                                              pusch_scrambling_factory,
+                                                              config.ul_bw_rb,
+                                                              enable_eq_sinr);
+  }
+  ocudulog::fetch_basic_logger("APP").info(
+      "PUSCH acceleration manifest: requested={} backend={} resident_decode={} decoder_pool={} device_uci={}",
+      config.pusch_acceleration_mode,
+      use_pusch_acceleration ? "CUDA" : "host",
+      use_pusch_acceleration,
+      use_pusch_acceleration ? nof_regular_pusch_processors : 0,
+      phy_acceleration_env_flag_enabled("OCUDU_PUSCH_ENABLE_ACCELERATED_UCI"));
+  report_fatal_error_if_not(pusch_demod_factory, "Invalid PUSCH demodulator factory.");
 
   // Wrap PUSCH demodulator with the metric decorator if necessary.
   if (metric_notifier) {
@@ -894,7 +1088,7 @@ create_ul_processor_factory(const upper_phy_factory_configuration& config,
   pusch_config.csi_sinr_calc_method       = config.pusch_sinr_calc_method;
   pusch_config.max_nof_concurrent_threads = dependencies.executors.pusch_executor.max_concurrency;
 
-  // :TODO: check these values in the future. Extract them to more public config.
+  // Size channel-estimate scratch storage for the configured uplink carrier and advertised PUSCH layer limit.
   pusch_config.ch_estimate_dimensions.nof_symbols        = MAX_NSYMB_PER_SLOT;
   pusch_config.ch_estimate_dimensions.nof_tx_layers      = config.pusch_max_nof_layers;
   pusch_config.ch_estimate_dimensions.nof_prb            = config.ul_bw_rb;
@@ -915,19 +1109,11 @@ create_ul_processor_factory(const upper_phy_factory_configuration& config,
   std::shared_ptr<pusch_processor_factory> uci_proc_factory = create_pusch_processor_factory_sw(pusch_config);
   report_fatal_error_if_not(uci_proc_factory, "Invalid PUSCH processor factory for UCI.");
 
-  // If PUSCH decoders operate in asynchronous mode the number of PUSCH regular processors is equal to the maximum
-  // number of enqueued PUSCH transmissions in one slot. Otherwise, the number of PUSCH regular processors is equal to
-  // the PUSCH executor maximum concurrency.
-  unsigned nof_regular_processors = MAX_PUSCH_PDUS_PER_SLOT;
-  if (dependencies.executors.pusch_decoder_executor.max_concurrency == 0) {
-    nof_regular_processors = dependencies.executors.pusch_executor.max_concurrency;
-  }
-
   // Create PUSCH processor pool factory.
   pusch_processor_pool_factory_config pusch_proc_pool_config;
   pusch_proc_pool_config.factory                = pusch_factory;
   pusch_proc_pool_config.uci_factory            = uci_proc_factory;
-  pusch_proc_pool_config.nof_regular_processors = nof_regular_processors;
+  pusch_proc_pool_config.nof_regular_processors = nof_regular_pusch_processors;
   pusch_proc_pool_config.nof_uci_processors     = dependencies.executors.pusch_executor.max_concurrency;
   pusch_factory                                 = create_pusch_processor_pool(pusch_proc_pool_config);
   report_fatal_error_if_not(pusch_factory, "Invalid PUSCH processor pool factory.");
@@ -986,13 +1172,28 @@ create_ul_processor_factory(const upper_phy_factory_configuration& config,
         config.ul_bw_rb, config.nof_rx_ports, config.phy_tap_tdd_pattern, *config.phy_tap_arguments);
   }
 
+  // Use the acceleration-specific resource grid when uplink acceleration is active. The helper keeps backend-specific
+  // memory policy out of the generic upper-PHY factory.
+  phy_acceleration_resource_grid_memory_mode ul_grid_memory_mode =
+      parse_cuda_visible_grid_mode(config.ul_cuda_visible_grid_mode, "uplink");
+  bool enable_cuda_visible_ul_grid = (ul_grid_memory_mode == phy_acceleration_resource_grid_memory_mode::managed) ||
+                                     use_pusch_acceleration || use_srs_acceleration;
+  std::shared_ptr<resource_grid_factory> ul_rg_factory =
+      create_phy_acceleration_resource_grid_factory(rg_factory,
+                                                    phy_acceleration_resource_grid_direction::uplink,
+                                                    enable_cuda_visible_ul_grid,
+                                                    config.nvcuda_device_id,
+                                                    ul_grid_memory_mode);
+  ocudulog::fetch_basic_logger("APP").info("Uplink CUDA-visible resource-grid manifest: requested={}",
+                                           config.ul_cuda_visible_grid_mode);
+
   // Create base factory.
   std::shared_ptr<uplink_processor_factory> factory =
       std::make_shared<uplink_processor_base_factory>(std::move(pucch_factory),
                                                       std::move(pusch_factory),
                                                       std::move(prach_factory),
                                                       std::move(srs_factory),
-                                                      rg_factory,
+                                                      ul_rg_factory,
                                                       std::move(tap_factory),
                                                       ul_task_executors);
   report_fatal_error_if_not(factory, "Invalid Uplink processor factory.");
@@ -1055,7 +1256,8 @@ create_ul_processor_pool(uplink_processor_factory&              factory,
   return create_uplink_processor_pool(std::move(config_pool));
 }
 
-static std::vector<std::unique_ptr<prach_buffer>> create_prach_buffers(const upper_phy_configuration& config)
+static std::vector<std::unique_ptr<prach_buffer>>
+create_prach_buffers(const upper_phy_configuration& config, bool enable_accelerated_prach_buffer, int nvcuda_device_id)
 {
   std::vector<std::unique_ptr<prach_buffer>> prach_buffers;
   prach_buffers.reserve(config.nof_prach_buffer);
@@ -1064,10 +1266,14 @@ static std::vector<std::unique_ptr<prach_buffer>> create_prach_buffers(const upp
     std::unique_ptr<prach_buffer> buffer;
 
     if (config.is_prach_long_format) {
-      buffer = create_prach_buffer_long(config.nof_rx_ports, config.max_nof_fd_prach_occasions);
+      buffer = create_phy_acceleration_prach_buffer_long(
+          config.nof_rx_ports, config.max_nof_fd_prach_occasions, enable_accelerated_prach_buffer, nvcuda_device_id);
     } else {
-      buffer = create_prach_buffer_short(
-          config.nof_rx_ports, config.max_nof_td_prach_occasions, config.max_nof_fd_prach_occasions);
+      buffer = create_phy_acceleration_prach_buffer_short(config.nof_rx_ports,
+                                                          config.max_nof_td_prach_occasions,
+                                                          config.max_nof_fd_prach_occasions,
+                                                          enable_accelerated_prach_buffer,
+                                                          nvcuda_device_id);
     }
 
     report_fatal_error_if_not(buffer, "Invalid PRACH buffer.");
@@ -1081,6 +1287,20 @@ std::shared_ptr<upper_phy_rx_symbol_handler_factory> ocudu::create_rx_symbol_han
 {
   return std::make_shared<upper_phy_rx_symbol_handler_factory_impl>();
 }
+
+namespace {
+
+/// \brief Returns the inline codeblock executor shared by forced-CUDA PDSCH on sequential lower PHYs.
+///
+/// A single instance is sufficient and outlives every factory it is handed to: inline_task_executor
+/// holds no state and runs each task on the calling thread, so concurrent use is safe.
+task_executor& get_inline_pdsch_codeblock_executor()
+{
+  static inline_task_executor executor;
+  return executor;
+}
+
+} // namespace
 
 std::shared_ptr<downlink_processor_factory>
 ocudu::create_downlink_processor_factory_sw(const downlink_processor_factory_sw_config&       config,
@@ -1239,10 +1459,66 @@ ocudu::create_downlink_processor_factory_sw(const downlink_processor_factory_sw_
       create_pdcch_processor_factory_sw(pdcch_enc_factory, pdcch_mod_factory, dmrs_pdcch_proc_factory);
   report_fatal_error_if_not(pdcch_proc_factory, "Invalid PDCCH processor factory.");
 
+  const bool pdsch_acceleration_requested = (config.pdsch_acceleration_mode == "enabled");
+  const bool pdsch_flexible_processor_selected =
+      std::holds_alternative<pdsch_processor_flexible_configuration>(config.pdsch_processor);
+
+  // Deployments with a sequential lower PHY supply no codeblock executor. Forced CUDA PDSCH runs
+  // synchronous codeblock batches, so it can provide its own inline executor rather than refusing.
+  upper_phy_executor pdsch_codeblock_executor = dependencies.pdsch_codeblock_executor;
+  if (pdsch_acceleration_requires_inline_codeblock_executor(
+          pdsch_acceleration_requested, pdsch_flexible_processor_selected, pdsch_codeblock_executor.is_valid())) {
+    pdsch_codeblock_executor = {&get_inline_pdsch_codeblock_executor(), 1};
+    ocudulog::fetch_basic_logger("PHY").info(
+        "PDSCH acceleration: no codeblock executor supplied; using an inline executor for synchronous PHY processing");
+  }
+
+  const bool pdsch_uses_flexible_processor = pdsch_flexible_processor_selected && pdsch_codeblock_executor.is_valid();
+  if (pdsch_acceleration_requested && !pdsch_uses_flexible_processor) {
+    report_fatal_error("Accelerated PDSCH block processor requested but the active PDSCH processor configuration is "
+                       "not flexible, so it has no block processor to accelerate");
+  }
+
   // Create PDSCH block processor factory (if needed).
   std::shared_ptr<pdsch_block_processor_factory> block_processor_factory;
-  if (!std::holds_alternative<pdsch_processor_generic_configuration>(config.pdsch_processor)) {
-    if (!config.hw_encoder_factory.has_value()) {
+  bool                                           use_pdsch_acceleration = false;
+  if (pdsch_uses_flexible_processor) {
+    if (pdsch_acceleration_requested) {
+      if (!is_pdsch_block_processor_acceleration_available()) {
+        report_fatal_error("Accelerated PDSCH block processor requested but not available");
+      }
+      use_pdsch_acceleration = true;
+    } else if (config.pdsch_acceleration_mode == "auto") {
+      use_pdsch_acceleration =
+          use_pdsch_acceleration_in_auto_mode(config.nvcuda_device_id, config.dl_cuda_visible_grid_mode);
+    }
+    // "disabled" means use_pdsch_acceleration stays false.
+
+    if (use_pdsch_acceleration) {
+      auto accelerated_factory = create_pdsch_block_processor_factory_accelerated(config.nvcuda_device_id);
+      report_fatal_error_if_not(accelerated_factory, "Invalid accelerated PDSCH block processor factory.");
+      // Pure GPU is the production path. Optional hybrid host-for-small-TB is a debug escape
+      // hatch only (OCUDU_PDSCH_HYBRID_HOST_SMALL_TB=1) — not the default fix for OTA regressions.
+      const char* hybrid_env = std::getenv("OCUDU_PDSCH_HYBRID_HOST_SMALL_TB");
+      const bool  use_hybrid = (hybrid_env != nullptr) && (hybrid_env[0] != '\0') &&
+                              (std::strcmp(hybrid_env, "0") != 0) && (std::strcmp(hybrid_env, "false") != 0) &&
+                              (std::strcmp(hybrid_env, "off") != 0);
+      if (use_hybrid) {
+        auto sw_for_small = create_pdsch_block_processor_factory_sw(
+            ldpc_enc_factory, ldpc_rm_factory, pdsch_scrambling_factory, pdsch_mod_mapper_factory);
+        report_fatal_error_if_not(sw_for_small, "Invalid SW PDSCH block processor factory for hybrid path.");
+        block_processor_factory =
+            create_pdsch_block_processor_factory_hybrid(std::move(accelerated_factory), std::move(sw_for_small));
+        report_fatal_error_if_not(block_processor_factory, "Invalid hybrid PDSCH block processor factory.");
+        ocudulog::fetch_basic_logger("PHY").info(
+            "Using hybrid PDSCH block processor (host for small TBs, GPU for large; "
+            "OCUDU_PDSCH_HYBRID_HOST_SMALL_TB set)");
+      } else {
+        block_processor_factory = std::move(accelerated_factory);
+        ocudulog::fetch_basic_logger("PHY").info(
+            "Using accelerated PDSCH block processor with automatic device-grid mapping for device-backed writers");
+      }
+    } else if (!config.hw_encoder_factory.has_value()) {
       block_processor_factory = create_pdsch_block_processor_factory_sw(
           ldpc_enc_factory, ldpc_rm_factory, pdsch_scrambling_factory, pdsch_mod_mapper_factory);
       report_fatal_error_if_not(block_processor_factory, "Invalid SW PDSCH block processor factory.");
@@ -1256,31 +1532,78 @@ ocudu::create_downlink_processor_factory_sw(const downlink_processor_factory_sw_
   // Create channel processors - PDSCH
   std::shared_ptr<pdsch_processor_factory> pdsch_proc_factory;
   unsigned                                 pdsch_processor_pool_size = config.pdsch_executor.max_concurrency;
+  const unsigned pdsch_codeblock_concurrency  = std::max(1U, pdsch_codeblock_executor.max_concurrency);
+  unsigned       pdsch_acceleration_nof_lanes = 0;
   if (std::holds_alternative<pdsch_processor_generic_configuration>(config.pdsch_processor) ||
-      !dependencies.pdsch_codeblock_executor.is_valid()) {
+      !pdsch_codeblock_executor.is_valid()) {
     pdsch_proc_factory = create_pdsch_processor_factory_sw(
         pdsch_enc_factory, pdsch_mod_factory, dmrs_pdsch_proc_factory, ptrs_pdsch_gen_factory);
     report_fatal_error_if_not(pdsch_proc_factory, "Invalid generic PDSCH processor factory.");
   } else if (std::holds_alternative<pdsch_processor_flexible_configuration>(config.pdsch_processor)) {
     const pdsch_processor_flexible_configuration& pdsch_processor_config =
         std::get<pdsch_processor_flexible_configuration>(config.pdsch_processor);
-    report_fatal_error_if_not(dependencies.pdsch_codeblock_executor.max_concurrency >= 1,
+    unsigned cb_batch_length = pdsch_processor_config.cb_batch_length;
+    if (use_pdsch_acceleration) {
+      cb_batch_length = pdsch_processor_flexible_configuration::synchronous_cb_batch_length;
+      // Production DL slots can contain UE PDSCH plus broadcast/control PDSCH in the same slot. Keep enough
+      // acceleration lanes in auto mode for common OTA overlap while still capping to the executor concurrency on
+      // smaller hosts. Explicit lane counts remain available for focused latency experiments.
+      pdsch_acceleration_nof_lanes = (config.pdsch_acceleration_nof_lanes == 0)
+                                         ? std::min(4U, pdsch_codeblock_concurrency)
+                                         : config.pdsch_acceleration_nof_lanes;
+      if (pdsch_acceleration_nof_lanes > pdsch_codeblock_concurrency) {
+        ocudulog::fetch_basic_logger("PHY").warning(
+            "Requested {} PDSCH acceleration lanes but only {} PDSCH codeblock executor lanes are available; using {} "
+            "lanes",
+            pdsch_acceleration_nof_lanes,
+            pdsch_codeblock_concurrency,
+            pdsch_codeblock_concurrency);
+        pdsch_acceleration_nof_lanes = pdsch_codeblock_concurrency;
+      }
+      // Concurrent outer PDU pool: cover lanes and in-flight PDSCH.
+      // Do NOT hard-floor at 16: that was added for multi-sector dummy-RU and forces 1-cell
+      // B210 OTA to create 16 full GPU encoder contexts (each with streams/warmup), which
+      // regressed small-grant latency. Multi-sector can set OCUDU_PDSCH_PROCESSOR_POOL_SIZE.
+      const unsigned lane_scaled = (pdsch_acceleration_nof_lanes > 0) ? (pdsch_acceleration_nof_lanes * 2U) : 0U;
+      pdsch_processor_pool_size =
+          std::max({pdsch_acceleration_nof_lanes, pdsch_codeblock_concurrency, lane_scaled, 4U});
+      {
+        const char* pool_env = std::getenv("OCUDU_PDSCH_PROCESSOR_POOL_SIZE");
+        if (pool_env != nullptr && pool_env[0] != '\0') {
+          char*         end    = nullptr;
+          unsigned long parsed = std::strtoul(pool_env, &end, 10);
+          if (end != pool_env && *end == '\0' && parsed > 0 &&
+              parsed <= static_cast<unsigned long>(std::numeric_limits<unsigned>::max())) {
+            pdsch_processor_pool_size = static_cast<unsigned>(parsed);
+          }
+        }
+      }
+      pdsch_processor_pool_size = std::max(pdsch_processor_pool_size, 2U);
+      ocudulog::fetch_basic_logger("PHY").info(
+          "PDSCH acceleration lane policy: lanes={} cpu_executor_concurrency={} pool_size={} "
+          "block_batching=synchronous pool_exhaustion=block",
+          pdsch_acceleration_nof_lanes,
+          config.pdsch_executor.max_concurrency,
+          pdsch_processor_pool_size);
+    }
+    report_fatal_error_if_not(pdsch_codeblock_executor.max_concurrency >= 1,
                               "The number of threads (i.e., {}) must be equal to or greater than 1.");
 
     // Create a flexible PDSCH processor factory.
-    pdsch_proc_factory =
-        create_pdsch_flexible_processor_factory_sw(ldpc_seg_tx_factory,
-                                                   block_processor_factory,
-                                                   pdsch_rg_mapper_factory,
-                                                   dmrs_pdsch_proc_factory,
-                                                   ptrs_pdsch_gen_factory,
-                                                   *dependencies.pdsch_codeblock_executor.executor,
-                                                   dependencies.pdsch_codeblock_executor.max_concurrency,
-                                                   pdsch_processor_config.cb_batch_length);
+    pdsch_proc_factory = create_pdsch_flexible_processor_factory_sw(
+        ldpc_seg_tx_factory,
+        block_processor_factory,
+        pdsch_rg_mapper_factory,
+        dmrs_pdsch_proc_factory,
+        ptrs_pdsch_gen_factory,
+        *pdsch_codeblock_executor.executor,
+        use_pdsch_acceleration ? pdsch_acceleration_nof_lanes : pdsch_codeblock_executor.max_concurrency,
+        cb_batch_length);
 
     // The number of required processors in the pool must be equal to the maximum number of PDSCH that can be enqueued
     // in a single slot if the PDSCH processor operates asynchronously.
-    if (pdsch_processor_config.cb_batch_length != pdsch_processor_flexible_configuration::synchronous_cb_batch_length) {
+    if (!use_pdsch_acceleration &&
+        (cb_batch_length != pdsch_processor_flexible_configuration::synchronous_cb_batch_length)) {
       pdsch_processor_pool_size = MAX_PDSCH_PDUS_PER_SLOT;
     }
     report_fatal_error_if_not(pdsch_proc_factory, "Invalid flexible PDSCH processor factory.");
@@ -1292,6 +1615,13 @@ ocudu::create_downlink_processor_factory_sw(const downlink_processor_factory_sw_
         std::move(pdsch_proc_factory), dependencies.metric_notifier->get_pdsch_processor_notifier());
     report_fatal_error_if_not(pdsch_proc_factory, "Invalid PDSCH processor metric decorator factory.");
   }
+  ocudulog::fetch_basic_logger("APP").info(
+      "PDSCH acceleration manifest: requested={} backend={} lanes={} pool_size={} device_grid_writer={}",
+      config.pdsch_acceleration_mode,
+      use_pdsch_acceleration ? "CUDA" : "host",
+      pdsch_acceleration_nof_lanes,
+      pdsch_processor_pool_size,
+      use_pdsch_acceleration);
 
   // Create channel processors - SSB
   ssb_processor_factory_sw_configuration ssb_factory_config;
@@ -1314,8 +1644,9 @@ ocudu::create_downlink_processor_factory_sw(const downlink_processor_factory_sw_
   report_fatal_error_if_not(prs_gen_factory, "Invalid PRS generator factory.");
 
   // Wrap PDSCH processor factory with a concurrent pool.
-  if (pdsch_processor_pool_size > 1) {
-    pdsch_proc_factory = create_pdsch_processor_pool(std::move(pdsch_proc_factory), pdsch_processor_pool_size);
+  if ((pdsch_processor_pool_size > 1) || use_pdsch_acceleration) {
+    pdsch_proc_factory =
+        create_pdsch_processor_pool(std::move(pdsch_proc_factory), pdsch_processor_pool_size, use_pdsch_acceleration);
     report_fatal_error_if_not(pdsch_proc_factory, "Invalid asynchronous PDSCH processor pool factory.");
   }
 
@@ -1348,16 +1679,18 @@ ocudu::create_downlink_processor_factory_sw(const downlink_processor_factory_sw_
   }
 
   downlink_processor_single_executor_factory::factory_configuration dl_proc_config = {
-      .pdcch_proc_factory = pdcch_proc_factory,
-      .pdsch_proc_factory = pdsch_proc_factory,
-      .ssb_proc_factory   = ssb_proc_factory,
-      .nzp_csi_rs_factory = nzp_csi_rs_factory,
-      .prs_gen_factory    = prs_gen_factory,
-      .pdcch_executor     = config.pdcch_executor.executor,
-      .pdsch_executor     = config.pdsch_executor.executor,
-      .ssb_executor       = config.ssb_executor.executor,
-      .csi_rs_executor    = config.csi_rs_executor.executor,
-      .prs_executor       = config.prs_executor.executor,
+      .pdcch_proc_factory           = pdcch_proc_factory,
+      .pdsch_proc_factory           = pdsch_proc_factory,
+      .ssb_proc_factory             = ssb_proc_factory,
+      .nzp_csi_rs_factory           = nzp_csi_rs_factory,
+      .prs_gen_factory              = prs_gen_factory,
+      .pdcch_executor               = config.pdcch_executor.executor,
+      .pdsch_executor               = config.pdsch_executor.executor,
+      .pdsch_cell_executors         = config.pdsch_cell_executors,
+      .ssb_executor                 = config.ssb_executor.executor,
+      .csi_rs_executor              = config.csi_rs_executor.executor,
+      .prs_executor                 = config.prs_executor.executor,
+      .use_pdsch_device_grid_writer = use_pdsch_acceleration,
   };
 
   return std::make_shared<downlink_processor_single_executor_factory>(dl_proc_config);

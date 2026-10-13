@@ -12,6 +12,7 @@
 #include "ocudu/ofh/serdes/ofh_uplane_message_decoder.h"
 #include "ocudu/ran/bs_channel_bandwidth.h"
 #include "ocudu/ran/cyclic_prefix.h"
+#include <string>
 
 namespace ocudu {
 namespace ofh {
@@ -42,6 +43,8 @@ struct receiver_config {
   ru_compression_params ul_compression_params;
   /// PRACH compression parameters.
   ru_compression_params prach_compression_params;
+  /// Open Fronthaul IQ compression/decompression acceleration mode.
+  std::string compression_acceleration_mode = "auto";
   /// Uplink static compression header flag.
   bool is_uplink_static_compr_hdr_enabled = true;
   /// Enables the Control-Plane PRACH message signalling.

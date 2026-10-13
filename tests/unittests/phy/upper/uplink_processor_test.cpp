@@ -57,6 +57,12 @@ public:
     pucch_spy = pucch_proc.get();
     srs_spy   = srs.get();
 
+    // A measured channel; tests that need an estimator failure override it.
+    srs_estimator_result estimate = {};
+    estimate.channel_matrix       = srs_channel_matrix(1, 1);
+    estimate.channel_matrix.set_coefficient(cf_t(1.0F, 0.0F), 0, 0);
+    srs_spy->set_result(estimate);
+
     uplink_processor_impl::task_executor_collection executors = {.pucch_executor = pucch_executor,
                                                                  .pusch_executor = pusch_executor,
                                                                  .srs_executor   = srs_executor,
@@ -332,6 +338,48 @@ TEST_F(UplinkProcessorFixture, concurrent_prach_stop_workflow)
   ASSERT_EQ(tap_spy->get_handle_quiet_grid_count(), 0);
 }
 
+TEST_F(UplinkProcessorFixture, prach_long_format_detector_config_uses_long_preamble_scs)
+{
+  ul_processor->get_pdu_slot_repository(slot);
+
+  auto prach_buffer_pool = create_spy_prach_buffer_pool(true, 1, 1);
+
+  prach_buffer_context context = {};
+  context.slot                 = slot;
+  context.format               = prach_format_type::zero;
+  context.pusch_scs            = subcarrier_spacing::kHz30;
+  context.nof_preamble_indices = 64;
+  context.ports.push_back(0);
+
+  ul_processor->get_slot_processor(slot).process_prach(prach_buffer_pool->get(), context);
+  ASSERT_TRUE(prach_executor.run_pending_tasks());
+
+  ASSERT_TRUE(prach_spy->has_detect_method_been_called());
+  ASSERT_TRUE(prach_spy->get_last_config().has_value());
+  ASSERT_EQ(prach_spy->get_last_config()->ra_scs, prach_subcarrier_spacing::kHz1_25);
+}
+
+TEST_F(UplinkProcessorFixture, prach_format_three_detector_config_uses_five_khz_scs)
+{
+  ul_processor->get_pdu_slot_repository(slot);
+
+  auto prach_buffer_pool = create_spy_prach_buffer_pool(true, 1, 1);
+
+  prach_buffer_context context = {};
+  context.slot                 = slot;
+  context.format               = prach_format_type::three;
+  context.pusch_scs            = subcarrier_spacing::kHz30;
+  context.nof_preamble_indices = 64;
+  context.ports.push_back(0);
+
+  ul_processor->get_slot_processor(slot).process_prach(prach_buffer_pool->get(), context);
+  ASSERT_TRUE(prach_executor.run_pending_tasks());
+
+  ASSERT_TRUE(prach_spy->has_detect_method_been_called());
+  ASSERT_TRUE(prach_spy->get_last_config().has_value());
+  ASSERT_EQ(prach_spy->get_last_config()->ra_scs, prach_subcarrier_spacing::kHz5);
+}
+
 TEST_F(UplinkProcessorFixture, prach_fail_defer_workflow)
 {
   ul_processor->get_pdu_slot_repository(slot);
@@ -546,6 +594,27 @@ TEST_F(UplinkProcessorFixture, phy_tap_quiet_workflow)
 
   // The quiet grid shall be reported once.
   ASSERT_EQ(tap_spy->get_handle_quiet_grid_count(), 1);
+}
+
+// An estimator that cannot produce an estimate returns an empty channel matrix. It must not reach the MAC as a
+// measured channel.
+TEST_F(UplinkProcessorFixture, srs_empty_estimate_is_not_reported)
+{
+  srs_spy->set_result({});
+
+  unique_uplink_pdu_slot_repository repository = ul_processor->get_pdu_slot_repository(slot);
+  repository->add_srs_pdu(srs_pdu);
+  shared_resource_grid grid = repository.release();
+
+  ul_processor->get_slot_processor(slot).handle_rx_symbol(slot_end_symbol_index, true);
+  ASSERT_TRUE(srs_executor.run_pending_tasks());
+
+  ASSERT_FALSE(results_notifier.has_srs_result_been_notified());
+
+  // The processor must still account for the PDU, or stopping would wait for it for ever. Stopping also waits for the
+  // slot resource grid, so release it first.
+  grid = {};
+  ul_processor->stop();
 }
 
 TEST_F(UplinkProcessorFixture, rx_symbol_bad_order)

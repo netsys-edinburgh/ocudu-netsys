@@ -18,6 +18,7 @@
 #include "ocudu/phy/support/resource_grid_context.h"
 #include "ocudu/ran/beamforming/beam_weights_codebook_generator.h"
 #include "ocudu/support/memory_pool/bounded_object_pool.h"
+#include <functional>
 
 namespace ocudu {
 
@@ -45,9 +46,11 @@ public:
   };
 
   /// Constructs a physical downlink channel baseband processor.
-  pdxch_processor_impl(std::unique_ptr<ofdm_symbol_modulator> modulator,
-                       task_executor&                         executor,
-                       const configuration&                   config) :
+  pdxch_processor_impl(
+      std::unique_ptr<ofdm_symbol_modulator>                                 modulator,
+      task_executor&                                                         executor,
+      const configuration&                                                   config,
+      std::function<std::unique_ptr<pdxch_baseband_modulator_accelerator>()> accelerator_factory = {}) :
     logger(ocudulog::fetch_basic_logger("PHY")),
     beamforming_codebook(generate_beam_weights_codebook(config.tx_ant_topology)),
     bb_buffers(buffer_request_pool::get_request_array_size() + max_slot_modulation_concurrency + 1,
@@ -57,10 +60,17 @@ public:
     modulators(max_slot_modulation_concurrency)
   {
     // Generate baseband modulators.
-    std::generate(modulators.begin(), modulators.end(), [this, &config, &executor]() {
-      return std::make_unique<pdxch_baseband_modulator>(
-          config.scs, config.cp, config.srate, executor, *common_ofdm_modulator, beamforming_codebook, *this);
+    std::generate(modulators.begin(), modulators.end(), [this, &config, &executor, &accelerator_factory]() {
+      return std::make_unique<pdxch_baseband_modulator>(config.scs,
+                                                        config.cp,
+                                                        config.srate,
+                                                        executor,
+                                                        *common_ofdm_modulator,
+                                                        beamforming_codebook,
+                                                        *this,
+                                                        accelerator_factory ? accelerator_factory() : nullptr);
     });
+    prepare_accelerated_output_buffers();
   }
 
   // See pdxch_processor interface for documentation.
@@ -88,7 +98,13 @@ public:
 
 private:
   /// Maximum number of slots that can be concurrently modulated.
-  static constexpr unsigned max_slot_modulation_concurrency = 4;
+  ///
+  /// The original depth of 4 is too small for the current OTA pipeline:
+  /// brief bursts of delayed DL work can legitimately leave more than four
+  /// slots concurrently in flight at the lower-PHY modulator. When that
+  /// happened, the processor rejected new grids with "The modulator is busy",
+  /// which cascaded into lower-PHY late events and then starved UL traffic.
+  static constexpr unsigned max_slot_modulation_concurrency = 8;
 
   /// Buffer request pool alias.
   using buffer_request_pool = resource_request_pool<baseband_gateway_buffer_ptr>;
@@ -103,6 +119,29 @@ private:
   pdxch_baseband_modulator& get_modulator(slot_point slot)
   {
     return *modulators[slot.system_slot() % modulators.size()];
+  }
+
+  void prepare_accelerated_output_buffers()
+  {
+    std::vector<baseband_gateway_buffer_ptr> buffers;
+    buffers.reserve(bb_buffers.capacity());
+    bool all_prepared = true;
+
+    for (size_t i = 0, e = bb_buffers.capacity(); i != e; ++i) {
+      baseband_gateway_buffer_ptr buffer = bb_buffers.get();
+      if (!buffer) {
+        all_prepared = false;
+        break;
+      }
+      for (auto& modulator : modulators) {
+        all_prepared = modulator->prepare_output_buffer(*buffer) && all_prepared;
+      }
+      buffers.emplace_back(std::move(buffer));
+    }
+
+    if (!all_prepared) {
+      logger.warning("Unable to pre-register all lower-PHY TX output buffers for accelerated modulation.");
+    }
   }
 
   // See pdxch_processor_baseband interface for documentation.

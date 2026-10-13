@@ -43,6 +43,8 @@ public:
 
   void reset() { finished = false; }
 
+  bool is_finished() const { return finished.load(); }
+
 private:
   std::atomic<bool> finished = {};
 };

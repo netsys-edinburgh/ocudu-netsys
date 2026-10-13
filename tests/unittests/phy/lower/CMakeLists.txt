@@ -12,3 +12,8 @@ add_subdirectory(processors)
 add_executable(lower_phy_test lower_phy_test.cpp)
 target_link_libraries(lower_phy_test ocudu_lower_phy ocudulog GTest::gtest GTest::gtest_main)
 add_test(lower_phy_test lower_phy_test)
+
+add_executable(lower_phy_tx_pacing_test lower_phy_tx_pacing_test.cpp)
+target_include_directories(lower_phy_tx_pacing_test PRIVATE ${CMAKE_SOURCE_DIR}/lib/phy/lower)
+target_link_libraries(lower_phy_tx_pacing_test GTest::gtest GTest::gtest_main)
+add_test(lower_phy_tx_pacing_test lower_phy_tx_pacing_test)

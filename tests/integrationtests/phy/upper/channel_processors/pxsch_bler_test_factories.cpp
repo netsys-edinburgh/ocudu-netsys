@@ -183,7 +183,8 @@ ocudu::create_sw_pusch_processor_factory(task_executor&                         
                                          const std::string&                               pxsch_type,
                                          port_channel_estimator_td_interpolation_strategy td_interpolation_strategy,
                                          port_channel_estimator_fd_smoothing_strategy     fd_smoothing_strategy,
-                                         channel_equalizer_algorithm_type                 equalizer_algorithm_type)
+                                         channel_equalizer_algorithm_type                 equalizer_algorithm_type,
+                                         channel_state_information::sinr_type             csi_sinr_calc_method)
 {
   std::shared_ptr<dft_processor_factory> dft_proc_factory = create_dft_processor_factory_fftw_slow();
   report_fatal_error_if_not(dft_proc_factory, "Failed to create factory.");
@@ -224,6 +225,8 @@ ocudu::create_sw_pusch_processor_factory(task_executor&                         
     pusch_decoder_factory_sw_config.executor                  = &executor;
     pusch_decoder_factory_sw_config.nof_prb                   = MAX_NOF_PRBS;
     pusch_decoder_factory_sw_config.nof_layers                = pusch_constants::MAX_NOF_LAYERS;
+    bool enable_gpu_decoder = (pxsch_type == "gpu") || (pxsch_type.find("gpu-decoder") != std::string::npos);
+    pusch_decoder_factory_sw_config.enable_resident_acceleration_decoder = enable_gpu_decoder;
     pusch_dec_factory = create_pusch_decoder_factory_sw(pusch_decoder_factory_sw_config);
 #if defined(HWACC_PDSCH_ENABLED) && defined(HWACC_PUSCH_ENABLED)
   }
@@ -274,14 +277,32 @@ ocudu::create_sw_pusch_processor_factory(task_executor&                         
       create_dft_transform_precoder_factory(dft_proc_factory, MAX_NOF_PRBS);
   report_fatal_error_if_not(precoding_factory, "Invalid transform precoding factory.");
 
-  std::shared_ptr<pusch_demodulator_factory> pusch_demod_factory =
-      create_pusch_demodulator_factory_sw(eq_factory,
-                                          precoding_factory,
-                                          chan_demod_factory,
-                                          evm_calc_factory,
-                                          pseudo_random_gen_factory,
-                                          MAX_NOF_PRBS,
-                                          true);
+  std::shared_ptr<pusch_demodulator_factory> pusch_demod_factory = nullptr;
+  bool enable_gpu_demodulator = (pxsch_type == "gpu") || (pxsch_type.find("gpu-demod") != std::string::npos);
+  if (enable_gpu_demodulator && is_pusch_demodulator_acceleration_available()) {
+    pusch_demodulator_factory_accelerated_configuration gpu_demod_config;
+    gpu_demod_config.equalizer_factory         = eq_factory;
+    gpu_demod_config.precoder_factory          = precoding_factory;
+    gpu_demod_config.demodulation_factory      = chan_demod_factory;
+    gpu_demod_config.evm_calc_factory          = evm_calc_factory;
+    gpu_demod_config.prg_factory               = pseudo_random_gen_factory;
+    gpu_demod_config.max_nof_prb               = MAX_NOF_PRBS;
+    gpu_demod_config.enable_post_eq_sinr       = true;
+    gpu_demod_config.equalizer_algorithm       = equalizer_algorithm_type;
+    gpu_demod_config.compensate_cfo            = compensate_cfo;
+    gpu_demod_config.td_interpolation_strategy = td_interpolation_strategy;
+    pusch_demod_factory                        = create_pusch_demodulator_factory_accelerated(gpu_demod_config);
+  }
+  // Fall back to SW demodulator if GPU is not available or not requested.
+  if (!pusch_demod_factory) {
+    pusch_demod_factory = create_pusch_demodulator_factory_sw(eq_factory,
+                                                              precoding_factory,
+                                                              chan_demod_factory,
+                                                              evm_calc_factory,
+                                                              pseudo_random_gen_factory,
+                                                              MAX_NOF_PRBS,
+                                                              true);
+  }
   report_fatal_error_if_not(pusch_demod_factory, "Failed to create factory.");
 
   std::shared_ptr<ulsch_demultiplex_factory> demux_factory = create_ulsch_demultiplex_factory_sw();
@@ -310,7 +331,7 @@ ocudu::create_sw_pusch_processor_factory(task_executor&                         
   pusch_proc_factory_config.dec_nof_iterations         = nof_ldpc_iterations;
   pusch_proc_factory_config.dec_enable_early_stop      = dec_enable_early_stop;
   pusch_proc_factory_config.max_nof_concurrent_threads = max_nof_threads;
-  pusch_proc_factory_config.csi_sinr_calc_method       = channel_state_information::sinr_type::post_equalization;
+  pusch_proc_factory_config.csi_sinr_calc_method       = csi_sinr_calc_method;
 
   std::shared_ptr<pusch_processor_factory> pusch_proc_factory =
       create_pusch_processor_factory_sw(pusch_proc_factory_config);

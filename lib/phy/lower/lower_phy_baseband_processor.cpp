@@ -9,6 +9,7 @@
 #include "ocudu/instrumentation/traces/ru_traces.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/ran/slot_point_extended.h"
+#include <cstdlib>
 
 using namespace ocudu;
 
@@ -31,6 +32,9 @@ lower_phy_baseband_processor::lower_phy_baseband_processor(const lower_phy_baseb
   discard_buffer(config.nof_rx_ports, config.rx_buffer_size),
   tx_time_offset(config.tx_time_offset),
   rx_to_tx_max_delay(config.rx_to_tx_max_delay),
+  tx_pacing(config.srate,
+            config.rx_to_tx_max_delay,
+            lower_phy_tx_pacing::parse_guard(std::getenv("OCUDU_LOWER_PHY_TX_PACING_GUARD_US"))),
   tx_state(config.stop_nof_slots),
   rx_state(config.stop_nof_slots)
 {
@@ -86,9 +90,26 @@ void lower_phy_baseband_processor::dl_process(baseband_gateway_timestamp timesta
     // - The reception timestamp reaches the desired value;
     // - The system time reaches the maximum waiting time; or
     // - The lower PHY was stopped.
-    while ((timestamp > (last_rx_timestamp.load(std::memory_order_acquire) + rx_to_tx_max_delay)) &&
-           (std::chrono::steady_clock::now() < wait_until_tp)) {
-      std::this_thread::sleep_for(std::chrono::microseconds(10));
+    // The transmission may run ahead of the reception by the receive-to-transmit delay plus the pacing guard, which
+    // OCUDU_LOWER_PHY_TX_PACING_GUARD_US sets.
+    for (;;) {
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= wait_until_tp) {
+        break;
+      }
+
+      lower_phy_tx_pacing::decision decision =
+          tx_pacing.decide(timestamp,
+                           last_rx_timestamp.load(std::memory_order_acquire),
+                           std::chrono::duration_cast<std::chrono::microseconds>(wait_until_tp - now));
+      if (decision.what == lower_phy_tx_pacing::decision::action::transmit) {
+        break;
+      }
+      if (decision.what == lower_phy_tx_pacing::decision::action::sleep) {
+        std::this_thread::sleep_for(decision.sleep_for);
+      } else {
+        std::this_thread::yield();
+      }
     }
   }
 

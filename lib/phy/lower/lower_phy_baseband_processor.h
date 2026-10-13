@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include "lower_phy_tx_pacing.h"
 #include "ocudu/adt/blocking_queue.h"
 #include "ocudu/gateways/baseband/baseband_gateway_receiver.h"
 #include "ocudu/gateways/baseband/baseband_gateway_timestamp.h"
@@ -200,6 +201,7 @@ private:
   baseband_gateway_buffer_dynamic                                   discard_buffer;
   baseband_gateway_timestamp                                        tx_time_offset;
   baseband_gateway_timestamp                                        rx_to_tx_max_delay;
+  lower_phy_tx_pacing                                               tx_pacing;
   baseband_gateway_timestamp                                        start_time_sfn0;
   internal_fsm                                                      tx_state;
   internal_fsm                                                      rx_state;

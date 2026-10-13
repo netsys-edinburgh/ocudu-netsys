@@ -9,7 +9,6 @@
 #include "ocudu/adt/mpmc_queue.h"
 #include "ocudu/adt/unique_function.h"
 #include "ocudu/ocudulog/logger.h"
-#include "ocudu/ocuduvec/copy.h"
 #include "ocudu/ofh/ofh_constants.h"
 #include "ocudu/phy/support/resource_grid.h"
 #include "ocudu/phy/support/resource_grid_context.h"
@@ -19,7 +18,9 @@
 #include "ocudu/ran/cyclic_prefix.h"
 #include "ocudu/ran/resource_allocation/ofdm_symbol_range.h"
 #include "ocudu/ran/resource_block.h"
+#include <memory>
 #include <mutex>
+#include <utility>
 
 namespace ocudu {
 namespace ofh {
@@ -66,6 +67,20 @@ public:
     return (grid.grid) ? (grid.grid.get_reader().get_nof_subc() / NOF_SUBCARRIERS_PER_RB) : 0U;
   }
 
+  /// Returns true if the context resource grid accepts device-resident writes.
+  bool supports_device_grid_mapping() const
+  {
+    return grid.grid && grid.grid.get_writer().supports_device_grid_mapping();
+  }
+
+  /// Returns true when both contexts refer to the same resource-grid reservation.
+  bool refers_to_same_grid(const uplink_context& other) const
+  {
+    return grid.grid && other.grid.grid && (grid.context.slot == other.grid.context.slot) &&
+           (grid.context.sector == other.grid.context.sector) &&
+           (std::addressof(grid.grid.get()) == std::addressof(other.grid.grid.get()));
+  }
+
   /// Returns the resource grid context.
   const resource_grid_context& get_grid_context() const { return grid.context; }
 
@@ -83,9 +98,32 @@ public:
     if (port >= writer.get_nof_ports()) {
       return;
     }
-    span<cbf16_t> grid_view = grid.grid->get_writer().get_view(port, symbol).subspan(start_re, re_iq_buffer.size());
-    ocuduvec::copy(grid_view, re_iq_buffer);
+    writer.put(port, symbol, start_re, 1U, re_iq_buffer);
     re_written[port].fill(start_re, start_re + re_iq_buffer.size());
+  }
+
+  /// Writes the given RE range through a device-capable resource grid writer.
+  template <typename WriteFunc>
+  bool write_grid_device(unsigned port, unsigned start_re, unsigned nof_re, WriteFunc&& write_func)
+  {
+    ocudu_assert(grid.grid, "Invalid resource grid");
+    resource_grid_writer& writer = grid.grid->get_writer();
+
+    if ((port >= writer.get_nof_ports()) || !writer.supports_device_grid_mapping()) {
+      return false;
+    }
+    if (!write_func(writer)) {
+      return false;
+    }
+    re_written[port].fill(start_re, start_re + nof_re);
+    return true;
+  }
+
+  /// Marks a range as written after an out-of-lock device write has been committed to this context.
+  void mark_grid_written(unsigned port, unsigned start_re, unsigned nof_re)
+  {
+    ocudu_assert(port < re_written.size(), "Port index exceeds the number of resource-grid ports");
+    re_written[port].fill(start_re, start_re + nof_re);
   }
 
   /// Tries to get a complete resource grid. A resource grid is considered completed when all the PRBs for all the ports
@@ -155,6 +193,9 @@ class uplink_context_repository
 public:
   explicit uplink_context_repository(unsigned size_) : pending_context_to_add(size_), buffer(size_) {}
 
+  /// Returns the number of slot entries in the bounded repository.
+  unsigned get_nof_slot_entries() const { return buffer.size(); }
+
   /// Adds the given entry to the repository at slot.
   void add(const resource_grid_context& context,
            const shared_resource_grid&  grid,
@@ -162,10 +203,16 @@ public:
            ocudulog::basic_logger&      logger)
   {
     if (!pending_context_to_add.try_push([context, rg = grid.copy(), symbol_range, this]() {
-          std::lock_guard<std::mutex> lock(mutex);
-          for (unsigned symbol_id = symbol_range.start(), symbol_end = symbol_range.stop(); symbol_id != symbol_end;
-               ++symbol_id) {
-            entry(context.slot, symbol_id) = uplink_context(symbol_id, context, rg);
+          // Releasing the last reference to a managed grid can wait for asynchronous device consumers. Keep that
+          // resource lifetime work outside the repository critical section so fronthaul receive tasks can continue.
+          std::array<uplink_context, MAX_NSYMB_PER_SLOT> retired_contexts;
+          {
+            std::lock_guard<std::mutex> lock(mutex);
+            for (unsigned symbol_id = symbol_range.start(), symbol_end = symbol_range.stop(); symbol_id != symbol_end;
+                 ++symbol_id) {
+              retired_contexts[symbol_id]    = std::move(entry(context.slot, symbol_id));
+              entry(context.slot, symbol_id) = uplink_context(symbol_id, context, rg);
+            }
           }
         })) {
       logger.warning("Failed to enqueue task to add the uplink context to the repository");
@@ -186,6 +233,36 @@ public:
   {
     std::lock_guard<std::mutex> lock(mutex);
     entry(slot, symbol).write_grid(port, start_re, re_iq_buffer);
+  }
+
+  /// Writes to the grid at the given slot, port, symbol and RE range using a device-capable writer callback.
+  template <typename WriteFunc>
+  bool write_grid_device(slot_point  slot,
+                         unsigned    port,
+                         unsigned    symbol,
+                         unsigned    start_re,
+                         unsigned    nof_re,
+                         WriteFunc&& write_func)
+  {
+    uplink_context context;
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      context = entry(slot, symbol).copy();
+    }
+
+    // Device mappings may enqueue stream waits for earlier grid producers. They must never run while holding the
+    // repository mutex, otherwise one delayed consumer serializes all O-FH receive and window-check work.
+    if (context.empty() || !context.write_grid_device(port, start_re, nof_re, std::forward<WriteFunc>(write_func))) {
+      return false;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex);
+    uplink_context&             current = entry(slot, symbol);
+    if (!current.refers_to_same_grid(context)) {
+      return false;
+    }
+    current.mark_grid_written(port, start_re, nof_re);
+    return true;
   }
 
   /// Returns the entry of the repository for the given slot and symbol.
@@ -232,18 +309,24 @@ public:
   /// Clears the repository entry for the given slot and symbol.
   void clear(slot_point slot, unsigned symbol)
   {
-    std::lock_guard<std::mutex> lock(mutex);
-    entry(slot, symbol) = {};
+    uplink_context retired_context;
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      retired_context = std::move(entry(slot, symbol));
+    }
   }
 
   /// \brief Clears the whole repository, releasing the ownership of pending shared resource grids.
   void clear()
   {
-    std::lock_guard<std::mutex> lock(mutex);
-
-    for (auto& elem : buffer) {
-      for (auto& symbol : elem) {
-        symbol = {};
+    std::vector<uplink_context> retired_contexts;
+    retired_contexts.reserve(buffer.size() * MAX_NSYMB_PER_SLOT);
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      for (auto& elem : buffer) {
+        for (auto& symbol : elem) {
+          retired_contexts.push_back(std::move(symbol));
+        }
       }
     }
   }

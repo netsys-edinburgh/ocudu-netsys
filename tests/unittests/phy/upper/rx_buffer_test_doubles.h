@@ -8,6 +8,8 @@
 #include "ocudu/adt/tensor.h"
 #include "ocudu/phy/upper/rx_buffer_decoder_callback.h"
 #include "ocudu/phy/upper/unique_rx_buffer.h"
+#include <utility>
+#include <vector>
 
 namespace ocudu {
 
@@ -54,7 +56,26 @@ public:
                              unsigned                    codeblock_id,
                              rx_buffer_decoder_callback& decoder_callback) override
   {
+    if (defer_decode) {
+      pending_decodes.emplace_back(codeblock_id, &decoder_callback);
+      return;
+    }
     decoder_callback.codeblock_decode(codeblock_id);
+  }
+
+  /// \brief Sets whether the codeblock decodes wait for \ref clear_pending_decode, as they do while an earlier
+  /// repetition of a TTI bundle is being decoded.
+  void set_defer_decode(bool defer) { defer_decode = defer; }
+
+  /// Gets the number of codeblock decodes waiting to be cleared.
+  unsigned get_nof_pending_decodes() const { return pending_decodes.size(); }
+
+  /// Clears the oldest codeblock decode waiting.
+  void clear_pending_decode()
+  {
+    auto [codeblock_id, callback] = pending_decodes.front();
+    pending_decodes.erase(pending_decodes.begin());
+    callback->codeblock_decode(codeblock_id);
   }
 
   bool try_lock()
@@ -63,9 +84,23 @@ public:
     return true;
   }
 
-  void unlock(unsigned) override { locked = false; }
+  void unlock(unsigned) override
+  {
+    locked = false;
+    ++nof_unlocks;
+  }
 
-  void release(unsigned) override { locked = false; }
+  void release(unsigned) override
+  {
+    locked = false;
+    ++nof_releases;
+  }
+
+  /// Gets the number of times the buffer was unlocked without releasing it.
+  unsigned get_nof_unlocks() const { return nof_unlocks; }
+
+  /// Gets the number of times the buffer was released.
+  unsigned get_nof_releases() const { return nof_releases; }
 
   /// Clears all counters.
   void clear()
@@ -84,6 +119,11 @@ private:
   unsigned         count       = 0;
   mutable unsigned const_count = 0;
   bool             locked      = false;
+  unsigned         nof_unlocks  = 0;
+  unsigned         nof_releases = 0;
+  bool             defer_decode = false;
+
+  std::vector<std::pair<unsigned, rx_buffer_decoder_callback*>> pending_decodes;
 
   dynamic_tensor<2, log_likelihood_ratio> soft_bits;
   std::vector<dynamic_bit_buffer>         hard_bits;

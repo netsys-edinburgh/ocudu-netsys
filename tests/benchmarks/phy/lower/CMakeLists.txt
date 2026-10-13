@@ -15,3 +15,5 @@ target_link_libraries(pdxch_modulator_benchmark
         ocuduvec
         ocudulog)
 add_test(pdxch_modulator_benchmark pdxch_modulator_benchmark -R 10 -T 2)
+
+add_subdirectory(modulation)

@@ -221,11 +221,19 @@ public:
     count = 0;
   }
 
+  // See interface for documentation.
+  bool supports_device_grid_mapping() const override { return device_grid_mapping; }
+
+  /// Sets whether the writer reports a device grid destination, as a CUDA-visible grid does.
+  void set_supports_device_grid_mapping(bool supported) { device_grid_mapping = supported; }
+
 private:
   /// Defines the maximum allowed error when asserting the resource grid.
   static constexpr float ASSERT_MAX_ERROR = 1e-6;
   /// Counts the number of times a \c put method is called.
   std::atomic<unsigned> count = {0};
+  /// Value reported by supports_device_grid_mapping().
+  bool device_grid_mapping = false;
   /// Maximum number of ports.
   unsigned max_ports;
   /// Maximum number of OFDM symbols.
@@ -472,6 +480,8 @@ public:
 
   void set_all_zero() override { ++set_all_zero_count; }
 
+  bool is_empty() const override { return empty; }
+
   void set_empty(bool empty_) { empty = empty_; }
 
   resource_grid_writer& get_writer() override { return writer; }
@@ -545,6 +555,8 @@ public:
   const resource_grid_reader& get_reader() const override { return reader; }
 
   void set_all_zero() override { ++set_all_zero_count; }
+
+  bool is_empty() const override { return reader.is_empty(); }
 
   unsigned get_reader_writer_count() const { return reader.get_count() + writer.get_count(); }
 

@@ -12,6 +12,7 @@
 #include "ocudu/phy/upper/upper_phy_rx_results_notifier.h"
 #include "ocudu/ran/sch/sch_segmentation.h"
 #include "ocudu/support/rtsan.h"
+#include "ocudu/support/tracing/scoped_trace.h"
 
 using namespace ocudu;
 
@@ -189,15 +190,20 @@ void uplink_processor_impl::process_symbol_pdus(unsigned end_symbol_index)
       pdu_repository.get_pucch_f1_repository(end_symbol_index);
   span<const uplink_pdu_slot_repository::srs_pdu> srs_pdus = pdu_repository.get_srs_pdus(end_symbol_index);
 
-  // If the phy tap is configured, send the UL symbols through the tap interface along with their associated PDUs.
+  // PUSCH first so the GPU reader claims the live grid before any host
+  // snapshot / PUCCH home. Spectrum tap must run AFTER PUSCH: staging the
+  // Class-C snapshot homes the live VA (CPU copy + H2D). Doing that before
+  // PUSCH GPU-loads live is Xid 31 @ 0x140000.
+  for (const auto& pdu : pusch_pdus) {
+    process_pusch(pdu);
+  }
+
   if (ul_tap) {
-    // Extract PUCCH Format 1 common PDU parameters.
     static_vector<pucch_processor::format1_common_configuration, MAX_PUCCH_PDUS_PER_SLOT> pucch_f1_common_configs;
     for (const auto& pucch_f1 : pucch_f1_pdus) {
       pucch_f1_common_configs.push_back(pucch_f1.config.common_config);
     }
-
-    // Send the symbols to the tap plugin for external analysis and processing.
+    (void)grid->get_reader().stage_owned_snapshot_from_host();
     ul_tap->handle_ul_symbol(grid->get_writer(),
                              grid->get_reader(),
                              current_slot,
@@ -208,17 +214,12 @@ void uplink_processor_impl::process_symbol_pdus(unsigned end_symbol_index)
                              srs_pdus);
   }
 
-  // Process each PDU.
   for (const auto& pdu : pucch_pdus) {
     process_pucch(pdu);
   }
 
   for (const auto& collection : pucch_f1_pdus) {
     process_pucch_f1(collection);
-  }
-
-  for (const auto& pdu : pusch_pdus) {
-    process_pusch(pdu);
   }
 
   for (const auto& pdu : srs_pdus) {
@@ -263,6 +264,8 @@ void uplink_processor_impl::process_prach(shared_prach_buffer buffer, const prac
 
 void uplink_processor_impl::process_pusch(const uplink_pdu_slot_repository::pusch_pdu& pdu)
 {
+  auto enqueue_scope = make_scoped_trace(l1_ul_tracer, "L1.UL.PUSCH.enqueue");
+
   auto stop_token = stop_control.get_token();
   if (stop_token.is_stop_requested()) {
     notify_discard_pusch(pdu);
@@ -308,6 +311,8 @@ void uplink_processor_impl::process_pusch(const uplink_pdu_slot_repository::pusc
   // Try to enqueue asynchronous processing.
   bool success =
       task_executors.pusch_executor.defer([this, data, rm_buffer2 = std::move(rm_buffer), &pdu, stop_token]() mutable {
+        auto task_scope = make_scoped_trace(l1_ul_tracer, "L1.UL.PUSCH.task");
+
         // Select and configure notifier adaptor.
         // Assume that count_pusch_adaptors will not exceed MAX_PUSCH_PDUS_PER_SLOT.
         unsigned notifier_adaptor_id = count_pusch_adaptors.fetch_add(1, std::memory_order_acq_rel);
@@ -318,7 +323,10 @@ void uplink_processor_impl::process_pusch(const uplink_pdu_slot_repository::pusc
 
         trace_point tp = l1_ul_tracer.now();
 
-        pusch_proc->process(data, std::move(rm_buffer2), processor_notifier, grid->get_reader(), pdu.pdu);
+        {
+          auto process_scope = make_scoped_trace(l1_ul_tracer, "L1.UL.PUSCH.processor");
+          pusch_proc->process(data, std::move(rm_buffer2), processor_notifier, grid->get_reader(), pdu.pdu);
+        }
 
         l1_ul_tracer << trace_event("process_pusch", tp);
       });
@@ -465,7 +473,14 @@ void uplink_processor_impl::process_srs(const uplink_pdu_slot_repository::srs_pd
 
     l1_ul_tracer << trace_event("process_srs", tp);
 
-    notifier.on_new_srs_results(result);
+    // An estimator that cannot produce an estimate returns an empty channel matrix, for example when no pooled
+    // estimator is free or when the forced GPU path drops it. Like a discarded SRS, it is not reported: the empty
+    // matrix would otherwise reach the scheduler as a measured channel.
+    if (result.processor_result.channel_matrix.get_nof_rx_ports() == 0) {
+      logger.debug(pdu.context.slot.sfn(), pdu.context.slot.slot_index(), "SRS estimate unavailable. Ignoring report.");
+    } else {
+      notifier.on_new_srs_results(result);
+    }
     state_machine.on_finish_processing_pdu();
   });
 

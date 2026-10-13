@@ -452,6 +452,10 @@ if (ENABLE_CUDA)
         LICENSE            "MIT"
         VERSION            ${VkFFT_VERSION}
     )
+    # The accelerated PHY kernels in lib/phy/cuda build with the same toolkit and VkFFT.
+    set(CUDA_FOUND TRUE)
+else (ENABLE_CUDA)
+    set(CUDA_FOUND FALSE)
 endif (ENABLE_CUDA)
 
 # FFTW

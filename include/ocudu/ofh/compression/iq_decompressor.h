@@ -7,8 +7,13 @@
 #include "ocudu/adt/complex.h"
 #include "ocudu/adt/span.h"
 #include "ocudu/ofh/compression/compression_params.h"
+#include "ocudu/ofh/compression/iq_decompression_result.h"
 
 namespace ocudu {
+
+class prach_buffer;
+class resource_grid_writer;
+
 namespace ofh {
 
 /// \brief Describes the IQ data decompressor.
@@ -32,6 +37,106 @@ public:
   /// \return True on success, false if the IQ data could not be decompressed.
   virtual bool
   decompress(span<cbf16_t> iq_data, span<const uint8_t> compressed_data, const ru_compression_params& params) = 0;
+
+  /// Returns true if the decompressor can write directly into a device-capable resource grid.
+  virtual bool supports_resource_grid_decompression() const { return false; }
+
+  /// Returns true if the decompressor can write the given compression format directly into a device-capable resource
+  /// grid. Selectors override this method so that support is checked for the compression format carried by each
+  /// section rather than inferred from an unrelated registered decompressor.
+  virtual bool supports_resource_grid_decompression(const ru_compression_params& params) const
+  {
+    (void)params;
+    return supports_resource_grid_decompression();
+  }
+
+  /// Returns true when direct resource-grid decompression benefits from receiving a complete OFDM symbol per call.
+  virtual bool prefers_full_symbol_decompression(const ru_compression_params& params) const
+  {
+    (void)params;
+    return false;
+  }
+
+  /// Returns true if the decompressor can write directly into a device-capable PRACH buffer.
+  virtual bool supports_prach_buffer_decompression() const { return false; }
+
+  /// Returns true if the decompressor can write the given compression format directly into a device-capable PRACH
+  /// buffer.
+  virtual bool supports_prach_buffer_decompression(const ru_compression_params& params) const
+  {
+    (void)params;
+    return supports_prach_buffer_decompression();
+  }
+
+  /// \brief Decompress received compressed PRBs directly into a resource grid.
+  ///
+  /// The default implementation reports that direct decompression is unsupported and leaves the host path unchanged.
+  ///
+  /// \param[out] grid            Destination resource grid.
+  /// \param[in]  port            Resource-grid port index.
+  /// \param[in]  symbol          OFDM symbol index.
+  /// \param[in]  start_prb       First destination PRB.
+  /// \param[in]  nof_prbs        Number of PRBs to decompress.
+  /// \param[in]  compressed_data Received compressed IQ payload and compression parameters.
+  /// \param[in]  params          Compression parameters.
+  /// \return Structured result describing whether the operation completed and, on failure, why it did not.
+  virtual iq_decompression_result decompress_to_resource_grid(resource_grid_writer&        grid,
+                                                              unsigned                     port,
+                                                              unsigned                     symbol,
+                                                              unsigned                     start_prb,
+                                                              unsigned                     nof_prbs,
+                                                              span<const uint8_t>          compressed_data,
+                                                              const ru_compression_params& params)
+  {
+    (void)grid;
+    (void)port;
+    (void)symbol;
+    (void)start_prb;
+    (void)nof_prbs;
+    (void)compressed_data;
+    (void)params;
+    return iq_decompression_result::unsupported;
+  }
+
+  /// \brief Decompress received compressed PRBs directly into a PRACH buffer.
+  ///
+  /// \param[out] buffer          Destination PRACH buffer.
+  /// \param[in]  port            PRACH receive port index.
+  /// \param[in]  td_occasion     PRACH time-domain occasion index.
+  /// \param[in]  fd_occasion     PRACH frequency-domain occasion index.
+  /// \param[in]  symbol          PRACH symbol index within the occasion.
+  /// \param[in]  start_re        First destination RE in the PRACH symbol.
+  /// \param[in]  input_start_re  First compressed-payload RE to consume.
+  /// \param[in]  nof_re          Number of RE to decompress.
+  /// \param[in]  nof_prbs        Number of PRBs represented by the compressed payload.
+  /// \param[in]  compressed_data Received compressed IQ payload and compression parameters.
+  /// \param[in]  params          Compression parameters.
+  /// \return Structured result describing whether the operation completed and, on failure, why it did not.
+  virtual iq_decompression_result decompress_to_prach_buffer(prach_buffer&                buffer,
+                                                             unsigned                     port,
+                                                             unsigned                     td_occasion,
+                                                             unsigned                     fd_occasion,
+                                                             unsigned                     symbol,
+                                                             unsigned                     start_re,
+                                                             unsigned                     input_start_re,
+                                                             unsigned                     nof_re,
+                                                             unsigned                     nof_prbs,
+                                                             span<const uint8_t>          compressed_data,
+                                                             const ru_compression_params& params)
+  {
+    (void)buffer;
+    (void)port;
+    (void)td_occasion;
+    (void)fd_occasion;
+    (void)symbol;
+    (void)start_re;
+    (void)input_start_re;
+    (void)nof_re;
+    (void)nof_prbs;
+    (void)compressed_data;
+    (void)params;
+    return iq_decompression_result::unsupported;
+  }
 };
 
 } // namespace ofh

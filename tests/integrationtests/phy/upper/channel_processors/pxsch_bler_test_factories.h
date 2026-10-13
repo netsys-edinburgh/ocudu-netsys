@@ -41,6 +41,8 @@ create_sw_pusch_processor_factory(task_executor&                                
                                   const std::string&                               pxsch_type,
                                   port_channel_estimator_td_interpolation_strategy td_interpolation_strategy,
                                   port_channel_estimator_fd_smoothing_strategy     fd_smoothing_strategy,
-                                  channel_equalizer_algorithm_type                 equalizer_algorithm_type);
+                                  channel_equalizer_algorithm_type                 equalizer_algorithm_type,
+                                  channel_state_information::sinr_type             csi_sinr_calc_method =
+                                      channel_state_information::sinr_type::post_equalization);
 
 } // namespace ocudu

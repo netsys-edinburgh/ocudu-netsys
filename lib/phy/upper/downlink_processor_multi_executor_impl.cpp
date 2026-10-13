@@ -4,6 +4,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "downlink_processor_multi_executor_impl.h"
+#include "pdsch_grid_output_strategy.h"
 #include "ocudu/adt/format.h"
 #include "ocudu/instrumentation/traces/du_traces.h"
 #include "ocudu/ocudulog/ocudulog.h"
@@ -16,6 +17,7 @@
 #include "ocudu/support/executors/task_executor.h"
 #include "ocudu/support/ocudu_assert.h"
 #include "ocudu/support/rtsan.h"
+#include "ocudu/support/tracing/scoped_trace.h"
 
 using namespace ocudu;
 
@@ -31,7 +33,8 @@ downlink_processor_multi_executor_impl::downlink_processor_multi_executor_impl(
     task_executor&                        ssb_executor_,
     task_executor&                        csi_rs_executor_,
     task_executor&                        prs_executor_,
-    ocudulog::basic_logger&               logger_) :
+    ocudulog::basic_logger&               logger_,
+    bool                                  use_pdsch_device_grid_writer_) :
   gateway(gateway_),
   pdcch_proc(std::move(pdcch_proc_)),
   pdsch_proc(std::move(pdsch_proc_)),
@@ -44,6 +47,7 @@ downlink_processor_multi_executor_impl::downlink_processor_multi_executor_impl(
   csi_rs_executor(csi_rs_executor_),
   prs_executor(prs_executor_),
   logger(logger_),
+  pdsch_grid_output(create_pdsch_grid_output_strategy(logger_, use_pdsch_device_grid_writer_)),
   pdsch_notifier(*this)
 {
   ocudu_assert(pdcch_proc, "Invalid PDCCH processor received.");
@@ -52,6 +56,8 @@ downlink_processor_multi_executor_impl::downlink_processor_multi_executor_impl(
   ocudu_assert(csi_rs_proc, "Invalid CSI-RS processor received.");
   ocudu_assert(prs_gen, "Invalid PRS generator received.");
 }
+
+downlink_processor_multi_executor_impl::~downlink_processor_multi_executor_impl() = default;
 
 void downlink_processor_multi_executor_impl::process_pdcch(const pdcch_processor::pdu_t& pdu)
 {
@@ -89,6 +95,8 @@ void downlink_processor_multi_executor_impl::process_pdsch(
     static_vector<shared_transport_block, pdsch_processor::MAX_NOF_TRANSPORT_BLOCKS> data_,
     const pdsch_processor::pdu_t&                                                    pdu)
 {
+  auto enqueue_scope = make_scoped_trace(l1_dl_tracer, "L1.DL.PDSCH.enqueue");
+
   // Notify to the state the creation of a new task.
   state.on_task_creation();
 
@@ -97,11 +105,14 @@ void downlink_processor_multi_executor_impl::process_pdsch(
 
   // Try to enqueue the PDU processing task.
   bool enqueued = pdsch_executor.defer([this, &pdsch_args]() mutable noexcept OCUDU_RTSAN_NONBLOCKING {
+    auto task_scope = make_scoped_trace(l1_dl_tracer, "L1.DL.PDSCH.task");
+
     trace_point process_pdsch_tp = l1_dl_tracer.now();
 
     // Do not execute if the grid is not available.
     if (current_grid) {
-      pdsch_proc->process(current_grid.get_writer(), pdsch_notifier, std::move(pdsch_args.data), pdsch_args.pdu);
+      resource_grid_writer* writer = &pdsch_grid_output->get_pdsch_writer(current_grid);
+      pdsch_proc->process(*writer, pdsch_notifier, std::move(pdsch_args.data), pdsch_args.pdu);
 
       l1_dl_tracer << trace_event("process_pdsch", process_pdsch_tp);
     } else {
@@ -225,6 +236,8 @@ unique_downlink_processor
 downlink_processor_multi_executor_impl::configure_resource_grid(const resource_grid_context& context,
                                                                 shared_resource_grid         grid)
 {
+  auto scope = make_scoped_trace(l1_dl_tracer, "L1.DL.configure_resource_grid");
+
   // Try to reserve the downlink processor.
   if (!state.reserve_on_resource_grid_configure()) {
     // Return an invalid downlink processor if the downlink processor is not available.
@@ -235,6 +248,7 @@ downlink_processor_multi_executor_impl::configure_resource_grid(const resource_g
 
   current_grid = std::move(grid);
   rg_context   = context;
+  pdsch_grid_output->configure(context, current_grid);
 
   // Clear temporary transmission PDUs and configurations.
   pdcch_list.clear();
@@ -250,6 +264,8 @@ downlink_processor_multi_executor_impl::configure_resource_grid(const resource_g
 
 void downlink_processor_multi_executor_impl::finish_processing_pdus()
 {
+  auto scope = make_scoped_trace(l1_dl_tracer, "L1.DL.finish_processing_pdus");
+
   l1_dl_tracer << instant_trace_event("finish_processing_pdus", instant_trace_event::cpu_scope::thread);
 
   // Notify that no more PDUs will be enqueued. The grid will be sent right away if the current state allows it.
@@ -260,11 +276,20 @@ void downlink_processor_multi_executor_impl::finish_processing_pdus()
 
 void downlink_processor_multi_executor_impl::send_resource_grid()
 {
+  auto scope = make_scoped_trace(l1_dl_tracer, "L1.DL.send_resource_grid");
+
   l1_dl_tracer << instant_trace_event("send_resource_grid", instant_trace_event::cpu_scope::global);
 
   // Send the resource grid if available.
   if (current_grid.is_valid()) {
-    gateway.send(rg_context, std::move(current_grid));
+    {
+      auto materialize_scope = make_scoped_trace(l1_dl_tracer, "L1.DL.PDSCH.grid_output_before_send");
+      pdsch_grid_output->before_send_grid();
+    }
+    {
+      auto gateway_scope = make_scoped_trace(l1_dl_tracer, "L1.DL.gateway_send");
+      gateway.send(rg_context, std::move(current_grid));
+    }
   }
 
   // Notify the resource grid sent.

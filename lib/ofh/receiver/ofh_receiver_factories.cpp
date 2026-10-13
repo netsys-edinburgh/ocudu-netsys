@@ -13,18 +13,37 @@
 #include "ocudu/ofh/ecpri/ecpri_factories.h"
 #include "ocudu/ofh/ethernet/ethernet_factories.h"
 #include "ocudu/ofh/serdes/ofh_serdes_factories.h"
+#include <algorithm>
 
 using namespace ocudu;
 using namespace ofh;
 
 static std::unique_ptr<uplane_message_decoder> create_uplane_decoder(const receiver_config&       receiver_cfg,
                                                                      ocudulog::basic_logger&      logger,
-                                                                     const ru_compression_params& compr_params)
+                                                                     const ru_compression_params& compr_params,
+                                                                     unsigned                     max_nof_ports)
 {
+  const unsigned nof_symbols_per_slot = get_nsymb_per_slot(receiver_cfg.cp);
+  // Direct CUDA writes remain ordered behind earlier users of the destination grid. Reserve enough handles for one
+  // complete slot or every symbol in the accepted receive window, whichever is larger, so a bounded late burst cannot
+  // force a host codec or a realtime CUDA allocation while those streams drain.
+  const unsigned receive_window_symbols =
+      (receiver_cfg.rx_timing_params.sym_end >= receiver_cfg.rx_timing_params.sym_start)
+          ? receiver_cfg.rx_timing_params.sym_end - receiver_cfg.rx_timing_params.sym_start + 1U
+          : nof_symbols_per_slot;
+  const size_t max_nof_concurrent_operations =
+      static_cast<size_t>(max_nof_ports) * std::max(nof_symbols_per_slot, receive_window_symbols);
+
   // Compressors.
   std::array<std::unique_ptr<iq_decompressor>, NOF_COMPRESSION_TYPES_SUPPORTED> decompr;
   for (unsigned i = 0; i != NOF_COMPRESSION_TYPES_SUPPORTED; ++i) {
-    decompr[i] = create_iq_decompressor(static_cast<compression_type>(i), logger);
+    decompr[i] = create_iq_decompressor(
+        static_cast<compression_type>(i),
+        logger,
+        receiver_cfg.compression_acceleration_mode,
+        iq_decompressor_preallocation_config{.max_nof_ports                 = max_nof_ports,
+                                             .max_nof_symbols               = nof_symbols_per_slot,
+                                             .max_nof_concurrent_operations = max_nof_concurrent_operations});
   }
 
   frequency_range freq_range =
@@ -63,13 +82,17 @@ create_uplink_prach_data_flow(const receiver_config&                            
   config.prach_eaxcs               = receiver_cfg.prach_eaxc;
   config.sector                    = receiver_cfg.sector;
   config.are_metrics_enabled       = receiver_cfg.are_metrics_enabled;
+  config.host_decompression        = receiver_cfg.compression_acceleration_mode == "enabled"
+                                         ? host_decompression_policy::forbid
+                                         : host_decompression_policy::allow;
 
   data_flow_uplane_uplink_prach_impl_dependencies dependencies;
   dependencies.logger                    = &logger;
   dependencies.notifier                  = std::move(notifier);
   dependencies.prach_cplane_context_repo = std::move(prach_cp_context_repo);
   dependencies.prach_context_repo        = std::move(prach_context_repo);
-  dependencies.uplane_decoder = create_uplane_decoder(receiver_cfg, logger, receiver_cfg.prach_compression_params);
+  dependencies.uplane_decoder            = create_uplane_decoder(
+      receiver_cfg, logger, receiver_cfg.prach_compression_params, receiver_cfg.prach_eaxc.size());
 
   return std::make_unique<data_flow_uplane_uplink_prach_impl>(config, std::move(dependencies));
 }
@@ -85,13 +108,17 @@ create_uplink_data_flow(const receiver_config&                            receiv
   config.ul_eaxc             = receiver_cfg.ul_eaxc;
   config.sector              = receiver_cfg.sector;
   config.are_metrics_enabled = receiver_cfg.are_metrics_enabled;
+  config.host_decompression  = receiver_cfg.compression_acceleration_mode == "enabled"
+                                   ? host_decompression_policy::forbid
+                                   : host_decompression_policy::allow;
 
   data_flow_uplane_uplink_data_impl_dependencies dependencies;
   dependencies.logger                 = &logger;
   dependencies.notifier               = std::move(notifier);
   dependencies.ul_cplane_context_repo = std::move(ul_cp_context_repo);
   dependencies.ul_context_repo        = std::move(ul_slot_context_repo);
-  dependencies.uplane_decoder         = create_uplane_decoder(receiver_cfg, logger, receiver_cfg.ul_compression_params);
+  dependencies.uplane_decoder =
+      create_uplane_decoder(receiver_cfg, logger, receiver_cfg.ul_compression_params, receiver_cfg.ul_eaxc.size());
 
   return std::make_unique<data_flow_uplane_uplink_data_impl>(config, std::move(dependencies));
 }
