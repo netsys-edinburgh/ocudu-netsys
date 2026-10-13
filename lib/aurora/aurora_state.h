@@ -103,6 +103,40 @@ struct stat_acc {
   }
 };
 
+/// One F1AP elementary procedure (request / response).
+struct f1c_proc_acc {
+  std::atomic<uint32_t> attempts{0}, success{0}, failure{0};
+  stat_acc              latency_us;
+};
+
+/// F1AP request waiting for its outcome, for latency and timeout accounting.
+struct f1c_pending_request {
+  bool     valid    = false;
+  unsigned proc     = 0;
+  uint64_t key      = 0;
+  uint64_t start_ns = 0;
+};
+
+/// F1-C (F1AP) interface accumulators. Index 0 = DL (CU-CP -> DU), 1 = UL.
+struct f1c_acc {
+  std::array<std::atomic<uint64_t>, 2> msgs{}, bytes{}, rrc_msgs{}, rrc_bytes{};
+  std::array<std::atomic<uint32_t>, 2> bytes_max{};
+  std::atomic<uint32_t>                decode_errors{0}, init_ul_rrc{0}, paging{0}, ue_ctx_release_req{0}, resets{0},
+      error_indications{0}, timeouts{0};
+  std::atomic<uint32_t> links_up{0};
+  /// Request/response procedures: F1 Setup, UE Context Setup, Modification and Release.
+  std::array<f1c_proc_acc, 4> procs;
+
+  static constexpr unsigned                   max_pending = 128;
+  std::mutex                                  pending_mutex; ///< F1-C is low rate; hooks run on control executors.
+  std::array<f1c_pending_request, max_pending> pending;
+};
+
+/// F1-U (NR-U) interface accumulators, indexed by f1u_event.
+struct f1u_acc {
+  std::array<std::atomic<uint64_t>, static_cast<unsigned>(f1u_event::nof_events)> events{};
+};
+
 struct flow_acc {
   std::atomic<uint64_t> bytes{0};
   hist_acc              hist;
@@ -220,6 +254,9 @@ struct global_state {
   std::atomic<uint32_t>                    ho_prep_attempts{0}, ho_prep_success{0};
   std::atomic<uint32_t>                    ho_prep_attempts_total{0}, ho_prep_success_total{0};
   std::atomic<uint64_t>                 gtp_unknown_teid{0};
+
+  f1c_acc f1c;
+  f1u_acc f1u;
 
   std::array<mac_ue_acc, max_nof_ues>                                  mac_ues;
   /// Sink for per-UE updates of grants whose UE slot is not owned (never published).

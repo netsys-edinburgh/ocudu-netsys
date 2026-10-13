@@ -214,6 +214,71 @@ void on_du_count(unsigned nof_dus) noexcept;
 void on_serving_cell_rsrq(float rsrq_db) noexcept;
 
 // ---------------------------------------------------------------------------------------------------------------------
+// F1-C (F1AP) hooks, called by the F1-C gateways for every F1AP message, once per process.
+// ---------------------------------------------------------------------------------------------------------------------
+
+/// Message direction on the F1 interface: DL is CU-CP -> DU, UL is DU -> CU-CP.
+enum class f1c_dir : unsigned { dl = 0, ul = 1 };
+
+/// F1AP elementary procedures AURORA tells apart. Everything else is counted as other.
+enum class f1c_proc : unsigned {
+  f1_setup = 0,          ///< F1 Setup (DU -> CU-CP request).
+  ue_ctx_setup,          ///< UE Context Setup (CU-CP -> DU request).
+  ue_ctx_mod,            ///< UE Context Modification (CU-CP -> DU request).
+  ue_ctx_release,        ///< UE Context Release Command / Complete.
+  ue_ctx_release_req,    ///< UE Context Release Request (DU -> CU-CP).
+  init_ul_rrc,           ///< Initial UL RRC Message Transfer (new UE).
+  ul_rrc,                ///< UL RRC Message Transfer.
+  dl_rrc,                ///< DL RRC Message Transfer.
+  paging,                ///< Paging (CU-CP -> DU).
+  reset,                 ///< F1 Reset.
+  error_indication,      ///< Error Indication.
+  other,
+  nof_procs
+};
+
+/// Kind of F1AP PDU.
+enum class f1c_outcome : unsigned { initiating = 0, successful, unsuccessful };
+
+struct f1c_msg_info {
+  f1c_dir     dir     = f1c_dir::dl;
+  f1c_proc    proc    = f1c_proc::other;
+  f1c_outcome outcome = f1c_outcome::initiating;
+  /// Request/response matching key: gNB-CU UE F1AP ID for UE-associated procedures, transaction ID otherwise.
+  std::optional<uint64_t> key;
+  /// Encoded (APER) size of the F1AP PDU.
+  uint32_t nof_bytes = 0;
+};
+
+void on_f1c_message(const f1c_msg_info& msg) noexcept;
+/// Received F1AP PDU that could not be decoded.
+void on_f1c_decode_error(f1c_dir dir) noexcept;
+/// F1 link established (F1 Setup Response sent/received) or closed.
+void on_f1c_link_up() noexcept;
+void on_f1c_link_down() noexcept;
+
+// ---------------------------------------------------------------------------------------------------------------------
+// F1-U (NR-U) hooks.
+// ---------------------------------------------------------------------------------------------------------------------
+
+/// Side of the F1-U bearer reporting an event. In a co-located gNB both sides exist; to count every NR-U PDU once,
+/// DU-side events only count in a DU-only process, CU-UP-side events in every process with a CU-UP.
+enum class f1u_side : unsigned { cu_up = 0, du };
+
+enum class f1u_event : unsigned {
+  dl_pdu = 0,  ///< NR-U DL PDU sent by the CU-UP / received by the DU.
+  ul_pdu,      ///< NR-U UL PDU received by the CU-UP / sent by the DU.
+  dl_dropped,  ///< DL PDU dropped in F1-U.
+  ul_dropped,  ///< UL PDU dropped in F1-U.
+  dl_discard,  ///< PDCP SDU discard requested towards the DU.
+  dds,         ///< DL Data Delivery Status handled (CU-UP) / sent (DU).
+  dds_failure, ///< DL Data Delivery Status that could not be handled.
+  nof_events
+};
+
+void on_f1u_event(f1u_side side, f1u_event event, uint32_t count = 1) noexcept;
+
+// ---------------------------------------------------------------------------------------------------------------------
 // RLC bearer hooks (DU, gNB). Group 13.
 // ---------------------------------------------------------------------------------------------------------------------
 

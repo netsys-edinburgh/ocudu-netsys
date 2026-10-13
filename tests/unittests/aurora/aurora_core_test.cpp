@@ -288,6 +288,85 @@ TEST_F(aurora_core_test, rc_cell_load_is_rounded_and_interference_unknown_withou
   EXPECT_EQ(light.rc_metrics[0].interference_level, 0U);
 }
 
+TEST_F(aurora_core_test, f1c_messages_are_counted_per_direction_and_procedure)
+{
+  auto msg = [](f1c_dir dir, f1c_proc proc, f1c_outcome outcome, std::optional<uint64_t> key, uint32_t bytes) {
+    f1c_msg_info info;
+    info.dir       = dir;
+    info.proc      = proc;
+    info.outcome   = outcome;
+    info.key       = key;
+    info.nof_bytes = bytes;
+    return info;
+  };
+  on_f1c_message(msg(f1c_dir::ul, f1c_proc::f1_setup, f1c_outcome::initiating, 0, 300));
+  on_f1c_message(msg(f1c_dir::dl, f1c_proc::f1_setup, f1c_outcome::successful, 0, 100));
+  on_f1c_link_up();
+  on_f1c_message(msg(f1c_dir::ul, f1c_proc::init_ul_rrc, f1c_outcome::initiating, std::nullopt, 80));
+  on_f1c_message(msg(f1c_dir::dl, f1c_proc::dl_rrc, f1c_outcome::initiating, std::nullopt, 60));
+  on_f1c_message(msg(f1c_dir::ul, f1c_proc::ul_rrc, f1c_outcome::initiating, std::nullopt, 40));
+  // UE 7: setup succeeds; UE 8: setup fails; UE 9: modification never answered.
+  on_f1c_message(msg(f1c_dir::dl, f1c_proc::ue_ctx_setup, f1c_outcome::initiating, 7, 500));
+  on_f1c_message(msg(f1c_dir::dl, f1c_proc::ue_ctx_setup, f1c_outcome::initiating, 8, 500));
+  on_f1c_message(msg(f1c_dir::ul, f1c_proc::ue_ctx_setup, f1c_outcome::successful, 7, 200));
+  on_f1c_message(msg(f1c_dir::ul, f1c_proc::ue_ctx_setup, f1c_outcome::unsuccessful, 8, 50));
+  on_f1c_message(msg(f1c_dir::dl, f1c_proc::ue_ctx_mod, f1c_outcome::initiating, 9, 120));
+  on_f1c_message(msg(f1c_dir::ul, f1c_proc::ue_ctx_release_req, f1c_outcome::initiating, 9, 30));
+  on_f1c_decode_error(f1c_dir::ul);
+
+  const aurora_metrics& r = publish();
+  EXPECT_EQ(r.f1c_dl_msgs, 5U);
+  EXPECT_EQ(r.f1c_ul_msgs, 6U);
+  EXPECT_EQ(r.f1c_dl_bytes, 1280U);
+  EXPECT_EQ(r.f1c_ul_bytes, 700U);
+  EXPECT_EQ(r.f1c_dl_bytes_max, 500U);
+  EXPECT_EQ(r.f1c_ul_bytes_max, 300U);
+  EXPECT_EQ(r.f1c_dl_rrc_msgs, 1U);
+  EXPECT_EQ(r.f1c_ul_rrc_bytes, 40U);
+  EXPECT_EQ(r.f1c_init_ul_rrc, 1U);
+  EXPECT_EQ(r.f1c_ue_ctx_release_req, 1U);
+  EXPECT_EQ(r.f1c_decode_errors, 1U);
+  EXPECT_EQ(r.f1c_links_up, 1U);
+  EXPECT_EQ(r.f1c_f1_setup.attempts, 1U);
+  EXPECT_EQ(r.f1c_f1_setup.success, 1U);
+  EXPECT_EQ(r.f1c_ue_ctx_setup.attempts, 2U);
+  EXPECT_EQ(r.f1c_ue_ctx_setup.success, 1U);
+  EXPECT_EQ(r.f1c_ue_ctx_setup.failure, 1U);
+  EXPECT_EQ(r.f1c_ue_ctx_mod.attempts, 1U);
+  EXPECT_EQ(r.f1c_ue_ctx_mod.success + r.f1c_ue_ctx_mod.failure, 0U);
+  // Not old enough to time out yet.
+  EXPECT_EQ(r.f1c_proc_timeouts, 0U);
+
+  // Interval counters restart, the link gauge stays.
+  const aurora_metrics& r2 = publish();
+  EXPECT_EQ(r2.f1c_dl_msgs, 0U);
+  EXPECT_EQ(r2.f1c_ue_ctx_setup.attempts, 0U);
+  EXPECT_EQ(r2.f1c_links_up, 1U);
+  on_f1c_link_down();
+  on_f1c_link_down();
+  EXPECT_EQ(publish().f1c_links_up, 0U);
+}
+
+TEST_F(aurora_core_test, f1u_events_count_once_in_a_gnb)
+{
+  // A gNB has a CU-UP: CU-UP side events count, DU side events (the same PDUs seen by the DU) do not.
+  on_f1u_event(f1u_side::cu_up, f1u_event::dl_pdu, 3);
+  on_f1u_event(f1u_side::du, f1u_event::dl_pdu, 3);
+  on_f1u_event(f1u_side::cu_up, f1u_event::ul_pdu);
+  on_f1u_event(f1u_side::cu_up, f1u_event::dl_discard, 2);
+  on_f1u_event(f1u_side::cu_up, f1u_event::dds);
+  on_f1u_event(f1u_side::cu_up, f1u_event::dds_failure);
+  on_f1u_event(f1u_side::cu_up, f1u_event::ul_dropped);
+  const aurora_metrics& r = publish();
+  EXPECT_EQ(r.f1u_dl_pdus, 3U);
+  EXPECT_EQ(r.f1u_ul_pdus, 1U);
+  EXPECT_EQ(r.f1u_dl_discards, 2U);
+  EXPECT_EQ(r.f1u_dds, 1U);
+  EXPECT_EQ(r.f1u_dds_failures, 1U);
+  EXPECT_EQ(r.f1u_ul_dropped, 1U);
+  EXPECT_EQ(r.f1u_dl_dropped, 0U);
+}
+
 TEST_F(aurora_core_test, ue_removal_frees_slot)
 {
   on_ue_created(4, 0x4604);

@@ -764,3 +764,163 @@ void aurora::gtp_tx_latency(unsigned ue_index, unsigned tunnel_index, uint64_t p
     add(t->latency_count, 1U);
   }
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// F1-C (F1AP).
+// ---------------------------------------------------------------------------------------------------------------------
+
+namespace {
+
+/// Index in f1c_acc::procs of the request/response procedures, -1 for the others.
+int f1c_proc_index(f1c_proc proc)
+{
+  switch (proc) {
+    case f1c_proc::f1_setup:
+      return 0;
+    case f1c_proc::ue_ctx_setup:
+      return 1;
+    case f1c_proc::ue_ctx_mod:
+      return 2;
+    case f1c_proc::ue_ctx_release:
+      return 3;
+    default:
+      return -1;
+  }
+}
+
+void f1c_track_request(f1c_acc& f, unsigned proc, uint64_t key, uint64_t now_ns)
+{
+  std::lock_guard<std::mutex> lock(f.pending_mutex);
+  f1c_pending_request*        free_entry = nullptr;
+  for (f1c_pending_request& p : f.pending) {
+    if (p.valid && p.proc == proc && p.key == key) {
+      // Repeated request: restart the measurement.
+      p.start_ns = now_ns;
+      return;
+    }
+    if (!p.valid && free_entry == nullptr) {
+      free_entry = &p;
+    }
+  }
+  // When the table is full the request is not timed.
+  if (free_entry != nullptr) {
+    *free_entry = {true, proc, key, now_ns};
+  }
+}
+
+std::optional<uint64_t> f1c_complete_request(f1c_acc& f, unsigned proc, uint64_t key, uint64_t now_ns)
+{
+  std::lock_guard<std::mutex> lock(f.pending_mutex);
+  for (f1c_pending_request& p : f.pending) {
+    if (p.valid && p.proc == proc && p.key == key) {
+      p.valid = false;
+      return now_ns >= p.start_ns ? now_ns - p.start_ns : 0;
+    }
+  }
+  return std::nullopt;
+}
+
+} // namespace
+
+void aurora::on_f1c_message(const f1c_msg_info& msg) noexcept
+{
+  global_state* s = st();
+  if (s == nullptr) {
+    return;
+  }
+  f1c_acc&       f = s->f1c;
+  const unsigned d = static_cast<unsigned>(msg.dir);
+  add(f.msgs[d], uint64_t{1});
+  add(f.bytes[d], uint64_t{msg.nof_bytes});
+  atomic_max(f.bytes_max[d], msg.nof_bytes);
+
+  const bool initiating = msg.outcome == f1c_outcome::initiating;
+  switch (msg.proc) {
+    case f1c_proc::ul_rrc:
+    case f1c_proc::dl_rrc:
+      add(f.rrc_msgs[d], uint64_t{1});
+      add(f.rrc_bytes[d], uint64_t{msg.nof_bytes});
+      break;
+    case f1c_proc::init_ul_rrc:
+      add(f.init_ul_rrc, 1U);
+      break;
+    case f1c_proc::paging:
+      add(f.paging, 1U);
+      break;
+    case f1c_proc::ue_ctx_release_req:
+      add(f.ue_ctx_release_req, 1U);
+      break;
+    case f1c_proc::reset:
+      if (initiating) {
+        add(f.resets, 1U);
+      }
+      break;
+    case f1c_proc::error_indication:
+      add(f.error_indications, 1U);
+      break;
+    default:
+      break;
+  }
+
+  const int p = f1c_proc_index(msg.proc);
+  if (p < 0) {
+    return;
+  }
+  f1c_proc_acc&  pa  = f.procs[p];
+  const uint64_t now = monotonic_ns();
+  if (initiating) {
+    add(pa.attempts, 1U);
+    if (msg.key) {
+      f1c_track_request(f, unsigned(p), *msg.key, now);
+    }
+    return;
+  }
+  add(msg.outcome == f1c_outcome::successful ? pa.success : pa.failure, 1U);
+  if (msg.key) {
+    if (std::optional<uint64_t> latency_ns = f1c_complete_request(f, unsigned(p), *msg.key, now)) {
+      pa.latency_us.record(uint32_t(std::min<uint64_t>(*latency_ns / 1000U, u32_max)));
+    }
+  }
+}
+
+void aurora::on_f1c_decode_error(f1c_dir /* dir */) noexcept
+{
+  if (global_state* s = st()) {
+    add(s->f1c.decode_errors, 1U);
+  }
+}
+
+void aurora::on_f1c_link_up() noexcept
+{
+  if (global_state* s = st()) {
+    add(s->f1c.links_up, 1U);
+  }
+}
+
+void aurora::on_f1c_link_down() noexcept
+{
+  if (global_state* s = st()) {
+    uint32_t cur = s->f1c.links_up.load(std::memory_order_relaxed);
+    while (cur != 0 && !s->f1c.links_up.compare_exchange_weak(cur, cur - 1, std::memory_order_relaxed)) {
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// F1-U (NR-U).
+// ---------------------------------------------------------------------------------------------------------------------
+
+void aurora::on_f1u_event(f1u_side side, f1u_event event, uint32_t count) noexcept
+{
+  global_state* s = st();
+  if (s == nullptr || event >= f1u_event::nof_events) {
+    return;
+  }
+  // Count every NR-U PDU once: on the CU-UP side when this process has a CU-UP, on the DU side otherwise.
+  const ran_type t         = s->cfg.type;
+  const bool     has_cu_up = t == ran_type::gnb || t == ran_type::cu || t == ran_type::cu_up;
+  if (side == f1u_side::du && has_cu_up) {
+    return;
+  }
+  add(s->f1u.events[static_cast<unsigned>(event)], uint64_t{count});
+}

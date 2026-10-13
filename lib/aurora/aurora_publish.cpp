@@ -11,6 +11,7 @@
 
 #include "aurora_state.h"
 #include <cstring>
+#include <mutex>
 #include <algorithm>
 #include <cmath>
 #include <ctime>
@@ -577,6 +578,66 @@ void publish_handover_ext(aurora_metrics_ext& x, global_state& st)
   x.ho_prep_success_total  = get(st.ho_prep_success_total);
 }
 
+void publish_f1c_proc(aurora_f1c_proc_stats_t& out, f1c_proc_acc& acc)
+{
+  out.attempts           = take(acc.attempts);
+  out.success            = take(acc.success);
+  out.failure            = take(acc.failure);
+  const drained_stat lat = drain(acc.latency_us);
+  out.latency_max_us     = lat.max_val;
+  out.latency_avg_us     = lat.count != 0 ? lat.avg() : 0;
+}
+
+void publish_f1(aurora_metrics& m, global_state& st)
+{
+  f1c_acc& f          = st.f1c;
+  m.f1c_dl_msgs       = take(f.msgs[0]);
+  m.f1c_ul_msgs       = take(f.msgs[1]);
+  m.f1c_dl_bytes      = take(f.bytes[0]);
+  m.f1c_ul_bytes      = take(f.bytes[1]);
+  m.f1c_dl_bytes_max  = take(f.bytes_max[0]);
+  m.f1c_ul_bytes_max  = take(f.bytes_max[1]);
+  m.f1c_dl_rrc_msgs   = take(f.rrc_msgs[0]);
+  m.f1c_ul_rrc_msgs   = take(f.rrc_msgs[1]);
+  m.f1c_dl_rrc_bytes  = take(f.rrc_bytes[0]);
+  m.f1c_ul_rrc_bytes  = take(f.rrc_bytes[1]);
+  m.f1c_decode_errors = take(f.decode_errors);
+  m.f1c_init_ul_rrc   = take(f.init_ul_rrc);
+  m.f1c_paging        = take(f.paging);
+  m.f1c_ue_ctx_release_req = take(f.ue_ctx_release_req);
+  m.f1c_resets             = take(f.resets);
+  m.f1c_error_indications  = take(f.error_indications);
+  m.f1c_links_up           = get(f.links_up);
+
+  // Requests left without outcome for too long count as timeouts and stop being tracked.
+  {
+    const uint64_t              now_ns     = monotonic_ns();
+    const uint64_t              timeout_ns = uint64_t{AURORA_F1C_PROC_TIMEOUT_MS} * 1000000U;
+    std::lock_guard<std::mutex> lock(f.pending_mutex);
+    for (f1c_pending_request& p : f.pending) {
+      if (p.valid && now_ns >= p.start_ns + timeout_ns) {
+        p.valid = false;
+        add(f.timeouts, 1U);
+      }
+    }
+  }
+  m.f1c_proc_timeouts = take(f.timeouts);
+
+  publish_f1c_proc(m.f1c_f1_setup, f.procs[0]);
+  publish_f1c_proc(m.f1c_ue_ctx_setup, f.procs[1]);
+  publish_f1c_proc(m.f1c_ue_ctx_mod, f.procs[2]);
+  publish_f1c_proc(m.f1c_ue_ctx_release, f.procs[3]);
+
+  auto ev = [&st](f1u_event e) { return take(st.f1u.events[static_cast<unsigned>(e)]); };
+  m.f1u_dl_pdus      = ev(f1u_event::dl_pdu);
+  m.f1u_ul_pdus      = ev(f1u_event::ul_pdu);
+  m.f1u_dl_dropped   = uint32_t(ev(f1u_event::dl_dropped));
+  m.f1u_ul_dropped   = uint32_t(ev(f1u_event::ul_dropped));
+  m.f1u_dl_discards  = uint32_t(ev(f1u_event::dl_discard));
+  m.f1u_dds          = uint32_t(ev(f1u_event::dds));
+  m.f1u_dds_failures = uint32_t(ev(f1u_event::dds_failure));
+}
+
 void publish_rusage(aurora_metrics& m)
 {
   static rusage prev{};
@@ -631,6 +692,7 @@ void detail::publish_interval(aurora_metrics& m, global_state& st)
   publish_gtp(m, st);
   publish_aggregates(m, st, t, pdcp_tx, pdcp_rx);
   publish_handover_ext(m.ext, st);
+  publish_f1(m, st);
   publish_rusage(m);
 
   if (st.cfg.thread_metrics_enabled) {

@@ -376,6 +376,9 @@ typedef struct {
     double   exec_success_rate;       /* exec_success_total / exec_attempts_total */
 } aurora_du_ho_stats_t;
 
+/* A F1AP request without outcome after this time counts as a procedure timeout. */
+#define AURORA_F1C_PROC_TIMEOUT_MS 5000
+
 struct aurora_metrics_ext {
     uint32_t version;                 /* AURORA_EXT_VERSION */
     uint32_t size;                    /* sizeof(struct aurora_metrics_ext) */
@@ -391,6 +394,16 @@ struct aurora_metrics_ext {
     uint32_t             ho_prep_attempts_total;  /* cumulative */
     uint32_t             ho_prep_success_total;   /* cumulative */
 };
+
+/* One F1AP elementary procedure (request / response) over the collection interval. */
+typedef struct {
+    uint32_t attempts;        /* requests */
+    uint32_t success;         /* successful outcomes */
+    uint32_t failure;         /* unsuccessful outcomes */
+    uint32_t latency_max_us;  /* request to outcome, matched by gNB-CU UE F1AP ID or transaction ID */
+    float    latency_avg_us;
+    uint32_t _pad0;
+} aurora_f1c_proc_stats_t;
 
 struct aurora_metrics {
     ran_type_t ran_type;
@@ -576,6 +589,46 @@ struct aurora_metrics {
      * Populated by the aurora_thread procfs/eBPF collector.
      * ------------------------------------------------------- */
     aurora_thread_stats_t thread_stats;
+
+    /* -------------------------------------------------------
+     * F1-C (F1AP) interface. DL = CU-CP -> DU, UL = DU -> CU-CP.
+     * Every F1AP message is counted once per process, at the F1-C gateway.
+     * ------------------------------------------------------- */
+    uint64_t f1c_dl_msgs;            /* F1AP messages, interval */
+    uint64_t f1c_ul_msgs;
+    uint64_t f1c_dl_bytes;           /* encoded F1AP bytes, interval */
+    uint64_t f1c_ul_bytes;
+    uint32_t f1c_dl_bytes_max;       /* largest F1AP message, interval */
+    uint32_t f1c_ul_bytes_max;
+    uint64_t f1c_dl_rrc_msgs;        /* DL RRC Message Transfer (SRB traffic carried by F1-C) */
+    uint64_t f1c_ul_rrc_msgs;        /* UL RRC Message Transfer */
+    uint64_t f1c_dl_rrc_bytes;
+    uint64_t f1c_ul_rrc_bytes;
+    uint32_t f1c_decode_errors;      /* received F1AP PDUs that failed to decode */
+    uint32_t f1c_init_ul_rrc;        /* Initial UL RRC Message Transfer (new UEs) */
+    uint32_t f1c_paging;             /* Paging messages */
+    uint32_t f1c_ue_ctx_release_req; /* DU-initiated UE Context Release Requests */
+    uint32_t f1c_resets;             /* F1 Reset procedures */
+    uint32_t f1c_error_indications;  /* Error Indication messages */
+    uint32_t f1c_proc_timeouts;      /* requests without outcome after AURORA_F1C_PROC_TIMEOUT_MS */
+    uint32_t f1c_links_up;           /* F1 links established (gauge) */
+    aurora_f1c_proc_stats_t f1c_f1_setup;
+    aurora_f1c_proc_stats_t f1c_ue_ctx_setup;
+    aurora_f1c_proc_stats_t f1c_ue_ctx_mod;
+    aurora_f1c_proc_stats_t f1c_ue_ctx_release;   /* Release Command -> Complete */
+
+    /* -------------------------------------------------------
+     * F1-U (NR-U) interface, counted once per process (CU-UP side
+     * when a CU-UP is present, DU side otherwise). Interval values.
+     * ------------------------------------------------------- */
+    uint64_t f1u_dl_pdus;            /* NR-U DL PDUs */
+    uint64_t f1u_ul_pdus;            /* NR-U UL PDUs */
+    uint32_t f1u_dl_dropped;         /* DL PDUs dropped in F1-U */
+    uint32_t f1u_ul_dropped;         /* UL PDUs dropped in F1-U */
+    uint32_t f1u_dl_discards;        /* PDCP SDU discards requested towards the DU */
+    uint32_t f1u_dds;                /* DL Data Delivery Status messages */
+    uint32_t f1u_dds_failures;       /* DL Data Delivery Status that could not be handled */
+    uint32_t _f1u_pad0;
 
     /* OCUDU extension, see struct aurora_metrics_ext. Must stay the last member. */
     struct aurora_metrics_ext ext;
