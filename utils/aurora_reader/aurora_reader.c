@@ -141,15 +141,6 @@ static void hist_stats_exp(const aurora_hist_t *hist, hist_stats_t *st) {
     }
 }
 
-/* Procedure-2: exact mean for a shift-type (fixed-width-bucket) histogram,
- * from aurora_hist_t.sum (same reasoning as hist_mean_exp above -- a
- * bucket-midpoint approximation is still only an approximation even when
- * clamped to [min_val, max_val]; the exact sum is free). */
-static double hist_mean_shift(const aurora_hist_t *hist, int shift) {
-    (void)shift;
-    return hist->count > 0 ? (double)hist->sum / (double)hist->count : 0.0;
-}
-
 /* =========================================================
  * Per-UE aggregate helper
  * ========================================================= */
@@ -268,7 +259,6 @@ typedef struct {
     /* Group 4 — SINR / CSI / BSR aggregates */
     float    sinr_min, sinr_max, sinr_avg;
     uint8_t  csi_min,  csi_max;
-    float    csi_avg;
     uint32_t bsr_min,  bsr_max;
     float    bsr_avg;
 
@@ -277,30 +267,23 @@ typedef struct {
     float    fapi_dl_avg_pdsch;
     uint8_t  dl_fapi_mcs_max, dl_fapi_mcs_min;
     float    dl_fapi_mcs_avg;
-    double   dl_fapi_mcs_hist_avg;
     uint32_t dl_fapi_prb_max, dl_fapi_prb_min;
     float    dl_fapi_prb_avg;
-    double   dl_fapi_prb_hist_avg;
     uint32_t dl_fapi_tbs_max, dl_fapi_tbs_min;
-    float    dl_fapi_tbs_avg;
 
     /* Group 6 — FAPI UL */
     uint32_t fapi_ul_pusch_count;
     float    fapi_ul_avg_pusch;
     uint8_t  ul_fapi_mcs_max, ul_fapi_mcs_min;
     float    ul_fapi_mcs_avg;
-    double   ul_fapi_mcs_hist_avg;
     uint32_t ul_fapi_prb_max, ul_fapi_prb_min;
     float    ul_fapi_prb_avg;
-    double   ul_fapi_prb_hist_avg;
     uint32_t ul_fapi_tbs_max, ul_fapi_tbs_min;
-    float    ul_fapi_tbs_avg;
 
     /* FAPI UE count */
     uint32_t fapi_ue_count;
 
     /* Group 7 — Per-UE FAPI metrics (aggregated across active UEs) */
-    int    fapi_active_ues;
     double fapi_ue_dl_mcs_min, fapi_ue_dl_mcs_max, fapi_ue_dl_mcs_avg;
     double fapi_ue_dl_prb_min, fapi_ue_dl_prb_max, fapi_ue_dl_prb_avg;
     double fapi_ue_dl_tbs_min, fapi_ue_dl_tbs_max, fapi_ue_dl_tbs_avg;
@@ -493,7 +476,6 @@ static void fill_snapshot(snapshot_t *s, const struct aurora_metrics *m)
     s->sinr_avg = m->sinr_avg;
     s->csi_min  = m->csi_min;
     s->csi_max  = m->csi_max;
-    s->csi_avg  = m->csi_avg;
     s->bsr_min  = m->bsr_min;
     s->bsr_max  = m->bsr_max;
     s->bsr_avg  = m->bsr_avg;
@@ -504,14 +486,11 @@ static void fill_snapshot(snapshot_t *s, const struct aurora_metrics *m)
     s->dl_fapi_mcs_max     = m->dl_fapi_mcs_max;
     s->dl_fapi_mcs_min     = (m->dl_fapi_mcs_min == 0xFF) ? 0 : m->dl_fapi_mcs_min;
     s->dl_fapi_mcs_avg     = m->dl_fapi_mcs_avg;
-    s->dl_fapi_mcs_hist_avg = hist_mean_shift(&m->hist_dl_fapi_mcs, 2);
     s->dl_fapi_prb_max     = m->dl_fapi_prb_max;
     s->dl_fapi_prb_min     = (m->dl_fapi_prb_min == 0xFFFFFFFF) ? 0 : m->dl_fapi_prb_min;
     s->dl_fapi_prb_avg     = m->dl_fapi_prb_avg;
-    s->dl_fapi_prb_hist_avg = hist_mean_shift(&m->hist_dl_fapi_prb, 5);
     s->dl_fapi_tbs_max     = m->dl_fapi_tbs_max;
     s->dl_fapi_tbs_min     = (m->dl_fapi_tbs_min == 0xFFFFFFFF) ? 0 : m->dl_fapi_tbs_min;
-    s->dl_fapi_tbs_avg     = m->dl_fapi_tbs_avg;
 
     /* --- Group 6: FAPI UL --- */
     s->fapi_ul_pusch_count = m->fapi_ul_total_pusch_count;
@@ -519,14 +498,11 @@ static void fill_snapshot(snapshot_t *s, const struct aurora_metrics *m)
     s->ul_fapi_mcs_max     = m->ul_fapi_mcs_max;
     s->ul_fapi_mcs_min     = (m->ul_fapi_mcs_min == 0xFF) ? 0 : m->ul_fapi_mcs_min;
     s->ul_fapi_mcs_avg     = m->ul_fapi_mcs_avg;
-    s->ul_fapi_mcs_hist_avg = hist_mean_shift(&m->hist_ul_fapi_mcs, 2);
     s->ul_fapi_prb_max     = m->ul_fapi_prb_max;
     s->ul_fapi_prb_min     = (m->ul_fapi_prb_min == 0xFFFFFFFF) ? 0 : m->ul_fapi_prb_min;
     s->ul_fapi_prb_avg     = m->ul_fapi_prb_avg;
-    s->ul_fapi_prb_hist_avg = hist_mean_shift(&m->hist_ul_fapi_prb, 5);
     s->ul_fapi_tbs_max     = m->ul_fapi_tbs_max;
     s->ul_fapi_tbs_min     = (m->ul_fapi_tbs_min == 0xFFFFFFFF) ? 0 : m->ul_fapi_tbs_min;
-    s->ul_fapi_tbs_avg     = m->ul_fapi_tbs_avg;
     s->fapi_ue_count       = m->fapi_ue_count;
 
     /* --- Group 7: Per-UE FAPI metrics → aggregate across active UEs --- */
@@ -537,7 +513,6 @@ static void fill_snapshot(snapshot_t *s, const struct aurora_metrics *m)
         for (int i = 0; i < MAX_NO_UEs; i++) {
             const aurora_fapi_ue_metrics_t *u = &m->fapi_ue_metrics[i];
             if (u->rnti == 0) continue;
-            s->fapi_active_ues++;
             agg_add(&dl_mcs, (double)u->dl_mcs);
             agg_add(&dl_prb, (double)u->dl_prb);
             agg_add(&dl_tbs, (double)u->dl_tbs);
@@ -941,21 +916,23 @@ static void write_csv_header(FILE *fp, const struct aurora_metrics *m)
             ",ul_crc_loss,ul_crc_total,ul_crc_loss_rate"
             /* Group 4 — SINR/CSI/BSR */
             ",sinr_min,sinr_max,sinr_avg"
-            ",csi_min,csi_max,csi_avg"
+            /* csi_avg is published as kpm_CARR.AverageCQI */
+            ",csi_min,csi_max"
             ",bsr_min,bsr_max,bsr_avg"
             /* Group 5 — FAPI DL */
+            /* The averages are exact (sum / count), so no separate *_hist_avg columns; the TBS average is
+             * fapi_dl_avg_pdsch. */
             ",fapi_dl_pdsch_count,fapi_dl_avg_pdsch"
-            ",dl_fapi_mcs_min,dl_fapi_mcs_max,dl_fapi_mcs_avg,dl_fapi_mcs_hist_avg"
-            ",dl_fapi_prb_min,dl_fapi_prb_max,dl_fapi_prb_avg,dl_fapi_prb_hist_avg"
-            ",dl_fapi_tbs_min,dl_fapi_tbs_max,dl_fapi_tbs_avg"
+            ",dl_fapi_mcs_min,dl_fapi_mcs_max,dl_fapi_mcs_avg"
+            ",dl_fapi_prb_min,dl_fapi_prb_max,dl_fapi_prb_avg"
+            ",dl_fapi_tbs_min,dl_fapi_tbs_max"
             /* Group 6 — FAPI UL */
             ",fapi_ul_pusch_count,fapi_ul_avg_pusch"
-            ",ul_fapi_mcs_min,ul_fapi_mcs_max,ul_fapi_mcs_avg,ul_fapi_mcs_hist_avg"
-            ",ul_fapi_prb_min,ul_fapi_prb_max,ul_fapi_prb_avg,ul_fapi_prb_hist_avg"
-            ",ul_fapi_tbs_min,ul_fapi_tbs_max,ul_fapi_tbs_avg"
+            ",ul_fapi_mcs_min,ul_fapi_mcs_max,ul_fapi_mcs_avg"
+            ",ul_fapi_prb_min,ul_fapi_prb_max,ul_fapi_prb_avg"
+            ",ul_fapi_tbs_min,ul_fapi_tbs_max"
             ",fapi_ue_count"
-            /* Group 7 — per-UE FAPI aggregates */
-            ",fapi_active_ues"
+            /* Group 7 — per-UE FAPI aggregates (the number of UEs is fapi_ue_count) */
             ",fapi_ue_dl_mcs_min,fapi_ue_dl_mcs_max,fapi_ue_dl_mcs_avg"
             ",fapi_ue_dl_prb_min,fapi_ue_dl_prb_max,fapi_ue_dl_prb_avg"
             ",fapi_ue_dl_tbs_min,fapi_ue_dl_tbs_max,fapi_ue_dl_tbs_avg"
@@ -1186,21 +1163,20 @@ static void write_csv_row(FILE *fp, const snapshot_t *s)
             ",%lu,%lu,%.6f"
             /* Group 4 */
             ",%.2f,%.2f,%.2f"
-            ",%u,%u,%.2f"
+            ",%u,%u"
             ",%u,%u,%.2f"
             /* Group 5 */
             ",%u,%.2f"
-            ",%u,%u,%.2f,%.2f"
-            ",%u,%u,%.2f,%.2f"
             ",%u,%u,%.2f"
+            ",%u,%u,%.2f"
+            ",%u,%u"
             /* Group 6 */
             ",%u,%.2f"
-            ",%u,%u,%.2f,%.2f"
-            ",%u,%u,%.2f,%.2f"
             ",%u,%u,%.2f"
+            ",%u,%u,%.2f"
+            ",%u,%u"
             ",%u"
             /* Group 7 — per-UE FAPI aggregates */
-            ",%d"
             ",%.2f,%.2f,%.2f"
             ",%.2f,%.2f,%.2f"
             ",%.2f,%.2f,%.2f"
@@ -1219,24 +1195,23 @@ static void write_csv_row(FILE *fp, const snapshot_t *s)
 
             /* Group 4 */
             (double)s->sinr_min, (double)s->sinr_max, (double)s->sinr_avg,
-            (unsigned)s->csi_min, (unsigned)s->csi_max, (double)s->csi_avg,
+            (unsigned)s->csi_min, (unsigned)s->csi_max,
             s->bsr_min, s->bsr_max, (double)s->bsr_avg,
 
             /* Group 5 */
             s->fapi_dl_pdsch_count, (double)s->fapi_dl_avg_pdsch,
-            (unsigned)s->dl_fapi_mcs_min, (unsigned)s->dl_fapi_mcs_max, (double)s->dl_fapi_mcs_avg, s->dl_fapi_mcs_hist_avg,
-            s->dl_fapi_prb_min, s->dl_fapi_prb_max, (double)s->dl_fapi_prb_avg, s->dl_fapi_prb_hist_avg,
-            s->dl_fapi_tbs_min, s->dl_fapi_tbs_max, (double)s->dl_fapi_tbs_avg,
+            (unsigned)s->dl_fapi_mcs_min, (unsigned)s->dl_fapi_mcs_max, (double)s->dl_fapi_mcs_avg,
+            s->dl_fapi_prb_min, s->dl_fapi_prb_max, (double)s->dl_fapi_prb_avg,
+            s->dl_fapi_tbs_min, s->dl_fapi_tbs_max,
 
             /* Group 6 */
             s->fapi_ul_pusch_count, (double)s->fapi_ul_avg_pusch,
-            (unsigned)s->ul_fapi_mcs_min, (unsigned)s->ul_fapi_mcs_max, (double)s->ul_fapi_mcs_avg, s->ul_fapi_mcs_hist_avg,
-            s->ul_fapi_prb_min, s->ul_fapi_prb_max, (double)s->ul_fapi_prb_avg, s->ul_fapi_prb_hist_avg,
-            s->ul_fapi_tbs_min, s->ul_fapi_tbs_max, (double)s->ul_fapi_tbs_avg,
+            (unsigned)s->ul_fapi_mcs_min, (unsigned)s->ul_fapi_mcs_max, (double)s->ul_fapi_mcs_avg,
+            s->ul_fapi_prb_min, s->ul_fapi_prb_max, (double)s->ul_fapi_prb_avg,
+            s->ul_fapi_tbs_min, s->ul_fapi_tbs_max,
             s->fapi_ue_count,
 
             /* Group 7 — per-UE FAPI aggregates */
-            s->fapi_active_ues,
             s->fapi_ue_dl_mcs_min, s->fapi_ue_dl_mcs_max, s->fapi_ue_dl_mcs_avg,
             s->fapi_ue_dl_prb_min, s->fapi_ue_dl_prb_max, s->fapi_ue_dl_prb_avg,
             s->fapi_ue_dl_tbs_min, s->fapi_ue_dl_tbs_max, s->fapi_ue_dl_tbs_avg,
@@ -1767,7 +1742,7 @@ int main(int argc, char **argv)
         printf("  SINR  min=%.2f  max=%.2f  avg=%.2f dB\n",
                s.sinr_min, s.sinr_max, s.sinr_avg);
         printf("  CSI   min=%u    max=%u    avg=%.2f\n",
-               s.csi_min, s.csi_max, s.csi_avg);
+               s.csi_min, s.csi_max, (double)metrics->csi_avg);
         printf("  BSR   min=%u  max=%u  avg=%.0f bytes\n",
                s.bsr_min, s.bsr_max, s.bsr_avg);
 
