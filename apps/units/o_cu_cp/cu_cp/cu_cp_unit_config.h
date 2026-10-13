@@ -7,6 +7,7 @@
 #include "apps/helpers/metrics/metrics_config.h"
 #include "apps/helpers/network/sctp_appconfig.h"
 #include "apps/helpers/ntn/ntn_satellite_config.h"
+#include "apps/services/worker_manager/os_sched_affinity_manager.h"
 #include "apps/units/o_cu_cp/cu_cp/cu_cp_unit_pcap_config.h"
 #include "cu_cp_unit_logger_config.h"
 #include "ocudu/cu_cp/cell_state.h"
@@ -486,6 +487,15 @@ struct cu_cp_unit_metrics_config {
 };
 
 /// CU-CP application unit configuration.
+/// CU-CP execution configuration.
+struct cu_cp_unit_execution_config {
+  /// \brief Whether the CU-CP strand (including the SRB PDCP) runs on a dedicated worker, named "cu_cp", instead of on
+  /// the main thread pool.
+  bool worker_enable = false;
+  /// CPU affinity of the dedicated CU-CP worker. An empty mask uses the main thread pool affinity.
+  os_sched_affinity_bitmask worker_cpus;
+};
+
 struct cu_cp_unit_config {
   /// Node name.
   std::string ran_node_name = "ocucp01";
@@ -519,6 +529,8 @@ struct cu_cp_unit_config {
   cu_cp_unit_pcap_config pcap_cfg;
   /// Metrics configuration.
   cu_cp_unit_metrics_config metrics;
+  /// Execution configuration.
+  cu_cp_unit_execution_config exec_cfg;
   /// AMF configuration.
   cu_cp_unit_amf_config amf_config;
   // List of all AMFs the CU-CP should connect to.

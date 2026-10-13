@@ -7,6 +7,7 @@
 #include "apps/helpers/network/sctp_config_yaml_writer.h"
 #include "apps/helpers/ntn/ntn_config_yaml_writer.h"
 #include "cu_cp_unit_config.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/adt/span.h"
 #include <iterator>
 
@@ -564,6 +565,14 @@ static void fill_cu_cp_cells_section(YAML::Node node, span<const cu_cp_unit_logi
   }
 }
 
+static void fill_cu_cp_expert_execution_section(YAML::Node node, const cu_cp_unit_execution_config& config)
+{
+  node["threads"]["cu_cp"]["enable"] = config.worker_enable;
+  if (config.worker_cpus.any()) {
+    node["affinities"]["cu_cp_cpus"] = fmt::format("{:n}", span<const size_t>(config.worker_cpus.get_cpu_ids()));
+  }
+}
+
 void ocudu::fill_cu_cp_config_in_yaml_schema(YAML::Node& node, const cu_cp_unit_config& config)
 {
   node["gnb_id"]            = config.gnb_id.id;
@@ -576,6 +585,7 @@ void ocudu::fill_cu_cp_config_in_yaml_schema(YAML::Node& node, const cu_cp_unit_
   fill_cu_cp_log_section(node["log"], config.loggers);
   fill_cu_cp_pcap_section(node["pcap"], config.pcap_cfg);
   fill_cu_cp_metrics_section(node["metrics"], config.metrics);
+  fill_cu_cp_expert_execution_section(node["expert_execution"], config.exec_cfg);
   fill_cu_cp_qos_section(node, config.qos_cfg);
   fill_ntn_satellites_in_yaml_schema(node, config.ntn_satellites);
   fill_cu_cp_cells_section(node["cu_cp"], config.cells_cfg);

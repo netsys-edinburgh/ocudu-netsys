@@ -867,7 +867,17 @@ static bool validate_cu_cp_appconfig(const gnb_id_t gnb_id, const cu_cp_unit_con
   return true;
 }
 
+static bool validate_cu_cp_execution_config(const cu_cp_unit_execution_config& config)
+{
+  if (!config.worker_enable and config.worker_cpus.any()) {
+    fmt::print("CU-CP worker CPU affinity is set, but the dedicated CU-CP worker is disabled.\n");
+    return false;
+  }
+
+  return true;
+}
+
 bool ocudu::validate_cu_cp_unit_config(const cu_cp_unit_config& config)
 {
-  return validate_cu_cp_appconfig(config.gnb_id, config);
+  return validate_cu_cp_appconfig(config.gnb_id, config) and validate_cu_cp_execution_config(config.exec_cfg);
 }

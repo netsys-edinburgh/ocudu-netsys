@@ -7,6 +7,7 @@
 #include "apps/helpers/metrics/metrics_config_cli11_schema.h"
 #include "apps/helpers/network/sctp_cli11_schema.h"
 #include "apps/helpers/ntn/ntn_config_cli11_schema.h"
+#include "apps/services/worker_manager/cli11_cpu_affinities_parser_helper.h"
 #include "cu_cp_unit_config.h"
 #include "cu_cp_unit_config_helpers.h"
 #include "ocudu/ran/nr_cell_identity.h"
@@ -1035,6 +1036,25 @@ static void configure_cli11_metrics_args(CLI::App& app, cu_cp_unit_metrics_confi
   configure_cli11_metrics_layers_args(*layers_subcmd, metrics_params.layers_cfg);
 }
 
+static void configure_cli11_execution_args(CLI::App& app, cu_cp_unit_execution_config& exec_cfg)
+{
+  CLI::App* threads_subcmd = add_subcommand(app, "threads", "Threads configuration")->configurable();
+  CLI::App* cu_cp_subcmd =
+      add_subcommand(*threads_subcmd, "cu_cp", "Dedicated CU-CP worker configuration")->configurable();
+  add_option(*cu_cp_subcmd,
+             "--enable",
+             exec_cfg.worker_enable,
+             "Run the CU-CP strand (SRB PDCP included) on a dedicated worker instead of on the main thread pool")
+      ->capture_default_str();
+
+  CLI::App* affinities_subcmd = add_subcommand(app, "affinities", "CPU affinities configuration")->configurable();
+  add_option_function<std::string>(
+      *affinities_subcmd,
+      "--cu_cp_cpus",
+      [&exec_cfg](const std::string& value) { parse_affinity_mask(exec_cfg.worker_cpus, value, "cu_cp_cpus"); },
+      "CPU cores assigned to the dedicated CU-CP worker");
+}
+
 void ocudu::configure_cli11_with_cu_cp_unit_config_schema(CLI::App& app, cu_cp_unit_config& unit_cfg)
 {
   add_option(app, "--gnb_id", unit_cfg.gnb_id.id, "gNodeB identifier")->capture_default_str();
@@ -1059,6 +1079,10 @@ void ocudu::configure_cli11_with_cu_cp_unit_config_schema(CLI::App& app, cu_cp_u
   CLI::App* metrics_subcmd = add_subcommand(app, "metrics", "Metrics configuration")->configurable();
   configure_cli11_metrics_args(*metrics_subcmd, unit_cfg.metrics);
   app_helpers::configure_cli11_with_metrics_appconfig_schema(app, unit_cfg.metrics.common_metrics_cfg);
+
+  // Execution section.
+  CLI::App* exec_subcmd = add_subcommand(app, "expert_execution", "Execution parameters")->configurable();
+  configure_cli11_execution_args(*exec_subcmd, unit_cfg.exec_cfg);
 
   // QoS section.
   add_option_object_list<cu_cp_unit_qos_config>(

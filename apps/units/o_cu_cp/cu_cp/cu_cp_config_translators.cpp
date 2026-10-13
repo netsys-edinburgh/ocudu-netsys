@@ -737,7 +737,9 @@ ocucp::n2_connection_client_config ocudu::generate_n2_client_config(bool        
 void ocudu::fill_cu_cp_worker_manager_config(worker_manager_config& config, const cu_cp_unit_config& unit_cfg)
 {
   // CU-CP executors are needed.
-  config.cu_cp_cfg.emplace();
+  auto& cu_cp_cfg            = config.cu_cp_cfg.emplace();
+  cu_cp_cfg.dedicated_worker = unit_cfg.exec_cfg.worker_enable;
+  cu_cp_cfg.worker_affinity  = unit_cfg.exec_cfg.worker_cpus;
 
   // Enable PCAPs.
   auto& pcap_cfg = config.pcap_cfg;
