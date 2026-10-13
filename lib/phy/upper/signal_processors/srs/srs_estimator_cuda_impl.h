@@ -5,7 +5,9 @@
 
 #pragma once
 
+#include "ocudu/adt/tensor.h"
 #include "ocudu/phy/upper/sequence_generators/low_papr_sequence_generator.h"
+#include "ocudu/phy/upper/signal_processors/srs/doa_estimator.h"
 #include "ocudu/phy/upper/signal_processors/srs/srs_estimator.h"
 #include <memory>
 #include <mutex>
@@ -20,8 +22,18 @@ class pusch_device_grid_reader_cuda;
 class srs_estimator_cuda_impl : public srs_estimator
 {
 public:
+  /// \brief Creates the estimator.
+  ///
+  /// \param[in] sequence_generator_  SRS sequence generator.
+  /// \param[in] fallback_            Software estimator used when the GPU cannot produce an estimate.
+  /// \param[in] direction_estimator_ Direction-of-arrival estimator, or \c nullptr if it is not estimated. It takes the
+  ///                                 received SRS of transmit port 0, which the GPU gathers from the grid.
+  /// \param[in] max_nof_prb_         Maximum number of PRB.
+  /// \param[in] force_gpu_path_      Drops the estimates the GPU cannot produce instead of using the fallback.
+  /// \param[in] cuda_device_id_      CUDA device.
   srs_estimator_cuda_impl(std::unique_ptr<low_papr_sequence_generator> sequence_generator_,
                           std::unique_ptr<srs_estimator>               fallback_,
+                          std::unique_ptr<doa_estimator>               direction_estimator_,
                           unsigned                                     max_nof_prb_,
                           bool                                         force_gpu_path_ = false,
                           int                                          cuda_device_id_ = 0);
@@ -53,6 +65,7 @@ private:
 
   std::unique_ptr<low_papr_sequence_generator> sequence_generator;
   std::unique_ptr<srs_estimator>               fallback;
+  std::unique_ptr<doa_estimator>               direction_estimator;
   unsigned                                     max_nof_prb;
 
   bool                   gpu_available  = false;
@@ -68,6 +81,12 @@ private:
   bool                            gpu_configured = false;
   std::vector<int>                last_config_signature;
   std::vector<srs_estimator_cf_t> sequences;
+
+  /// Received SRS of transmit port 0, as the GPU returns it: by receive port, then SRS symbol, then sequence element.
+  std::vector<srs_estimator_cf_t> received_port0;
+  /// Direction-of-arrival estimator input: the received SRS of transmit port 0, one column per receive port.
+  static_tensor<2, cf_t, SRS_ESTIMATOR_MAX_SEQUENCE_LENGTH * SRS_ESTIMATOR_MAX_SYMBOLS * SRS_ESTIMATOR_MAX_RX_PORTS>
+      doa_data;
 
   unsigned nof_host_fallbacks    = 0;
   unsigned nof_dropped_estimates = 0;

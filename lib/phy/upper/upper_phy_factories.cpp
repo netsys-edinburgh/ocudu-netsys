@@ -803,11 +803,6 @@ create_ul_processor_factory(const upper_phy_factory_configuration& config,
     use_srs_acceleration = is_srs_estimator_acceleration_available();
   }
   // "disabled" means use_srs_acceleration stays false.
-  // The accelerated SRS estimator does not estimate the direction of arrival, so "auto" keeps the software estimator
-  // when it is configured ("enabled" is rejected by the estimator factory).
-  if (doa_factory && (resolved_srs_acceleration_mode == "auto")) {
-    use_srs_acceleration = false;
-  }
 
   std::shared_ptr<srs_estimator_factory> srs_factory =
       create_srs_estimator_generic_factory(sequence_factory,

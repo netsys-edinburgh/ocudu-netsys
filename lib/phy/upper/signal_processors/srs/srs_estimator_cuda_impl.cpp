@@ -149,11 +149,13 @@ bool is_success(nr_ldpc_status_t status)
 
 srs_estimator_cuda_impl::srs_estimator_cuda_impl(std::unique_ptr<low_papr_sequence_generator> sequence_generator_,
                                                  std::unique_ptr<srs_estimator>               fallback_,
+                                                 std::unique_ptr<doa_estimator>               direction_estimator_,
                                                  unsigned                                     max_nof_prb_,
                                                  bool                                         force_gpu_path_,
                                                  int                                          cuda_device_id_) :
   sequence_generator(std::move(sequence_generator_)),
   fallback(std::move(fallback_)),
+  direction_estimator(std::move(direction_estimator_)),
   max_nof_prb(max_nof_prb_),
   force_gpu_path(force_gpu_path_),
   device_id(cuda_device_id_)
@@ -404,9 +406,23 @@ srs_estimator_result srs_estimator_cuda_impl::estimate(const resource_grid_reade
 
   srs_estimator_metrics_t        metrics            = {};
   srs_estimator_time_alignment_t gpu_time_alignment = {};
-  if ((d_grid_cbf16 == nullptr) ||
-      !is_success(srs_estimator_estimate_auto_ta(
-          handle, d_grid_cbf16, static_cast<float>(max_ta), &gpu_time_alignment, &metrics, stream))) {
+  bool                           estimated          = false;
+  if (d_grid_cbf16 != nullptr) {
+    if (direction_estimator) {
+      received_port0.resize(nof_rx_ports * nof_symbols * sequence_length);
+      estimated = is_success(srs_estimator_estimate_auto_ta_with_received_port0(handle,
+                                                                                d_grid_cbf16,
+                                                                                static_cast<float>(max_ta),
+                                                                                &gpu_time_alignment,
+                                                                                &metrics,
+                                                                                received_port0.data(),
+                                                                                stream));
+    } else {
+      estimated = is_success(srs_estimator_estimate_auto_ta(
+          handle, d_grid_cbf16, static_cast<float>(max_ta), &gpu_time_alignment, &metrics, stream));
+    }
+  }
+  if (!estimated) {
     static_cast<void>(cudaGetLastError());
     return estimate_without_gpu(grid, config, "the CUDA SRS estimation failed");
   }
@@ -426,6 +442,16 @@ srs_estimator_result srs_estimator_cuda_impl::estimate(const resource_grid_reade
       const srs_estimator_cf_t& coefficient = metrics.coeff[i_rx_port * nof_antenna_ports + i_antenna_port];
       result.channel_matrix.set_coefficient({coefficient.real, coefficient.imag}, i_rx_port, i_antenna_port);
     }
+  }
+
+  if (direction_estimator) {
+    // The GPU layout, by receive port and then by sample, is the one of the estimator input.
+    doa_data.resize({sequence_length * nof_symbols, nof_rx_ports});
+    std::transform(received_port0.begin(),
+                   received_port0.end(),
+                   doa_data.get_data().begin(),
+                   [](const srs_estimator_cf_t& sample) { return cf_t(sample.real, sample.imag); });
+    result.doa_result = direction_estimator->estimate(doa_data);
   }
 
   return result;

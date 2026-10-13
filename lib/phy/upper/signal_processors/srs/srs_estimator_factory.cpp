@@ -100,33 +100,28 @@ public:
   {
     auto create_software_estimator = [this]() {
       srs_estimator_generic_impl::dependencies deps;
-      deps.sequence_generator = sequence_generator_factory->create();
-      deps.ta_estimator       = ta_estimator_factory->create();
-      if (doa_factory) {
-        deps.direction_estimator = doa_factory->create();
-        // We assert the creation of the DOA estimator since it's an optional dependency of the SRS estimator.
-        ocudu_assert(deps.direction_estimator, "DOA estimator couldn't be created.");
-      }
-
+      deps.sequence_generator  = sequence_generator_factory->create();
+      deps.ta_estimator        = ta_estimator_factory->create();
+      deps.direction_estimator = create_direction_estimator();
       return std::make_unique<srs_estimator_generic_impl>(std::move(deps), max_nof_prb);
     };
 
     std::string resolved_acceleration_mode = resolve_srs_estimator_acceleration_mode(acceleration_mode);
 #ifdef ENABLE_CUDA
-    // The accelerated estimator does not estimate the direction of arrival. When it is configured, the software
-    // estimator is used ("auto"), or the configuration is rejected ("enabled").
-    if (resolved_acceleration_mode == "enabled") {
+    bool accelerated = (resolved_acceleration_mode == "enabled");
+    if (accelerated) {
       report_fatal_error_if_not(is_srs_estimator_acceleration_available(),
                                 "Accelerated SRS estimator requested but not available.");
-      report_fatal_error_if_not(!doa_factory,
-                                "Accelerated SRS estimator requested, but it does not support the direction of arrival "
-                                "estimation that is configured.");
-      return std::make_unique<srs_estimator_cuda_impl>(
-          sequence_generator_factory->create(), create_software_estimator(), max_nof_prb, true, nvcuda_device_id);
+    } else {
+      accelerated = (resolved_acceleration_mode == "auto") && is_srs_estimator_acceleration_available();
     }
-    if ((resolved_acceleration_mode == "auto") && !doa_factory && is_srs_estimator_acceleration_available()) {
-      return std::make_unique<srs_estimator_cuda_impl>(
-          sequence_generator_factory->create(), create_software_estimator(), max_nof_prb, false, nvcuda_device_id);
+    if (accelerated) {
+      return std::make_unique<srs_estimator_cuda_impl>(sequence_generator_factory->create(),
+                                                       create_software_estimator(),
+                                                       create_direction_estimator(),
+                                                       max_nof_prb,
+                                                       resolved_acceleration_mode == "enabled",
+                                                       nvcuda_device_id);
     }
 #else
     if (resolved_acceleration_mode == "enabled") {
@@ -143,6 +138,18 @@ public:
   }
 
 private:
+  /// Creates the direction-of-arrival estimator, or returns \c nullptr if it is not configured.
+  std::unique_ptr<doa_estimator> create_direction_estimator() const
+  {
+    if (!doa_factory) {
+      return nullptr;
+    }
+    std::unique_ptr<doa_estimator> estimator = doa_factory->create();
+    // The estimator is an optional dependency, so a configured one must be created.
+    ocudu_assert(estimator, "DOA estimator couldn't be created.");
+    return estimator;
+  }
+
   std::shared_ptr<low_papr_sequence_generator_factory> sequence_generator_factory;
   std::shared_ptr<time_alignment_estimator_factory>    ta_estimator_factory;
   std::shared_ptr<doa_estimator_factory>               doa_factory;

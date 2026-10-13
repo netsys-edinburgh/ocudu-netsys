@@ -47,6 +47,9 @@ struct srs_estimator_ctx {
     float*          d_rsrp_partials = nullptr;
     srs_estimator_device_result* d_result = nullptr;
     srs_estimator_device_result* h_result = nullptr;
+    // Received SRS of transmit port 0, for direction-of-arrival estimation. Allocated on first use.
+    srs_estimator_cf_t* d_received_port0 = nullptr;
+    srs_estimator_cf_t* h_received_port0 = nullptr;
 
     cudaGraph_t     graph = nullptr;
     cudaGraphExec_t graph_exec = nullptr;
@@ -109,6 +112,28 @@ __device__ __forceinline__ cuFloatComplex cconj(cuFloatComplex a)
 __device__ __forceinline__ cuFloatComplex csub(cuFloatComplex a, cuFloatComplex b)
 {
     return make_cuFloatComplex(a.x - b.x, a.y - b.y);
+}
+
+// Gathers the received SRS of transmit port 0, by receive port index, SRS symbol and sequence element.
+__global__ void srs_gather_received_port0_kernel(const unsigned int* __restrict__ d_grid_cbf16,
+                                                 srs_estimator_cf_t* __restrict__ d_received,
+                                                 const srs_estimator_config_t cfg)
+{
+    int n  = blockIdx.x * blockDim.x + threadIdx.x;
+    int s  = blockIdx.y;
+    int rx = blockIdx.z;
+    if (n >= cfg.sequence_length) {
+        return;
+    }
+
+    int            k      = cfg.mapping_initial_subcarrier[0] + n * cfg.comb_size;
+    int            symbol = cfg.start_symbol + s;
+    int            idx    = (cfg.rx_ports[rx] * cfg.grid_nof_symbols + symbol) * cfg.grid_nof_subcarriers + k;
+    cuFloatComplex y      = cbf16_to_fp32(d_grid_cbf16[idx]);
+
+    srs_estimator_cf_t& out = d_received[(rx * cfg.nof_symbols + s) * cfg.sequence_length + n];
+    out.real                = y.x;
+    out.imag                = y.y;
 }
 
 __device__ __forceinline__ float norm2(cuFloatComplex a)
@@ -1000,6 +1025,8 @@ void srs_estimator_destroy(srs_estimator_handle_t handle)
     cudaFree(handle->d_rsrp_partials);
     cudaFree(handle->d_result);
     cudaFreeHost(handle->h_result);
+    cudaFree(handle->d_received_port0);
+    cudaFreeHost(handle->h_received_port0);
     delete handle;
 }
 
@@ -1055,14 +1082,50 @@ nr_ldpc_status_t srs_estimator_configure(srs_estimator_handle_t        handle,
     return NR_LDPC_SUCCESS;
 }
 
-nr_ldpc_status_t srs_estimator_estimate_auto_ta(srs_estimator_handle_t          handle,
-                                                const void*                     d_grid_cbf16,
-                                                float                           max_time_alignment_s,
-                                                srs_estimator_time_alignment_t* time_alignment,
-                                                srs_estimator_metrics_t*        metrics,
-                                                void*                           external_stream)
+namespace {
+
+// Enqueues the gather of the received SRS of transmit port 0 into the pinned host buffer.
+nr_ldpc_status_t enqueue_received_port0_download(srs_estimator_ctx* handle, const void* d_grid_cbf16, cudaStream_t stream)
 {
-    (void)max_time_alignment_s;
+    const srs_estimator_config_t& cfg     = handle->config;
+    size_t                        nof_res = static_cast<size_t>(cfg.nof_rx_ports) * cfg.nof_symbols * cfg.sequence_length;
+    if ((handle->d_received_port0 == nullptr) || (handle->h_received_port0 == nullptr)) {
+        // Sized for the largest configuration, so a reconfiguration never reallocates.
+        size_t max_bytes = static_cast<size_t>(SRS_ESTIMATOR_MAX_RX_PORTS) * SRS_ESTIMATOR_MAX_SYMBOLS *
+                           SRS_ESTIMATOR_MAX_SEQUENCE_LENGTH * sizeof(srs_estimator_cf_t);
+        if ((handle->d_received_port0 == nullptr) &&
+            (cudaMalloc(&handle->d_received_port0, max_bytes) != cudaSuccess)) {
+            return NR_LDPC_ERROR_CUDA_FAILED;
+        }
+        if ((handle->h_received_port0 == nullptr) &&
+            (cudaMallocHost(&handle->h_received_port0, max_bytes) != cudaSuccess)) {
+            return NR_LDPC_ERROR_CUDA_FAILED;
+        }
+    }
+    if ((cfg.nof_symbols > SRS_ESTIMATOR_MAX_SYMBOLS) || (cfg.sequence_length > SRS_ESTIMATOR_MAX_SEQUENCE_LENGTH)) {
+        return NR_LDPC_ERROR_INVALID_CONFIG;
+    }
+
+    dim3 blocks((cfg.sequence_length + SRS_ESTIMATOR_THREADS - 1) / SRS_ESTIMATOR_THREADS, cfg.nof_symbols, cfg.nof_rx_ports);
+    srs_gather_received_port0_kernel<<<blocks, SRS_ESTIMATOR_THREADS, 0, stream>>>(
+        static_cast<const unsigned int*>(d_grid_cbf16), handle->d_received_port0, cfg);
+    if (cudaMemcpyAsync(handle->h_received_port0,
+                        handle->d_received_port0,
+                        nof_res * sizeof(srs_estimator_cf_t),
+                        cudaMemcpyDeviceToHost,
+                        stream) != cudaSuccess) {
+        return NR_LDPC_ERROR_CUDA_FAILED;
+    }
+    return NR_LDPC_SUCCESS;
+}
+
+nr_ldpc_status_t estimate_auto_ta(srs_estimator_handle_t          handle,
+                                  const void*                     d_grid_cbf16,
+                                  srs_estimator_time_alignment_t* time_alignment,
+                                  srs_estimator_metrics_t*        metrics,
+                                  srs_estimator_cf_t*             received_port0,
+                                  void*                           external_stream)
+{
     if (handle == nullptr || d_grid_cbf16 == nullptr || time_alignment == nullptr || metrics == nullptr ||
         handle->d_result == nullptr || handle->h_result == nullptr) {
         return NR_LDPC_ERROR_INVALID_CONFIG;
@@ -1123,6 +1186,14 @@ nr_ldpc_status_t srs_estimator_estimate_auto_ta(srs_estimator_handle_t          
         }
     }
 
+    // The samples are downloaded behind the estimation, before the single synchronization below.
+    if (received_port0 != nullptr) {
+        nr_ldpc_status_t status = enqueue_received_port0_download(handle, d_grid_cbf16, stream);
+        if (status != NR_LDPC_SUCCESS) {
+            return status;
+        }
+    }
+
     if (cudaPeekAtLastError() != cudaSuccess) {
         return NR_LDPC_ERROR_CUDA_FAILED;
     }
@@ -1132,6 +1203,38 @@ nr_ldpc_status_t srs_estimator_estimate_auto_ta(srs_estimator_handle_t          
 
     *time_alignment = handle->h_result->time_alignment;
     *metrics        = handle->h_result->metrics;
+    if (received_port0 != nullptr) {
+        size_t nof_res = static_cast<size_t>(cfg.nof_rx_ports) * cfg.nof_symbols * cfg.sequence_length;
+        std::memcpy(received_port0, handle->h_received_port0, nof_res * sizeof(srs_estimator_cf_t));
+    }
 
     return NR_LDPC_SUCCESS;
+}
+
+} // namespace
+
+nr_ldpc_status_t srs_estimator_estimate_auto_ta(srs_estimator_handle_t          handle,
+                                                const void*                     d_grid_cbf16,
+                                                float                           max_time_alignment_s,
+                                                srs_estimator_time_alignment_t* time_alignment,
+                                                srs_estimator_metrics_t*        metrics,
+                                                void*                           stream)
+{
+    (void)max_time_alignment_s;
+    return estimate_auto_ta(handle, d_grid_cbf16, time_alignment, metrics, nullptr, stream);
+}
+
+nr_ldpc_status_t srs_estimator_estimate_auto_ta_with_received_port0(srs_estimator_handle_t          handle,
+                                                                    const void*                     d_grid_cbf16,
+                                                                    float                           max_time_alignment_s,
+                                                                    srs_estimator_time_alignment_t* time_alignment,
+                                                                    srs_estimator_metrics_t*        metrics,
+                                                                    srs_estimator_cf_t*             received_port0,
+                                                                    void*                           stream)
+{
+    (void)max_time_alignment_s;
+    if (received_port0 == nullptr) {
+        return NR_LDPC_ERROR_INVALID_CONFIG;
+    }
+    return estimate_auto_ta(handle, d_grid_cbf16, time_alignment, metrics, received_port0, stream);
 }

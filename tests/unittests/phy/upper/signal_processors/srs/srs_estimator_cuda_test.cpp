@@ -12,6 +12,8 @@
 #include "ocudu/phy/support/support_factories.h"
 #include "ocudu/phy/support/time_alignment_estimator/time_alignment_estimator_factories.h"
 #include "ocudu/phy/upper/sequence_generators/sequence_generator_factories.h"
+#include "ocudu/phy/upper/signal_processors/srs/doa_estimator_configuration.h"
+#include "ocudu/phy/upper/signal_processors/srs/doa_estimator_factory.h"
 #include "ocudu/phy/upper/signal_processors/srs/srs_estimator.h"
 #include "ocudu/phy/upper/signal_processors/srs/srs_estimator_configuration.h"
 #include "ocudu/phy/upper/signal_processors/srs/srs_estimator_factory.h"
@@ -130,7 +132,9 @@ srs_estimator_configuration make_srs_config(const srs_test_profile& profile)
   return config;
 }
 
-std::shared_ptr<srs_estimator_factory> create_test_srs_factory(const std::string& acceleration_mode)
+std::shared_ptr<srs_estimator_factory>
+create_test_srs_factory(const std::string&                     acceleration_mode,
+                        std::shared_ptr<doa_estimator_factory> doa_factory = nullptr)
 {
   std::shared_ptr<low_papr_sequence_generator_factory> sequence_factory =
       create_low_papr_sequence_generator_sw_factory();
@@ -146,7 +150,8 @@ std::shared_ptr<srs_estimator_factory> create_test_srs_factory(const std::string
       create_time_alignment_estimator_dft_factory(dft_factory);
   EXPECT_NE(ta_factory, nullptr);
 
-  return create_srs_estimator_generic_factory(sequence_factory, ta_factory, nullptr, MAX_NOF_PRBS, acceleration_mode);
+  return create_srs_estimator_generic_factory(
+      sequence_factory, ta_factory, std::move(doa_factory), MAX_NOF_PRBS, acceleration_mode);
 }
 
 unsigned get_required_grid_ports(const srs_estimator_configuration& config)
@@ -454,6 +459,70 @@ srs_test_profile make_small_profile()
   return profile;
 }
 
+/// Creates a direction-of-arrival estimator factory for a uniform linear array of four antennas.
+std::shared_ptr<doa_estimator_factory> create_test_doa_factory()
+{
+  doa_estimator_configuration config = {
+      .nof_antennas = 4, .antenna_distance_over_wavelength = 0.5F, .cross_polarized = false};
+  std::shared_ptr<doa_estimator_factory> factory = create_doa_estimator_factory(config);
+  EXPECT_NE(factory, nullptr);
+  return factory;
+}
+
+/// Profile of an SRS received by four antennas, as direction-of-arrival estimation needs.
+srs_test_profile make_doa_profile(const std::array<unsigned, 4>& rx_ports)
+{
+  srs_test_profile profile;
+  profile.nof_rx_ports        = 4;
+  profile.nof_tx_ports        = 1;
+  profile.rx_ports            = rx_ports;
+  profile.scs                 = subcarrier_spacing::kHz30;
+  profile.nof_symbols         = 2;
+  profile.start_symbol        = 12;
+  profile.comb_size           = tx_comb_size::n2;
+  profile.comb_offset         = 0;
+  profile.cyclic_shift        = 0;
+  profile.configuration_index = 6;
+  profile.bandwidth_index     = 0;
+  profile.freq_position       = 0;
+  profile.freq_shift          = 0;
+  profile.sequence_id         = 5;
+  return profile;
+}
+
+/// Estimates the SRS of \c profile with direction of arrival, on a new grid of the given type.
+srs_estimator_result estimate_with_doa(const srs_test_profile& profile, grid_mode mode, const std::string& acceleration)
+{
+  srs_estimator_configuration    config = make_srs_config(profile);
+  std::unique_ptr<resource_grid> grid   = create_test_grid(config, mode);
+  EXPECT_NE(grid, nullptr);
+  // The channel only depends on the position of the port in the request, so equivalent requests on other grid ports
+  // receive the same signal.
+  populate_srs_grid(*grid, config, 30.0F, 0xd0a5eedU);
+
+  std::unique_ptr<srs_estimator> estimator = create_test_srs_factory(acceleration, create_test_doa_factory())->create();
+  EXPECT_NE(estimator, nullptr);
+  return estimator->estimate(grid->get_reader(), config);
+}
+
+void assert_doa_results_match(const srs_estimator_result& expected, const srs_estimator_result& actual)
+{
+  ASSERT_TRUE(expected.doa_result.has_value());
+  ASSERT_TRUE(actual.doa_result.has_value()) << "The direction of arrival was not estimated.";
+  const auto& expected_components = expected.doa_result->doa_components;
+  const auto& actual_components   = actual.doa_result->doa_components;
+  ASSERT_FALSE(expected_components.empty());
+  ASSERT_EQ(expected_components.size(), actual_components.size());
+  for (unsigned i_component = 0; i_component != expected_components.size(); ++i_component) {
+    EXPECT_NEAR(expected_components[i_component].broadside_angle_degrees,
+                actual_components[i_component].broadside_angle_degrees,
+                1e-3F);
+    EXPECT_NEAR(expected_components[i_component].spectrum_strength,
+                actual_components[i_component].spectrum_strength,
+                1e-3F * std::abs(expected_components[i_component].spectrum_strength));
+  }
+}
+
 /// Creates the CUDA SRS estimator directly, so a test can see which path produced each estimate.
 std::unique_ptr<srs_estimator_cuda_impl> create_cuda_estimator(bool force_gpu_path)
 {
@@ -461,6 +530,7 @@ std::unique_ptr<srs_estimator_cuda_impl> create_cuda_estimator(bool force_gpu_pa
   EXPECT_NE(software_estimator, nullptr);
   return std::make_unique<srs_estimator_cuda_impl>(create_low_papr_sequence_generator_sw_factory()->create(),
                                                    std::move(software_estimator),
+                                                   nullptr,
                                                    MAX_NOF_PRBS,
                                                    force_gpu_path);
 }
@@ -646,4 +716,31 @@ TEST(srs_estimator_cuda_test, forced_gpu_unsupported_configuration_is_dropped)
   EXPECT_FALSE(result.rsrp_dB.has_value());
   EXPECT_EQ(gpu_estimator->get_nof_dropped_estimates(), 1U);
   EXPECT_EQ(gpu_estimator->get_nof_host_fallbacks(), 0U);
+}
+
+// The GPU gathers the received SRS of the first transmit port for the direction-of-arrival estimator, which must then
+// estimate the same direction as from the samples the software estimator reads. The forced GPU path drops an estimate
+// it cannot produce, so the result comes from the GPU.
+TEST(srs_estimator_cuda_test, forced_gpu_estimates_the_direction_of_arrival_like_cpu)
+{
+  if (!is_srs_estimator_acceleration_available()) {
+    GTEST_SKIP() << "CUDA SRS estimator is not available.";
+  }
+
+  srs_test_profile profile = make_doa_profile({0, 1, 2, 3});
+  for (grid_mode mode : {grid_mode::host, grid_mode::cuda_visible}) {
+    SCOPED_TRACE((mode == grid_mode::host) ? "host grid" : "CUDA-visible grid");
+    assert_doa_results_match(estimate_with_doa(profile, mode, "disabled"), estimate_with_doa(profile, mode, "enabled"));
+  }
+}
+
+// The samples of each receive port come from the grid port the request names, in request order.
+TEST(srs_estimator_cuda_test, forced_gpu_direction_of_arrival_follows_the_requested_ports)
+{
+  if (!is_srs_estimator_acceleration_available()) {
+    GTEST_SKIP() << "CUDA SRS estimator is not available.";
+  }
+
+  srs_estimator_result reference = estimate_with_doa(make_doa_profile({0, 1, 2, 3}), grid_mode::host, "disabled");
+  assert_doa_results_match(reference, estimate_with_doa(make_doa_profile({3, 1, 0, 2}), grid_mode::host, "enabled"));
 }

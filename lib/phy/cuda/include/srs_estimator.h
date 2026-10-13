@@ -22,6 +22,7 @@ extern "C" {
 #define SRS_ESTIMATOR_MAX_TX_PORTS 4
 #define SRS_ESTIMATOR_MAX_SEQUENCE_LENGTH 1632
 #define SRS_ESTIMATOR_MAX_DFT_SIZE 4096
+#define SRS_ESTIMATOR_MAX_SYMBOLS 4
 
 typedef struct {
   float real;
@@ -81,6 +82,17 @@ nr_ldpc_status_t srs_estimator_estimate_auto_ta(srs_estimator_handle_t          
                                                 srs_estimator_time_alignment_t* time_alignment,
                                                 srs_estimator_metrics_t*        metrics,
                                                 void*                           stream);
+
+/* Same as srs_estimator_estimate_auto_ta(), and also returns the received SRS of transmit port 0, the input of
+   direction-of-arrival estimation. received_port0 has nof_rx_ports * nof_symbols * sequence_length elements, laid out
+   by receive port index, then SRS symbol, then sequence element. */
+nr_ldpc_status_t srs_estimator_estimate_auto_ta_with_received_port0(srs_estimator_handle_t handle,
+                                                                    const void*            d_grid_cbf16,
+                                                                    float                  max_time_alignment_s,
+                                                                    srs_estimator_time_alignment_t* time_alignment,
+                                                                    srs_estimator_metrics_t*        metrics,
+                                                                    srs_estimator_cf_t*             received_port0,
+                                                                    void*                           stream);
 
 #ifdef __cplusplus
 }
