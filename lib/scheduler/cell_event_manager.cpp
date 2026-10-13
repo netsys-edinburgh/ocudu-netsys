@@ -508,7 +508,15 @@ void cell_event_manager::handle_ue_crc(slot_point sl_rx, const ul_crc_pdu_indica
 
   // Notify metrics handler.
   metrics.handle_crc_indication(sl_rx, crc, tbs);
-  aurora::on_ul_crc(crc.ue_index, to_underlying(crc.rnti), crc.tb_crc_success, crc.ul_sinr_dB);
+  // AURORA: the scheduler only classifies configured-grant PUSCH as DTX (above). For dynamic grants, apply the same
+  // rule (CRC KO with SINR below cg_pusch_sinr_threshold_dB, i.e. the UE most likely did not transmit) to report UL
+  // DTX like OAI's ULSCH DTX counter. DTX is reported instead of a CRC KO, as on the configured-grant path.
+  if (not crc.tb_crc_success and crc.ul_sinr_dB.has_value() and
+      crc.ul_sinr_dB.value() < cell_cfg.expert_cfg.ue.cg_pusch_sinr_threshold_dB) {
+    aurora::on_ul_dtx(crc.ue_index);
+  } else {
+    aurora::on_ul_crc(crc.ue_index, to_underlying(crc.rnti), crc.tb_crc_success, crc.ul_sinr_dB);
+  }
 }
 
 void cell_event_manager::handle_positioning_measurement_request(const positioning_measurement_request::cell_info& req)
