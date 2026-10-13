@@ -168,7 +168,7 @@ The following stay the same as OAI:
 | `apps/services/worker_manager` | `main_pool#*`, `phy_worker`, `radio`, `split6`, `ru_timing`, `ru_txrx_#*`, `ru_dummy`, `lower_phy#*`, `lower_phy_tx#*`, `lower_phy_rx#*`, `lower_phy_ul#*` |
 | Support threads | `io_broker_epoll`, `ws_server` (remote control), `tracer_worker` (event tracing), `rx_symb_print` (PHY RX grid printer) |
 | `ocudu_phy_tap` and libzmq | `SRSIQDump`, `ULPhyTap`, `ZMQbg/*` |
-| AURORA | `aurora_reset`, `aurora_thr_proc`, `aurora_thr_ebpf` |
+| AURORA | `aurora_reset` |
 | `apps/examples` | `async_thread`, `lower_phy`, `lower_phy_dl`, `lower_phy_ul`, `lower_phy_prach`, `low_rx`, `low_tx`, `low_dl`, `low_ul`, `ru_rx_#*`, `ru_emu_#*`, `ru_emulator`, `radio_ssb`, `radio_util_samp`, `rx_power_analyz` |
 
 Whitespace and newlines around entries are ignored, so the list can span several YAML lines. The registry keeps at most

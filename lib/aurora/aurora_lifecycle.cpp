@@ -107,7 +107,7 @@ const char* aurora::default_thread_whitelist()
       // ocudu_phy_tap external processors and the libzmq background threads used by the ZMQ radio / PHY tap.
       "SRSIQDump,ULPhyTap,ZMQbg/*,"
       // AURORA itself.
-      "aurora_reset,aurora_thr_proc,aurora_thr_ebpf,"
+      "aurora_reset,"
       // apps/examples (radio_ssb, radio_util_sample, rx_power_analyzer, ru_emulator).
       "async_thread,lower_phy,lower_phy_dl,lower_phy_ul,lower_phy_prach,low_rx,low_tx,low_dl,low_ul,"
       "ru_rx_#*,ru_emu_#*,ru_emulator,radio_ssb,radio_util_samp,rx_power_analyz";

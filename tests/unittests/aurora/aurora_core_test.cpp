@@ -593,12 +593,11 @@ TEST(aurora_thread_whitelist, default_list_fits_limits_and_matches_ocudu_thread_
                            "split6",       "ru_timing",     "ru_txrx_#0",    "ru_dummy",      "lower_phy#0",
                            "lower_phy_tx#1", "lower_phy_rx#0", "lower_phy_ul#0", "io_broker_epoll", "ws_server",
                            "tracer_worker", "rx_symb_print", "SRSIQDump",     "ULPhyTap",      "ZMQbg/Reaper",
-                           "ZMQbg/IO/0",   "aurora_reset",  "aurora_thr_proc", "aurora_thr_ebpf", "async_thread",
-                           "lower_phy_prach", "low_rx",     "ru_rx_#0",      "ru_emu_#3",     "radio_util_samp",
-                           "rx_power_analyz"}) {
+                           "ZMQbg/IO/0",   "aurora_reset",  "async_thread",  "lower_phy_prach", "low_rx",
+                           "ru_rx_#0",     "ru_emu_#3",     "radio_util_samp", "rx_power_analyz"}) {
     EXPECT_TRUE(aurora_thread_name_matches(name)) << name;
   }
-  for (const char* name : {"main_pool", "phy_worker#0", "foo", "gnb_extra", "lower_phy_x"}) {
+  for (const char* name : {"main_pool", "phy_worker#0", "foo", "gnb_extra", "lower_phy_x", "aurora_thr_proc"}) {
     EXPECT_FALSE(aurora_thread_name_matches(name)) << name;
   }
 }
