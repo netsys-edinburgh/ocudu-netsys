@@ -108,6 +108,11 @@ struct strand_based_executor_config {
   ///
   /// If it is initialized, the executor mapper wraps the executors with metric decorators.
   executor_metrics_channel_registry* exec_metrics_channel_registry = nullptr;
+  /// \brief Optional executor on which the CU-UP strand (control, UE UL and UE DL tasks, i.e. PDCP) runs.
+  ///
+  /// If null, the CU-UP strand runs on \c medium_prio_executor. Crypto tasks and the dedicated IO strand always run on
+  /// \c medium_prio_executor, so that ciphering keeps being parallelized across the worker pool.
+  task_executor* cu_up_strand_executor = nullptr;
 };
 
 /// \brief Creates an executor mapper for the CU-UP that is based on strands of a worker pool.

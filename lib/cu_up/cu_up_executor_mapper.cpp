@@ -181,7 +181,7 @@ class strand_based_cu_up_executor_mapper final : public cu_up_executor_mapper
 {
 public:
   strand_based_cu_up_executor_mapper(const strand_based_executor_config& config) :
-    cu_up_strand(&config.medium_prio_executor,
+    cu_up_strand(config.cu_up_strand_executor != nullptr ? config.cu_up_strand_executor : &config.medium_prio_executor,
                  std::array<concurrent_queue_params, 2>{
                      {{concurrent_queue_policy::lockfree_mpmc, config.default_task_queue_size},
                       {concurrent_queue_policy::lockfree_mpmc, config.default_task_queue_size}}},
