@@ -47,6 +47,43 @@ aurora_reader [app_config.yml] [--shm-key HEX] [--ran-type gnb|du|cu|cu_cp|cu_up
 - Container auto-discovery for the infra sidecar matches the OCUDU docker-compose names: `ocudu_gnb`, `ocudu_cu`,
   `ocudu_du`, `ocudu_cu_cp` and `ocudu_cu_up`.
 
+## Sidecar container (`docker/aurora_reader/`)
+
+Build from the repository root:
+
+```bash
+docker build -f docker/aurora_reader/Dockerfile -t ocudu/aurora_reader .
+```
+
+- **Base image.** Multi-stage on Debian bookworm, which ships libbpf 1.1, bpftool and clang, so the eBPF infra backend
+  is built in. The runtime image is about 176 MB.
+- **What gets built.** Only `lib/aurora` and `aurora_reader`, through the standalone superproject
+  `docker/aurora_reader/CMakeLists.txt`.
+- **Build context.** `Dockerfile.dockerignore` limits it to the four source directories (about 4 MB), even with a build
+  tree in the repo.
+
+With docker-compose, run from `docker/`:
+
+```bash
+docker compose -f docker-compose.yml -f aurora_reader/docker-compose.aurora.yml up
+```
+
+- The override joins the gNB IPC namespace (`ipc: service:gnb`, with `gnb` set to `ipc: shareable`). It also runs the
+  sidecar with `pid: host` and privileged mode, and mounts the host `/proc`, `/sys`, the docker socket, BTF and tracefs
+  for the infra backends.
+- CSV files go to `docker/aurora-data/`.
+- The gNB config must contain `aurora: { enable: true, shm_key: ... }` with the same key as `AURORA_SHM_KEY`.
+- For split deployments, add one sidecar per RAN container, each with its own `ipc: service:<name>`,
+  `AURORA_SHM_KEY` and `AURORA_INFRA_CONTAINER`.
+
+The entrypoint (`aurora-sidecar`) builds the `aurora_reader` command line from environment variables:
+- `AURORA_CONFIG`, `AURORA_SHM_KEY`, `AURORA_RAN_TYPE`, `AURORA_INTERVAL_MS`, `AURORA_SAMPLES`, `AURORA_OUTPUT`;
+- `AURORA_INFRA`, `AURORA_INFRA_BACKEND`, `AURORA_INFRA_CONTAINER`, `AURORA_INFRA_INTERVAL`, `AURORA_HOST_PREFIX`;
+- `AURORA_WAIT_S`.
+
+It waits until the RAN process has created its segment, so the start order does not matter. Arguments given to the
+container are passed to `aurora_reader` unchanged, e.g. `docker run ... ocudu/aurora_reader --once`.
+
 ## OCUDU extension (`struct aurora_metrics_ext`)
 
 The extension is appended as the last member of `struct aurora_metrics`, so the OAI prefix stays byte-identical.

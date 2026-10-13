@@ -1,0 +1,7 @@
+# BuildKit per-Dockerfile ignore file (applies only to docker/aurora_reader/Dockerfile): send only what the
+# aurora_reader build needs, not the whole repository (build trees can be several GB).
+*
+!include/ocudu/aurora/
+!lib/aurora/
+!utils/aurora_reader/
+!docker/aurora_reader/

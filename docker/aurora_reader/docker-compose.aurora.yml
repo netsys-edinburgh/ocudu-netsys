@@ -1,0 +1,49 @@
+# aurora_reader sidecar for the OCUDU docker-compose setups. Use as an override, from docker/:
+#
+#   docker compose -f docker-compose.yml -f aurora_reader/docker-compose.aurora.yml up
+#
+# The gNB config must enable AURORA, e.g. append to gnb config:
+#   aurora:
+#     enable: true
+#     shm_key: 0xDEADBEEF
+#
+# For split deployments, add one sidecar per RAN container (du, cu_cp, cu_up, ...) with that container's
+# `ipc: "service:<name>"`, its own AURORA_SHM_KEY and its AURORA_INFRA_CONTAINER.
+
+services:
+  gnb:
+    # Allow the sidecar to join the gNB IPC namespace (SysV shared memory).
+    ipc: shareable
+
+  aurora_reader:
+    container_name: ocudu_aurora_reader
+    image: ocudu/aurora_reader
+    build:
+      context: ..
+      dockerfile: docker/aurora_reader/Dockerfile
+    depends_on:
+      - gnb
+    # SysV shared memory of the gNB process.
+    ipc: "service:gnb"
+    # Host PID namespace: resolve container PIDs for the infra (container) metrics.
+    pid: host
+    # No network needed: SHM via IPC namespace, container discovery via the docker unix socket.
+    network_mode: none
+    # Required for the eBPF infra backend (bpf() under docker's default seccomp/apparmor profile) and for joining the
+    # container network namespace (carrier changes). Set AURORA_INFRA_BACKEND=procfs and drop it if not needed.
+    privileged: true
+    environment:
+      AURORA_SHM_KEY: "0xDEADBEEF"
+      AURORA_INFRA: "yes"
+      AURORA_INFRA_BACKEND: "auto"
+      AURORA_INFRA_CONTAINER: "ocudu_gnb"
+      AURORA_INFRA_INTERVAL: "1000"
+    volumes:
+      # CSV output (relative to docker/). Files are written by root (needed for eBPF / host /proc access).
+      - ./aurora-data:/data
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /sys/kernel/btf:/sys/kernel/btf:ro
+      - /sys/kernel/tracing:/sys/kernel/tracing
+      - /sys/kernel/debug:/sys/kernel/debug
