@@ -10,6 +10,7 @@
 #include <net/if.h>
 #include <netinet/ether.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 using namespace ocudu;
@@ -22,6 +23,20 @@ transmitter_impl::transmitter_impl(const transmitter_config& config, ocudulog::b
   if (socket_fd < 0) {
     report_error("Unable to open raw socket for Ethernet transmitter: {}", ::strerror(errno));
   }
+
+  // Socket send buffer sized for a slot's U-plane burst. Frames are sent on a non-blocking socket and dropped when the
+  // buffer is full, and sent frames occupy it until the NIC completes them: the default (net.core.wmem_default,
+  // typically 208 KiB) is about one slot of 2-port jumbo-frame downlink, so a slot compressed and sent at once
+  // overflowed it. SO_SNDBUFFORCE (CAP_NET_ADMIN) goes past net.core.wmem_max; SO_SNDBUF is the unprivileged fallback.
+  // Frames that fit are not delayed: the buffer only holds frames that would otherwise be dropped.
+  static constexpr int tx_socket_buffer_bytes = 4 * 1024 * 1024;
+  if (::setsockopt(socket_fd, SOL_SOCKET, SO_SNDBUFFORCE, &tx_socket_buffer_bytes, sizeof(tx_socket_buffer_bytes)) <
+      0) {
+    ::setsockopt(socket_fd, SOL_SOCKET, SO_SNDBUF, &tx_socket_buffer_bytes, sizeof(tx_socket_buffer_bytes));
+  }
+  int       tx_socket_buffer_actual = 0;
+  socklen_t optlen                  = sizeof(tx_socket_buffer_actual);
+  ::getsockopt(socket_fd, SOL_SOCKET, SO_SNDBUF, &tx_socket_buffer_actual, &optlen);
 
   if (config.interface.size() > (IFNAMSIZ - 1)) {
     report_error("The Ethernet transmitter interface name '{}' exceeds the maximum allowed length");
@@ -59,9 +74,11 @@ transmitter_impl::transmitter_impl(const transmitter_config& config, ocudulog::b
   socket_address.sll_halen   = ETH_ALEN;
   std::copy(std::begin(config.mac_dst_address), std::end(config.mac_dst_address), std::begin(socket_address.sll_addr));
 
-  logger.info("Opened successfully the NIC interface '{}' (fd = '{}') used by the Ethernet transmitter",
+  logger.info("Opened successfully the NIC interface '{}' (fd = '{}', send buffer = {} bytes) used by the Ethernet "
+              "transmitter",
               config.interface,
-              socket_fd);
+              socket_fd,
+              tx_socket_buffer_actual);
 }
 
 transmitter_impl::~transmitter_impl()
