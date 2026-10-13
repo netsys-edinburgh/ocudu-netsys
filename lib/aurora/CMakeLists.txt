@@ -79,7 +79,8 @@ set(AURORA_THREAD_SOURCES
         thread/aurora_thread.c
         thread/aurora_thread_stats.c
         thread/aurora_thread_registry.c
-        thread/aurora_thread_proc.c)
+        thread/aurora_thread_proc.c
+        thread/aurora_thread_ebpf_merge.c)
 if (AURORA_EBPF_AVAILABLE)
     aurora_bpf_skeleton(aurora_thread_ebpf ${CMAKE_CURRENT_SOURCE_DIR}/thread aurora_thread_bpf_skel)
     list(APPEND AURORA_THREAD_SOURCES thread/aurora_thread_ebpf.c)

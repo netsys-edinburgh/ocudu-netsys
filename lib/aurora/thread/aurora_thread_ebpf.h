@@ -44,24 +44,32 @@
  * Per-TID statistics accumulated in the BPF hash map.
  *
  * Updated atomically from the sched_switch and irq_handler tracepoints.
- * Periodically read by the user-space agent and merged into shared memory.
+ * Read by the user-space agent once per interval and merged into shared memory.
+ *
+ * OCUDU: the counters are cumulative for the life of the thread and user space
+ * never writes to an entry. It looks up each monitored TID and computes the
+ * per-interval deltas against the totals it read the previous interval. (The
+ * OAI agent reset every entry while walking the map with get_next_key; a hash
+ * map update re-inserts the element at the head of its bucket, so two TIDs
+ * sharing a bucket made the walk loop forever.)
  */
 struct aurora_bpf_thread_stats {
     __u64 hist_runtime[AURORA_THREAD_HIST_BINS]; /* Exponential histogram bins */
     __u64 overflow;       /* Quanta with runtime > 2^31 ns */
     __u64 total_events;   /* Total scheduling quanta recorded */
-    __u64 max_runtime_ns; /* Maximum quantum runtime observed */
+    __u64 max_runtime_ns; /* Maximum quantum runtime observed since the thread was first seen */
     __u64 irq_count;      /* IRQs/softirqs that interrupted this thread */
     __u64 voluntary_ctxsw;   /* Off-CPU switches where prev_state != TASK_RUNNING */
     __u64 involuntary_ctxsw; /* Off-CPU switches while prev_state == TASK_RUNNING (preemption) */
     __u64 cpu_migrations;    /* sched_migrate_task events for this TID */
+    __u64 interval_max_runtime_ns; /* Maximum quantum runtime observed during interval_epoch */
+    __u64 interval_epoch;    /* Collection interval interval_max_runtime_ns belongs to */
     __u32 last_cpu;       /* Last CPU the thread ran on; AURORA_BPF_CPU_UNSET if never observed */
     __u32 pid;            /* Process ID (tgid in kernel terms) */
 };
 
-/* Sentinel for aurora_bpf_thread_stats.last_cpu meaning "no observation yet" —
- * needed so the first sched_switch after a merge (which preserves last_cpu
- * but zeroes counters) isn't mistaken for a migration to/from CPU 0. */
+/* Sentinel for aurora_bpf_thread_stats.last_cpu meaning "no observation yet",
+ * so a thread that never ran isn't reported as running on CPU 0. */
 #define AURORA_BPF_CPU_UNSET 0xFFFFFFFFu
 
 /*

@@ -100,6 +100,16 @@ struct {
     __type(value, struct aurora_bpf_thread_stats);
 } tid_stats SEC(".maps");
 
+/* Current collection interval number (single element). User space writes the
+ * next number at the end of every collection interval; it is the only map
+ * entry user space writes while the programs run, apart from tid_filter. */
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u64);
+} interval_epoch SEC(".maps");
+
 /* NAMESPACE-RELATIVE tid → 1u8: filter for monitored TIDs (populated from
  * user space, using its own /proc/self/task walk). */
 struct {
@@ -178,6 +188,20 @@ static __always_inline void aurora_bpf_record_quantum(
     __u64 old_max = s->max_runtime_ns;
     if (runtime_ns > old_max)
         __sync_val_compare_and_swap(&s->max_runtime_ns, old_max, runtime_ns);
+
+    /* Per-interval maximum. Quanta of a TID are only recorded by the
+     * sched_switch that takes that thread off its CPU, so updates of one
+     * entry never run concurrently and need no atomics. A stale epoch means
+     * this is the thread's first quantum of the current interval. */
+    __u32 epoch_key = 0;
+    __u64 *epoch = bpf_map_lookup_elem(&interval_epoch, &epoch_key);
+    __u64 cur_epoch = epoch ? *epoch : 0;
+    if (s->interval_epoch != cur_epoch) {
+        s->interval_max_runtime_ns = runtime_ns;
+        s->interval_epoch          = cur_epoch;
+    } else if (runtime_ns > s->interval_max_runtime_ns) {
+        s->interval_max_runtime_ns = runtime_ns;
+    }
 
     s->last_cpu = cpu;
     s->pid      = pid;
