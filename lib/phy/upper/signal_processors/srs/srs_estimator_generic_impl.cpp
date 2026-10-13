@@ -155,7 +155,8 @@ srs_estimator_result srs_estimator_generic_impl::estimate(const resource_grid_re
         // We need to store the data corresponding to Tx port 0 for DOA estimation.
         if (i_antenna_port == 0) {
           unsigned i_symbol_relative = i_symbol - config.resource.start_symbol.value();
-          rx_sequence = doa_data.get_view({i_rx_port}).subspan(i_symbol_relative * sequence_length, sequence_length);
+          rx_sequence =
+              doa_data.get_view({i_rx_port_index}).subspan(i_symbol_relative * sequence_length, sequence_length);
         }
 
         // Extract received sequence.
