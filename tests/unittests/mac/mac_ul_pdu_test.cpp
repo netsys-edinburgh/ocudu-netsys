@@ -413,6 +413,58 @@ TEST(mac_ul_subpdu, decode_timing_advance_report)
 }
 
 // Test the decoding of the Timing Advance field at both ends of its range.
+// PH index to dB interval, TS 38.133 Table 10.1.17.1-1: PH_0 is below -32 dB, PH_1 to PH_54 are 1 dB wide from
+// -32 dB, PH_55 to PH_62 are 2 dB wide from 22 dB, and PH_63 is 38 dB or more.
+TEST(mac_ul_subpdu, ph_index_maps_to_the_ts38133_intervals)
+{
+  EXPECT_EQ(ph_to_db_range(0), ph_db_range(-32, -32));
+  EXPECT_EQ(ph_to_db_range(1), ph_db_range(-32, -31));
+  EXPECT_EQ(ph_to_db_range(2), ph_db_range(-31, -30));
+  EXPECT_EQ(ph_to_db_range(32), ph_db_range(-1, 0));
+  EXPECT_EQ(ph_to_db_range(33), ph_db_range(0, 1));
+  EXPECT_EQ(ph_to_db_range(53), ph_db_range(20, 21));
+  EXPECT_EQ(ph_to_db_range(54), ph_db_range(21, 22));
+  EXPECT_EQ(ph_to_db_range(55), ph_db_range(22, 24));
+  EXPECT_EQ(ph_to_db_range(56), ph_db_range(24, 26));
+  EXPECT_EQ(ph_to_db_range(57), ph_db_range(26, 28));
+  EXPECT_EQ(ph_to_db_range(58), ph_db_range(28, 30));
+  EXPECT_EQ(ph_to_db_range(59), ph_db_range(30, 32));
+  EXPECT_EQ(ph_to_db_range(60), ph_db_range(32, 34));
+  EXPECT_EQ(ph_to_db_range(61), ph_db_range(34, 36));
+  EXPECT_EQ(ph_to_db_range(62), ph_db_range(36, 38));
+  EXPECT_EQ(ph_to_db_range(63), ph_db_range(38, 38));
+}
+
+// The intervals of PH_1 to PH_62 cover the reporting range of -32 to 38 dB without gaps or overlaps (TS 38.133
+// clause 10.1.17.1.1).
+TEST(mac_ul_subpdu, ph_intervals_tile_the_reporting_range)
+{
+  EXPECT_EQ(ph_to_db_range(1).start(), -32);
+  EXPECT_EQ(ph_to_db_range(62).stop(), 38);
+  for (unsigned ph = 1; ph != 63; ++ph) {
+    const ph_db_range range = ph_to_db_range(ph);
+    EXPECT_EQ(range.length(), (ph < 55) ? 1U : 2U) << "PH_" << ph;
+    if (ph > 1) {
+      EXPECT_EQ(range.start(), ph_to_db_range(ph - 1).stop()) << "PH_" << ph;
+    }
+  }
+}
+
+// A Single Entry PHR reporting PH_60 decodes to 32 dB <= PH < 34 dB.
+TEST(mac_ul_subpdu, decode_se_phr_with_a_two_db_power_headroom_level)
+{
+  mac_ul_sch_subpdu subpdu;
+
+  // R/LCID MAC subheader = R|R|LCID = 0x39 or LCID=57.
+  // MAC CE SE PHR = {R|R|PH = 60, R|R|P_CMAX = 47}.
+  byte_buffer msg = byte_buffer::create({0x39, 0x3c, 0x2f}).value();
+  ASSERT_TRUE(subpdu.unpack(msg));
+
+  const phr_report se_phr = decode_se_phr(subpdu.payload());
+  EXPECT_EQ(se_phr.get_se_phr().ph, ph_db_range(32, 34));
+  EXPECT_EQ(se_phr.get_se_phr().p_cmax, p_cmax_dbm_range(17, 18));
+}
+
 TEST(mac_ul_subpdu, decode_timing_advance_report_boundary_values)
 {
   struct test_case {

@@ -29,7 +29,10 @@ inline ph_db_range ph_to_db_range(unsigned ph)
   if (ph < 55) {
     return {ph_min_db_value + ph - 1, ph_min_db_value + ph};
   }
-  return {ph_min_db_value + ph - 1, ph_min_db_value + ph + 1};
+  // PH_55 (22 <= PH < 24 dB) to PH_62 (36 <= PH < 38 dB) are 2 dB wide.
+  static constexpr int ph_55_min_db_value = 22;
+  const int            min_db_value       = ph_55_min_db_value + 2 * (static_cast<int>(ph) - 55);
+  return {min_db_value, min_db_value + 2};
 }
 
 /// \brief Converts P_CMAX,f,c value reported by UE to dBm interval based on mapping defined in Table 10.1.18.1-1 of
