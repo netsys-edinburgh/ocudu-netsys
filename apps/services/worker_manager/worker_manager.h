@@ -99,6 +99,9 @@ private:
   /// the physical layer.
   unsigned nof_workers_general_pool = 0;
 
+  /// Back-off period of the main thread pool workers, also used by the dedicated layer workers.
+  std::chrono::microseconds main_pool_backoff_period{50};
+
   /// Instantiated raw executors.
   task_executor* non_rt_low_prio_exec    = nullptr;
   task_executor* non_rt_medium_prio_exec = nullptr;
@@ -147,6 +150,18 @@ private:
   bool running = true;
 
   void create_main_worker_pool(const worker_manager_config& worker_cfg);
+
+  /// \brief Creates a dedicated worker that replaces a strand of the main thread pool, and returns its executor.
+  ///
+  /// The worker uses a lock-free queue and the main thread pool back-off period. An empty \c mask means the main thread
+  /// pool affinity.
+  task_executor& create_dedicated_layer_worker(const std::string&               name,
+                                               const std::string&               exec_name,
+                                               const os_sched_affinity_bitmask& mask,
+                                               os_thread_realtime_priority      prio);
+
+  /// Returns \c mask if any CPU is set in it, otherwise the main thread pool affinity.
+  os_sched_affinity_bitmask get_dedicated_worker_affinity(const os_sched_affinity_bitmask& mask);
 
   /// Helper method to create workers with non zero priority.
   void create_prio_worker(const std::string&                       name,

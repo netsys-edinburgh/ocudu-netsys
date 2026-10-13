@@ -73,6 +73,12 @@ struct worker_manager_config {
     bool is_rt_mode_enabled;
     /// Whether to enable task tracing.
     bool executor_tracing_enable;
+    /// \brief Whether each cell runs its MAC scheduler (slot indications, MAC cell and lower RLC tasks) on a dedicated
+    /// worker, named "mac_sched#<cell index>", instead of on a strand of the main thread pool.
+    bool dedicated_cell_workers = false;
+    /// \brief CPU affinities of the dedicated cell workers, indexed by cell. Cells without an entry, or with an empty
+    /// mask, use the main thread pool affinity.
+    std::vector<os_sched_affinity_bitmask> cell_worker_affinities;
   };
 
   /// CU-UP executor configuration
@@ -90,10 +96,21 @@ struct worker_manager_config {
     bool executor_tracing_enable = false;
     /// Whether to skip CU-UP executors when executors logging is enabled application wide.
     bool skip_cu_up_executor = true;
+    /// \brief Whether the CU-UP strand (CU-UP control, UE UL and UE DL tasks, i.e. PDCP) runs on a dedicated worker,
+    /// named "pdcp", instead of on the main thread pool. Crypto tasks stay on the main thread pool.
+    bool dedicated_pdcp_worker = false;
+    /// CPU affinity of the dedicated PDCP worker. An empty mask uses the main thread pool affinity.
+    os_sched_affinity_bitmask pdcp_worker_affinity;
   };
 
   /// CU-CP executor configuration.
-  struct cu_cp_config {};
+  struct cu_cp_config {
+    /// \brief Whether the CU-CP strand (including the SRB PDCP) runs on a dedicated worker, named "cu_cp", instead of
+    /// on the main thread pool.
+    bool dedicated_worker = false;
+    /// CPU affinity of the dedicated CU-CP worker. An empty mask uses the main thread pool affinity.
+    os_sched_affinity_bitmask worker_affinity;
+  };
 
   /// PCAP worker configuration.
   struct pcap_config {

@@ -205,6 +205,26 @@ void worker_manager::create_prio_worker(const std::string&                      
   }
 }
 
+os_sched_affinity_bitmask worker_manager::get_dedicated_worker_affinity(const os_sched_affinity_bitmask& mask)
+{
+  return mask.any() ? mask : main_pool_affinity_mng.calcute_affinity_mask(sched_affinity_mask_types::main);
+}
+
+task_executor& worker_manager::create_dedicated_layer_worker(const std::string&               name,
+                                                             const std::string&               exec_name,
+                                                             const os_sched_affinity_bitmask& mask,
+                                                             os_thread_realtime_priority      prio)
+{
+  create_prio_worker(name,
+                     exec_name,
+                     task_worker_queue_size,
+                     concurrent_queue_policy::lockfree_mpmc,
+                     main_pool_backoff_period,
+                     get_dedicated_worker_affinity(mask),
+                     prio);
+  return *exec_mng.executors().at(exec_name);
+}
+
 void worker_manager::add_pcap_strands(const worker_manager_config::pcap_config& config)
 {
   using namespace execution_config_helper;
@@ -214,8 +234,16 @@ void worker_manager::add_pcap_strands(const worker_manager_config::pcap_config& 
 
 void worker_manager::create_cu_cp_executors(const worker_manager_config::cu_cp_config& config, timer_manager& timers)
 {
+  // The CU-CP strand runs on the high priority queue of the main thread pool, unless a dedicated worker is requested.
+  // The dedicated worker gets the OS priority of the main thread pool.
+  task_executor* cu_cp_exec = non_rt_hi_prio_exec;
+  if (config.dedicated_worker) {
+    cu_cp_exec = &create_dedicated_layer_worker(
+        "cu_cp", "cu_cp_exec", config.worker_affinity, os_thread_realtime_priority::max() - 2);
+  }
+
   cu_cp_exec_mapper = ocucp::make_cu_cp_executor_mapper(
-      ocucp::strand_based_executor_config{*non_rt_hi_prio_exec, exec_metrics_channel_registry});
+      ocucp::strand_based_executor_config{*cu_cp_exec, exec_metrics_channel_registry});
 }
 
 void worker_manager::create_cu_up_executors(const worker_manager_config::cu_up_config& config, timer_manager& timers)
@@ -223,6 +251,14 @@ void worker_manager::create_cu_up_executors(const worker_manager_config::cu_up_c
   using namespace execution_config_helper;
 
   auto* metrics_channel_mngr = config.skip_cu_up_executor ? nullptr : exec_metrics_channel_registry;
+
+  // The CU-UP strand (PDCP) runs on the medium priority queue of the main thread pool, unless a dedicated worker is
+  // requested. The dedicated worker gets the OS priority of the main thread pool.
+  task_executor* pdcp_exec = nullptr;
+  if (config.dedicated_pdcp_worker) {
+    pdcp_exec = &create_dedicated_layer_worker(
+        "pdcp", "pdcp_exec", config.pdcp_worker_affinity, os_thread_realtime_priority::max() - 2);
+  }
 
   cu_up_exec_mapper =
       ocuup::make_cu_up_executor_mapper(ocuup::strand_based_executor_config{config.max_nof_ue_strands,
@@ -237,18 +273,50 @@ void worker_manager::create_cu_up_executors(const worker_manager_config::cu_up_c
                                                                             config.dedicated_io_ul_strand,
                                                                             &timers,
                                                                             config.executor_tracing_enable,
-                                                                            metrics_channel_mngr});
+                                                                            metrics_channel_mngr,
+                                                                            pdcp_exec});
 }
 
 void worker_manager::create_du_high_executors(const worker_manager_config::du_high_config& du_hi)
 {
   odu::du_high_executor_config cfg;
 
-  odu::du_high_executor_config::strand_based_worker_pool pool_desc;
-  pool_desc.nof_cells                  = du_hi.nof_cells;
-  pool_desc.default_task_queue_size    = task_worker_queue_size;
-  pool_desc.pool_executors             = {rt_hi_prio_exec};
-  cfg.cell_executors                   = pool_desc;
+  if (du_hi.dedicated_cell_workers and not du_hi.is_rt_mode_enabled) {
+    app_logger.warning("Dedicated MAC scheduler workers are not supported in blocking mode. Using the main thread "
+                       "pool instead");
+  }
+  if (du_hi.dedicated_cell_workers and du_hi.is_rt_mode_enabled) {
+    // One dedicated worker per cell replaces the cell strand of the main thread pool real-time queue. It gets one OS
+    // priority level above the main thread pool, as the real-time queue takes precedence over every other queue of the
+    // pool. The two worker queues keep the priority of slot indications and MAC cell tasks over lower RLC tasks.
+    using namespace execution_config_helper;
+    odu::du_high_executor_config::dedicated_cell_worker_list cell_workers;
+    for (unsigned i = 0; i != du_hi.nof_cells; ++i) {
+      const std::string               cell_str  = std::to_string(i);
+      const os_sched_affinity_bitmask cell_mask = i < du_hi.cell_worker_affinities.size()
+                                                      ? du_hi.cell_worker_affinities[i]
+                                                      : os_sched_affinity_bitmask{};
+      const priority_multiqueue_worker cell_worker{
+          "mac_sched#" + cell_str,
+          {{"mac_sched_hi_exec#" + cell_str, concurrent_queue_policy::lockfree_mpmc, task_worker_queue_size},
+           {"mac_sched_lo_exec#" + cell_str, concurrent_queue_policy::lockfree_mpmc, task_worker_queue_size}},
+          main_pool_backoff_period,
+          os_thread_realtime_priority::max() - 1,
+          get_dedicated_worker_affinity(cell_mask)};
+      if (not exec_mng.add_execution_context(create_execution_context(cell_worker))) {
+        report_fatal_error("Failed to instantiate {} execution context", cell_worker.name);
+      }
+      cell_workers.push_back({exec_mng.executors().at("mac_sched_hi_exec#" + cell_str),
+                              exec_mng.executors().at("mac_sched_lo_exec#" + cell_str)});
+    }
+    cfg.cell_executors = cell_workers;
+  } else {
+    odu::du_high_executor_config::strand_based_worker_pool pool_desc;
+    pool_desc.nof_cells               = du_hi.nof_cells;
+    pool_desc.default_task_queue_size = task_worker_queue_size;
+    pool_desc.pool_executors          = {rt_hi_prio_exec};
+    cfg.cell_executors                = pool_desc;
+  }
   cfg.ue_executors.policy              = odu::du_high_executor_config::ue_executor_config::map_policy::per_cell;
   cfg.ue_executors.max_nof_strands     = 1;
   cfg.ue_executors.ctrl_queue_size     = task_worker_queue_size;
@@ -287,7 +355,8 @@ static unsigned get_default_nof_workers(const worker_manager_config& worker_cfg)
         nof_workers += worker_cfg.du_low_cfg->cell_nof_dl_antennas[i] + worker_cfg.du_low_cfg->cell_nof_ul_antennas[i];
       }
     }
-    if (worker_cfg.du_hi_cfg.has_value()) {
+    // Cells with a dedicated MAC scheduler worker do not need a main thread pool worker.
+    if (worker_cfg.du_hi_cfg.has_value() and not worker_cfg.du_hi_cfg->dedicated_cell_workers) {
       nof_workers += worker_cfg.du_hi_cfg->nof_cells * 1;
     }
     nof_workers += 2;
@@ -317,6 +386,18 @@ static unsigned get_nof_prealloc_producers(const worker_manager_config& worker_c
     // Include threads for each SDR cell and layer.
     nof_producers += 4 * worker_cfg.ru_sdr_cfg->nof_cells;
   }
+  if (worker_cfg.du_hi_cfg.has_value() and worker_cfg.du_hi_cfg->dedicated_cell_workers) {
+    // Include a MAC scheduler thread for each cell.
+    nof_producers += worker_cfg.du_hi_cfg->nof_cells;
+  }
+  if (worker_cfg.cu_up_cfg.has_value() and worker_cfg.cu_up_cfg->dedicated_pdcp_worker) {
+    // Include the PDCP thread.
+    nof_producers += 1;
+  }
+  if (worker_cfg.cu_cp_cfg.has_value() and worker_cfg.cu_cp_cfg->dedicated_worker) {
+    // Include the CU-CP thread.
+    nof_producers += 1;
+  }
 
   return nof_producers;
 }
@@ -327,6 +408,7 @@ void worker_manager::create_main_worker_pool(const worker_manager_config& worker
 
   // Configure main worker pool.
   nof_workers_general_pool        = get_default_nof_workers(worker_cfg);
+  main_pool_backoff_period        = worker_cfg.main_pool_backoff_period;
   const auto     worker_pool_prio = os_thread_realtime_priority::max() - 2;
   const unsigned qsize            = worker_cfg.main_pool_task_queue_size;
   // Estimation of an upper bound on the number of implicit producers that are required.
