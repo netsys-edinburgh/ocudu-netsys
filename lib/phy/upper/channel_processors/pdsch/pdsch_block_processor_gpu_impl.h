@@ -35,9 +35,13 @@ public:
   /// \param host_fallback_ Optional host block processor that produces the symbols of a transmission the GPU encoder
   ///                       rejects (for example a transport block above the preallocated GPU capacity). Without it, a
   ///                       rejected transmission is a fatal error rather than a silently wrong symbol stream.
+  /// \param device_grid_mapping True to map the modulated symbols into device grids on the GPU (the downlink grids are
+  ///                            CUDA-visible managed grids). False leaves it to the platform: integrated GPUs map on
+  ///                            the device, discrete GPUs on the host. Environment overrides apply in both cases.
   explicit pdsch_block_processor_gpu_impl(std::unique_ptr<pdsch_tb_encoder_gpu>  tb_encoder_,
-                                          int                                    nvcuda_device_id = 0,
-                                          std::unique_ptr<pdsch_block_processor> host_fallback_   = nullptr);
+                                          int                                    nvcuda_device_id    = 0,
+                                          std::unique_ptr<pdsch_block_processor> host_fallback_      = nullptr,
+                                          bool                                   device_grid_mapping = false);
 
   /// Frees GPU device-mapper scratch buffers.
   ~pdsch_block_processor_gpu_impl() override;
@@ -111,6 +115,8 @@ private:
 
   /// CUDA device ID this block processor binds to.
   int device_id_ = 0;
+  /// Device grid mapping turned off (environment, or a host-placed grid on a discrete GPU); fixed at construction.
+  bool gpu_mapper_disabled = false;
 
   /// Host block processor used when the GPU encoder rejects a transmission (optional).
   std::unique_ptr<pdsch_block_processor> host_fallback;

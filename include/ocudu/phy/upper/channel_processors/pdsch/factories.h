@@ -116,9 +116,12 @@ create_pdsch_processor_pool(std::shared_ptr<pdsch_processor_factory> pdsch_proc_
                             bool                                     block_on_exhaustion = false);
 
 /// \brief Creates an accelerated PDSCH block processor factory.
+/// \param nvcuda_device_id CUDA device.
+/// \param device_grid_mapping True to map the modulated symbols into device grids on the GPU (the downlink grids are
+///                            CUDA-visible managed grids); false leaves it to the platform (integrated GPUs only).
 /// \return Shared pointer to the factory, or nullptr if acceleration is unavailable.
 std::shared_ptr<pdsch_block_processor_factory>
-create_pdsch_block_processor_factory_accelerated(int nvcuda_device_id = 0);
+create_pdsch_block_processor_factory_accelerated(int nvcuda_device_id = 0, bool device_grid_mapping = false);
 
 /// \brief Checks if accelerated PDSCH block processing is available.
 /// \return True if a block-processing acceleration backend is available.

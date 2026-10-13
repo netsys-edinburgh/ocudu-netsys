@@ -515,8 +515,9 @@ namespace {
 class pdsch_block_processor_factory_accelerated : public pdsch_block_processor_factory
 {
 public:
-  explicit pdsch_block_processor_factory_accelerated(int cuda_device_id_) :
+  pdsch_block_processor_factory_accelerated(int cuda_device_id_, bool device_grid_mapping_) :
     nvcuda_device_id(cuda_device_id_),
+    device_grid_mapping(device_grid_mapping_),
     // Host chain for transmissions the GPU encoder rejects (e.g. above its preallocated capacity), so that a rejected
     // transmission is still produced bit-exactly instead of leaving stale symbols.
     host_fallback_factory(create_pdsch_block_processor_factory_sw(create_ldpc_encoder_factory_sw("auto"),
@@ -535,23 +536,24 @@ public:
     std::unique_ptr<pdsch_block_processor> host_fallback =
         host_fallback_factory ? host_fallback_factory->create() : nullptr;
     return std::make_unique<pdsch_block_processor_gpu_impl>(
-        std::move(tb_encoder), nvcuda_device_id, std::move(host_fallback));
+        std::move(tb_encoder), nvcuda_device_id, std::move(host_fallback), device_grid_mapping);
   }
 
 private:
   int                                            nvcuda_device_id;
+  bool                                           device_grid_mapping;
   std::shared_ptr<pdsch_block_processor_factory> host_fallback_factory;
 };
 
 } // namespace
 
 std::shared_ptr<pdsch_block_processor_factory>
-ocudu::create_pdsch_block_processor_factory_accelerated(int nvcuda_device_id)
+ocudu::create_pdsch_block_processor_factory_accelerated(int nvcuda_device_id, bool device_grid_mapping)
 {
   if (!is_pdsch_tb_encoder_gpu_available()) {
     return nullptr;
   }
-  return std::make_shared<pdsch_block_processor_factory_accelerated>(nvcuda_device_id);
+  return std::make_shared<pdsch_block_processor_factory_accelerated>(nvcuda_device_id, device_grid_mapping);
 }
 
 bool ocudu::is_pdsch_block_processor_acceleration_available()
@@ -562,7 +564,7 @@ bool ocudu::is_pdsch_block_processor_acceleration_available()
 #else // ENABLE_CUDA
 
 std::shared_ptr<pdsch_block_processor_factory>
-ocudu::create_pdsch_block_processor_factory_accelerated(int /*nvcuda_device_id*/)
+ocudu::create_pdsch_block_processor_factory_accelerated(int /*nvcuda_device_id*/, bool /*device_grid_mapping*/)
 {
   return nullptr;
 }

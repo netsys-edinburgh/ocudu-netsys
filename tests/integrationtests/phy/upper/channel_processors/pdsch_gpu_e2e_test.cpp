@@ -1175,9 +1175,8 @@ void check_device_grid_writer_matches_host(unsigned                             
                                            std::optional<precoding_weight_matrix> precoding,
                                            pdsch_mcs_table                        mcs_table = pdsch_mcs_table::qam64)
 {
-  // Discrete GPUs keep the device mapper off unless the direct device grid is requested. The choice is made once per
-  // process, so this only takes effect if no earlier test made it; the CTest entries running these tests on their own
-  // set the variable for the whole process.
+  // Discrete GPUs keep the device mapper off unless device grid mapping is requested: the GPU block processor below
+  // requests it explicitly, and the variable keeps any inherited setting from turning it off.
   env_var_guard direct_grid_guard("OCUDU_PDSCH_DIRECT_DEVICE_GRID");
   setenv("OCUDU_PDSCH_DIRECT_DEVICE_GRID", "1", 1);
   env_var_guard skip_host_guard("OCUDU_PDSCH_DEVICE_MAP_SKIP_HOST");
@@ -1206,7 +1205,9 @@ void check_device_grid_writer_matches_host(unsigned                             
   std::shared_ptr<pdsch_processor_factory> cpu_proc_factory =
       create_test_pdsch_processor_factory(create_cpu_pdsch_block_processor_factory(), executor);
   std::shared_ptr<pdsch_processor_factory> gpu_proc_factory = create_test_pdsch_processor_factory(
-      create_pdsch_block_processor_factory_accelerated(), executor, std::numeric_limits<unsigned>::max());
+      create_pdsch_block_processor_factory_accelerated(0, /* device_grid_mapping = */ true),
+      executor,
+      std::numeric_limits<unsigned>::max());
   ASSERT_NE(cpu_proc_factory, nullptr);
   ASSERT_NE(gpu_proc_factory, nullptr);
 
@@ -1681,7 +1682,9 @@ TEST(PdschGpuDeviceGridWriter, WideBandwidthResidentMappingsMatchHost)
   std::shared_ptr<pdsch_processor_factory> cpu_proc_factory =
       create_test_pdsch_processor_factory(create_cpu_pdsch_block_processor_factory(), executor);
   std::shared_ptr<pdsch_processor_factory> gpu_proc_factory = create_test_pdsch_processor_factory(
-      create_pdsch_block_processor_factory_accelerated(), executor, std::numeric_limits<unsigned>::max());
+      create_pdsch_block_processor_factory_accelerated(0, /* device_grid_mapping = */ true),
+      executor,
+      std::numeric_limits<unsigned>::max());
   ASSERT_NE(cpu_proc_factory, nullptr);
   ASSERT_NE(gpu_proc_factory, nullptr);
 
@@ -1782,7 +1785,9 @@ TEST(PdschGpuDeviceGridWriter, MaterializedResidentGridMatchesHostGrid)
   std::shared_ptr<pdsch_processor_factory> cpu_proc_factory =
       create_test_pdsch_processor_factory(create_cpu_pdsch_block_processor_factory(), executor);
   std::shared_ptr<pdsch_processor_factory> gpu_proc_factory = create_test_pdsch_processor_factory(
-      create_pdsch_block_processor_factory_accelerated(), executor, std::numeric_limits<unsigned>::max());
+      create_pdsch_block_processor_factory_accelerated(0, /* device_grid_mapping = */ true),
+      executor,
+      std::numeric_limits<unsigned>::max());
   ASSERT_NE(cpu_proc_factory, nullptr);
   ASSERT_NE(gpu_proc_factory, nullptr);
 

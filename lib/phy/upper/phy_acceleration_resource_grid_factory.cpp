@@ -30,6 +30,31 @@ bool ocudu::phy_acceleration_cuda_current_device_is_discrete(int nvcuda_device_i
 #endif
 }
 
+bool ocudu::phy_acceleration_resource_grid_uses_managed_memory(phy_acceleration_resource_grid_direction   direction,
+                                                               phy_acceleration_resource_grid_memory_mode memory_mode,
+                                                               int nvcuda_device_id)
+{
+  switch (memory_mode) {
+    case phy_acceleration_resource_grid_memory_mode::managed:
+      return true;
+    case phy_acceleration_resource_grid_memory_mode::pinned:
+      return false;
+    case phy_acceleration_resource_grid_memory_mode::auto_select:
+      break;
+  }
+#ifdef ENABLE_CUDA
+  return resource_grid_cuda_visible_factory::should_use_managed_grid(
+      (direction == phy_acceleration_resource_grid_direction::downlink)
+          ? resource_grid_cuda_visible_factory::direction::downlink
+          : resource_grid_cuda_visible_factory::direction::uplink,
+      nvcuda_device_id);
+#else
+  (void)direction;
+  (void)nvcuda_device_id;
+  return false;
+#endif
+}
+
 std::shared_ptr<resource_grid_factory>
 ocudu::create_phy_acceleration_resource_grid_factory(std::shared_ptr<resource_grid_factory>     fallback_factory,
                                                      phy_acceleration_resource_grid_direction   direction,

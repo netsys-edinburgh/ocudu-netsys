@@ -198,6 +198,26 @@ TEST(phy_acceleration_runtime_options_test, managed_access_policy_matches_platfo
   }
 }
 
+TEST(phy_acceleration_runtime_options_test, auto_grid_placement_follows_the_memory_model)
+{
+  // Arguments: integrated, concurrent managed access, host page tables, direct managed access from the host.
+
+  // Integrated GPUs (DGX Spark GB10, Jetson Thor, older Jetson): one physical memory -> managed.
+  EXPECT_TRUE(cuda_visible_grid_auto_uses_managed_memory(true, true, true, false));
+  EXPECT_TRUE(cuda_visible_grid_auto_uses_managed_memory(true, false, false, false));
+
+  // Fully coherent CPU-GPU link (GH200 / GB200 NVLink-C2C) -> managed.
+  EXPECT_TRUE(cuda_visible_grid_auto_uses_managed_memory(false, true, true, true));
+
+  // Discrete PCIe GPUs (x86 + RTX 4500 / 6000 Ada; with or without HMM) -> pinned host grids.
+  EXPECT_FALSE(cuda_visible_grid_auto_uses_managed_memory(false, true, false, false));
+  EXPECT_FALSE(cuda_visible_grid_auto_uses_managed_memory(false, false, false, false));
+
+  // Partial coherence is not enough for a discrete GPU.
+  EXPECT_FALSE(cuda_visible_grid_auto_uses_managed_memory(false, true, true, false));
+  EXPECT_FALSE(cuda_visible_grid_auto_uses_managed_memory(false, false, true, true));
+}
+
 TEST(phy_acceleration_runtime_options_test, pdsch_auto_enable_discrete_override_reports_configured_state)
 {
   scoped_env_var env("OCUDU_PDSCH_AUTO_ENABLE_DISCRETE");

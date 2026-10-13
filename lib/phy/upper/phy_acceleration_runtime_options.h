@@ -153,6 +153,23 @@ inline bool cuda_visible_managed_access_is_fully_coherent(bool concurrent_manage
   return concurrent_managed_access && host_uses_host_page_tables && direct_managed_access_from_host;
 }
 
+/// \brief Automatic placement of a CUDA-visible resource grid: true for managed memory, false for pinned host memory.
+///
+/// Managed memory wherever the CPU and the GPU share it without page migrations: integrated GPUs (one physical memory,
+/// e.g. DGX Spark GB10, Jetson Thor) and fully coherent CPU-GPU links (e.g. GH200 / GB200 NVLink-C2C). There the GPU
+/// stages work on the grid in place -- PDSCH maps into the downlink grid, O-RAN compression reads it and decompression
+/// writes the uplink grid, PUSCH / SRS read it -- and the host stages (PDCCH, DMRS, SSB, CSI-RS writes; PUCCH and host
+/// PUSCH reads, through the uplink host mirror) need no copies. Discrete PCIe GPUs get pinned host grids: the host
+/// stages would fault device-resident managed pages back over PCIe every slot, and the GPU stages copy instead.
+inline bool cuda_visible_grid_auto_uses_managed_memory(bool integrated,
+                                                       bool concurrent_managed_access,
+                                                       bool host_uses_host_page_tables,
+                                                       bool direct_managed_access_from_host)
+{
+  return integrated || cuda_visible_managed_access_is_fully_coherent(
+                           concurrent_managed_access, host_uses_host_page_tables, direct_managed_access_from_host);
+}
+
 inline cuda_visible_managed_access_policy
 make_cuda_visible_managed_access_policy(bool concurrent_managed_access,
                                         bool host_uses_host_page_tables,

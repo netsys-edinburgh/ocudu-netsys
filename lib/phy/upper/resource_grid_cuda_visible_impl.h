@@ -2061,6 +2061,23 @@ public:
     return fallback_factory->create(nof_ports, nof_symbols, nof_subc);
   }
 
+  /// \brief Returns true when grids of the given direction use managed memory unless a placement is configured.
+  ///
+  /// The OCUDU_{DL,UL}_CUDA_VISIBLE_GRID / OCUDU_CUDA_VISIBLE_GRID environment overrides first (managed, pinned), then
+  /// the platform policy (see cuda_visible_grid_auto_uses_managed_memory()).
+  static bool should_use_managed_grid(direction grid_direction, int device_id)
+  {
+    const char* mode = phy_acceleration_cuda_visible_grid_mode(get_direction_env_name(grid_direction));
+    if ((mode == nullptr) && (grid_direction == direction::generic)) {
+      mode = std::getenv("OCUDU_UL_CUDA_VISIBLE_GRID");
+    }
+    if (mode != nullptr) {
+      return mode_uses_managed(mode, device_id);
+    }
+
+    return should_use_managed_grid_auto(device_id);
+  }
+
 private:
   static const char* get_direction_env_name(direction grid_direction)
   {
@@ -2088,26 +2105,20 @@ private:
     return should_use_managed_grid_auto(device_id);
   }
 
-  static bool should_use_managed_grid(direction grid_direction, int device_id)
-  {
-    const char* mode = phy_acceleration_cuda_visible_grid_mode(get_direction_env_name(grid_direction));
-    if ((mode == nullptr) && (grid_direction == direction::generic)) {
-      mode = std::getenv("OCUDU_UL_CUDA_VISIBLE_GRID");
-    }
-    if (mode != nullptr) {
-      return mode_uses_managed(mode, device_id);
-    }
-
-    return should_use_managed_grid_auto(device_id);
-  }
-
   static bool should_use_managed_grid_auto(int device_id)
   {
-    int integrated = 0;
-    if (cudaDeviceGetAttribute(&integrated, cudaDevAttrIntegrated, device_id) != cudaSuccess) {
-      return false;
-    }
-    return integrated != 0;
+    auto query = [device_id](cudaDeviceAttr attribute) {
+      int value = 0;
+      if (cudaDeviceGetAttribute(&value, attribute, device_id) != cudaSuccess) {
+        (void)cudaGetLastError();
+        return false;
+      }
+      return value != 0;
+    };
+    return cuda_visible_grid_auto_uses_managed_memory(query(cudaDevAttrIntegrated),
+                                                      query(cudaDevAttrConcurrentManagedAccess),
+                                                      query(cudaDevAttrPageableMemoryAccessUsesHostPageTables),
+                                                      query(cudaDevAttrDirectManagedMemAccessFromHost));
   }
 
   direction                              grid_direction;

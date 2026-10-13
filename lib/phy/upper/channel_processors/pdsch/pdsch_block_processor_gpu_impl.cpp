@@ -109,9 +109,9 @@ bool is_encode_cache_disabled()
   return disabled;
 }
 
-bool is_gpu_mapper_disabled(int device_id)
+bool is_gpu_mapper_disabled(int device_id, bool device_grid_mapping)
 {
-  static const bool disabled = [device_id]() {
+  {
     const char* disable_value = std::getenv("OCUDU_PDSCH_DISABLE_DEVICE_MAP");
     if (disable_value != nullptr) {
       return std::strcmp(disable_value, "0") != 0;
@@ -122,7 +122,9 @@ bool is_gpu_mapper_disabled(int device_id)
       return !phy_acceleration_env_flag_enabled("OCUDU_PDSCH_DIRECT_DEVICE_GRID", true);
     }
 
-    if (phy_acceleration_cuda_visible_grid_managed_requested("OCUDU_DL_CUDA_VISIBLE_GRID")) {
+    // Managed downlink grids (configured, or the automatic placement on integrated and fully coherent platforms) are
+    // mapped into on the device.
+    if (device_grid_mapping || phy_acceleration_cuda_visible_grid_managed_requested("OCUDU_DL_CUDA_VISIBLE_GRID")) {
       return false;
     }
 
@@ -137,8 +139,7 @@ bool is_gpu_mapper_disabled(int device_id)
     // resource grid back to host before TX. That is slower than the host mapper
     // unless a real CUDA-visible downstream grid is selected explicitly.
     return integrated == 0;
-  }();
-  return disabled;
+  }
 }
 
 bool is_symbol_d2h_deferred()
@@ -180,8 +181,12 @@ uint64_t pdsch_block_processor_gpu_impl::get_nof_host_fallbacks()
 
 pdsch_block_processor_gpu_impl::pdsch_block_processor_gpu_impl(std::unique_ptr<pdsch_tb_encoder_gpu>  tb_encoder_,
                                                                int                                    nvcuda_device_id,
-                                                               std::unique_ptr<pdsch_block_processor> host_fallback_) :
-  tb_encoder(std::move(tb_encoder_)), device_id_(nvcuda_device_id), host_fallback(std::move(host_fallback_))
+                                                               std::unique_ptr<pdsch_block_processor> host_fallback_,
+                                                               bool device_grid_mapping) :
+  tb_encoder(std::move(tb_encoder_)),
+  device_id_(nvcuda_device_id),
+  gpu_mapper_disabled(is_gpu_mapper_disabled(nvcuda_device_id, device_grid_mapping)),
+  host_fallback(std::move(host_fallback_))
 {
   ocudu_assert(tb_encoder, "Invalid GPU TB encoder.");
   ocudu_assert(tb_encoder->is_gpu_available(), "GPU not available.");
@@ -286,7 +291,7 @@ bool pdsch_block_processor_gpu_impl::can_reuse_cached_encode(const pdsch_tb_enco
 bool pdsch_block_processor_gpu_impl::supports_device_grid_mapping() const
 {
   // The precoded device mappers take any matrix with no more layers than ports.
-  return !is_gpu_mapper_disabled(device_id_) && (nof_layers >= 1) && (nof_layers <= PDSCH_PRECODING_MAX_LAYERS) &&
+  return !gpu_mapper_disabled && (nof_layers >= 1) && (nof_layers <= PDSCH_PRECODING_MAX_LAYERS) &&
          (nof_layers <= nof_ports) && (nof_ports <= PDSCH_PRECODING_MAX_PORTS);
 }
 

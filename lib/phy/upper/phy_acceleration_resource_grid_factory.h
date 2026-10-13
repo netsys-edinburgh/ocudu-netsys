@@ -30,6 +30,14 @@ std::shared_ptr<resource_grid_factory> create_phy_acceleration_resource_grid_fac
     int                                        nvcuda_device_id = 0,
     phy_acceleration_resource_grid_memory_mode memory_mode = phy_acceleration_resource_grid_memory_mode::auto_select);
 
+/// \brief Returns true when an accelerated resource grid of the given direction and mode uses managed memory.
+///
+/// Resolves auto_select as create_phy_acceleration_resource_grid_factory() does (environment overrides, then the
+/// platform policy). Always false in builds without an accelerated implementation.
+bool phy_acceleration_resource_grid_uses_managed_memory(phy_acceleration_resource_grid_direction   direction,
+                                                        phy_acceleration_resource_grid_memory_mode memory_mode,
+                                                        int nvcuda_device_id = 0);
+
 /// Returns true when the given NVIDIA CUDA device is known to be discrete. Unknown devices return false.
 bool phy_acceleration_cuda_current_device_is_discrete(int nvcuda_device_id = 0);
 

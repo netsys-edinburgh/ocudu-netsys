@@ -80,8 +80,9 @@ if(CUDA_ACCEL_FOUND)
           ${CMAKE_SOURCE_DIR}/lib/phy/upper/channel_coding/ldpc)
   target_link_libraries(pdsch_gpu_e2e_test ocudu_ldpc_cuda ocudu_ofh_compression CUDA::cudart)
   target_compile_definitions(pdsch_gpu_e2e_test PRIVATE ENABLE_CUDA)
-  # Device-grid PDSCH mapping, identity and codebook precoding. Discrete GPUs enable the device mapper only with
-  # OCUDU_PDSCH_DIRECT_DEVICE_GRID, decided once per process, so these run in a process of their own.
+  # Device-grid PDSCH mapping, identity and codebook precoding. Discrete GPUs enable the device mapper only on request
+  # (OCUDU_PDSCH_DIRECT_DEVICE_GRID, or a block processor created for device grid mapping), so these run in a process
+  # of their own with the variable set.
   add_test(NAME pdsch_gpu_device_grid_precoding_test
            COMMAND pdsch_gpu_e2e_test --gtest_filter=Layers/PdschGpuDeviceGridWriter.*:PdschGpuDeviceGridWriterPmi*)
   set_tests_properties(pdsch_gpu_device_grid_precoding_test PROPERTIES ENVIRONMENT OCUDU_PDSCH_DIRECT_DEVICE_GRID=1)

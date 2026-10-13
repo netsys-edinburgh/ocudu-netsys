@@ -58,34 +58,6 @@ create_ul_processor_factory(const upper_phy_factory_configuration& config,
                             std::shared_ptr<resource_grid_factory> rg_factory,
                             upper_phy_metrics_notifiers*           metric_notifier);
 
-static bool use_pdsch_acceleration_in_auto_mode(int nvcuda_device_id, const std::string& dl_grid_mode)
-{
-  if (!is_pdsch_block_processor_acceleration_available()) {
-    return false;
-  }
-
-  if (phy_acceleration_pdsch_auto_enable_discrete_configured()) {
-    return phy_acceleration_pdsch_auto_enable_discrete_requested();
-  }
-
-  bool managed_grid_requested = dl_grid_mode == "managed";
-  if (dl_grid_mode == "auto") {
-    managed_grid_requested = phy_acceleration_cuda_visible_grid_managed_requested("OCUDU_DL_CUDA_VISIBLE_GRID");
-  }
-  if (managed_grid_requested) {
-    return true;
-  }
-
-  if (phy_acceleration_cuda_current_device_is_discrete(nvcuda_device_id)) {
-    ocudulog::fetch_basic_logger("PHY").warning(
-        "PDSCH acceleration auto mode selected host backend on a discrete CUDA device. Set "
-        "OCUDU_PDSCH_AUTO_ENABLE_DISCRETE=1 or use pdsch_acceleration_mode=enabled for the accelerated GPU path.");
-    return false;
-  }
-
-  return true;
-}
-
 static phy_acceleration_resource_grid_memory_mode parse_cuda_visible_grid_mode(const std::string& mode,
                                                                                const char*        direction)
 {
@@ -97,6 +69,35 @@ static phy_acceleration_resource_grid_memory_mode parse_cuda_visible_grid_mode(c
   }
   report_fatal_error_if_not(mode == "auto", "Invalid CUDA-visible {} resource-grid mode '{}'", direction, mode);
   return phy_acceleration_resource_grid_memory_mode::auto_select;
+}
+
+static bool use_pdsch_acceleration_in_auto_mode(int nvcuda_device_id, const std::string& dl_grid_mode)
+{
+  if (!is_pdsch_block_processor_acceleration_available()) {
+    return false;
+  }
+
+  if (phy_acceleration_pdsch_auto_enable_discrete_configured()) {
+    return phy_acceleration_pdsch_auto_enable_discrete_requested();
+  }
+
+  // The GPU PDSCH maps straight into a managed downlink grid (integrated GPUs, fully coherent CPU-GPU links, or a
+  // configured managed grid). With pinned host grids on a discrete GPU it would map into a device-side copy that is
+  // transferred to the host every slot, so auto keeps the host PDSCH there.
+  if (phy_acceleration_resource_grid_uses_managed_memory(phy_acceleration_resource_grid_direction::downlink,
+                                                         parse_cuda_visible_grid_mode(dl_grid_mode, "downlink"),
+                                                         nvcuda_device_id)) {
+    return true;
+  }
+
+  if (phy_acceleration_cuda_current_device_is_discrete(nvcuda_device_id)) {
+    ocudulog::fetch_basic_logger("PHY").warning(
+        "PDSCH acceleration auto mode selected host backend on a discrete CUDA device. Set "
+        "OCUDU_PDSCH_AUTO_ENABLE_DISCRETE=1 or use pdsch_acceleration_mode=enabled for the accelerated GPU path.");
+    return false;
+  }
+
+  return true;
 }
 
 static std::unique_ptr<uplink_processor_pool>
@@ -589,8 +590,14 @@ public:
                                                       use_accelerated_dl_grid,
                                                       factory_config.nvcuda_device_id,
                                                       dl_grid_memory_mode);
-    ocudulog::fetch_basic_logger("APP").info("Downlink CUDA-visible resource-grid manifest: requested={}",
-                                             factory_config.dl_cuda_visible_grid_mode);
+    ocudulog::fetch_basic_logger("APP").info(
+        "Downlink CUDA-visible resource-grid manifest: requested={} placement={}",
+        factory_config.dl_cuda_visible_grid_mode,
+        !use_accelerated_dl_grid ? "host"
+        : phy_acceleration_resource_grid_uses_managed_memory(
+              phy_acceleration_resource_grid_direction::downlink, dl_grid_memory_mode, factory_config.nvcuda_device_id)
+            ? "managed"
+            : "pinned");
 
     phy_config.dl_rg_pool = create_dl_resource_grid_pool(factory_deps, config, dl_rg_factory);
     report_fatal_error_if_not(phy_config.dl_rg_pool, "Invalid downlink resource grid pool.");
@@ -1179,8 +1186,14 @@ create_ul_processor_factory(const upper_phy_factory_configuration& config,
                                                     enable_cuda_visible_ul_grid,
                                                     config.nvcuda_device_id,
                                                     ul_grid_memory_mode);
-  ocudulog::fetch_basic_logger("APP").info("Uplink CUDA-visible resource-grid manifest: requested={}",
-                                           config.ul_cuda_visible_grid_mode);
+  ocudulog::fetch_basic_logger("APP").info(
+      "Uplink CUDA-visible resource-grid manifest: requested={} placement={}",
+      config.ul_cuda_visible_grid_mode,
+      !enable_cuda_visible_ul_grid ? "host"
+      : phy_acceleration_resource_grid_uses_managed_memory(
+            phy_acceleration_resource_grid_direction::uplink, ul_grid_memory_mode, config.nvcuda_device_id)
+          ? "managed"
+          : "pinned");
 
   // Create base factory.
   std::shared_ptr<uplink_processor_factory> factory =
@@ -1490,7 +1503,13 @@ ocudu::create_downlink_processor_factory_sw(const downlink_processor_factory_sw_
     // "disabled" means use_pdsch_acceleration stays false.
 
     if (use_pdsch_acceleration) {
-      auto accelerated_factory = create_pdsch_block_processor_factory_accelerated(config.nvcuda_device_id);
+      // The downlink grids are accelerated whenever the PDSCH is; map into them on the device where they are managed.
+      const bool device_grid_mapping = phy_acceleration_resource_grid_uses_managed_memory(
+          phy_acceleration_resource_grid_direction::downlink,
+          parse_cuda_visible_grid_mode(config.dl_cuda_visible_grid_mode, "downlink"),
+          config.nvcuda_device_id);
+      auto accelerated_factory =
+          create_pdsch_block_processor_factory_accelerated(config.nvcuda_device_id, device_grid_mapping);
       report_fatal_error_if_not(accelerated_factory, "Invalid accelerated PDSCH block processor factory.");
       // Pure GPU is the production path. Optional hybrid host-for-small-TB is a debug escape
       // hatch only (OCUDU_PDSCH_HYBRID_HOST_SMALL_TB=1) — not the default fix for OTA regressions.

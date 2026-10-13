@@ -230,9 +230,9 @@ Upper-PHY options under `expert_phy`:
 | Option | Values | Effect |
 | --- | --- | --- |
 | `pusch_acceleration_mode` | `auto`, `enabled`, `disabled` | Selects the CUDA resident PUSCH demodulator/decoder path when available. |
-| `ul_cuda_visible_grid_mode` | `auto`, `managed`, `pinned` | Selects UL resource-grid memory. `auto` uses managed memory on integrated GPUs and pinned host memory otherwise; `managed` requires a CUDA managed grid suitable for direct OFH-to-PUSCH GPU processing. |
+| `ul_cuda_visible_grid_mode` | `auto`, `managed`, `pinned` | Selects UL resource-grid memory. `auto` uses managed memory where the CPU and GPU share it (integrated GPUs such as DGX Spark and Jetson Thor, and fully coherent links such as GH200/GB200 NVLink-C2C) and pinned host memory on discrete PCIe GPUs; `managed` requires a CUDA managed grid suitable for direct OFH-to-PUSCH GPU processing. |
 | `srs_acceleration_mode` | `auto`, `enabled`, `disabled` | Selects the CUDA SRS estimator when available. |
-| `pdsch_acceleration_mode` | `auto`, `enabled`, `disabled` | Selects the CUDA PDSCH block processor when the PDSCH processor type is `auto` or `flexible`. On a discrete CUDA device, `auto` prefers host unless the downlink grid is CUDA-visible or `OCUDU_PDSCH_AUTO_ENABLE_DISCRETE=1`; use `enabled` to require CUDA. |
+| `pdsch_acceleration_mode` | `auto`, `enabled`, `disabled` | Selects the CUDA PDSCH block processor when the PDSCH processor type is `auto` or `flexible`. On a discrete CUDA device, `auto` prefers host unless the downlink grid is placed in managed memory (`dl_cuda_visible_grid_mode: managed`, or `auto` on a fully coherent platform) or `OCUDU_PDSCH_AUTO_ENABLE_DISCRETE=1`; use `enabled` to require CUDA. With a managed downlink grid the GPU PDSCH maps its symbols into the grid on the device. |
 | `prach_acceleration_mode` | `auto`, `enabled`, `disabled` | Selects the CUDA upper-PHY PRACH detector when available. |
 | `pdsch_acceleration_nof_lanes` | `0` or positive integer | `0` uses the default lane policy; non-zero values bound concurrent accelerated PDSCH lanes. |
 | `ldpc_decoder_algorithm` | `auto`, `boxplus`, `min_sum` | Selects the CUDA LDPC decoder algorithm. `auto` chooses the lower-latency algorithm for the current codeblock batch. |
