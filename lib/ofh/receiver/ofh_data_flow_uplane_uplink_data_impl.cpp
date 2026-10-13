@@ -51,7 +51,10 @@ void data_flow_uplane_uplink_data_impl::decode_type1_message(unsigned           
         return;
       }
       if (is_direct_write_success(write_result)) {
-        notification_sender.notify_received_symbol(compressed_results.params.slot, compressed_results.params.symbol_id);
+        // Queued device writes must be submitted before the grid symbol reaches its consumers.
+        notification_sender.notify_received_symbol(compressed_results.params.slot,
+                                                   compressed_results.params.symbol_id,
+                                                   [this]() { flush_pending_grid_writes(); });
         return;
       }
       if (!allows_host_decompression_fallback(write_result)) {
@@ -69,6 +72,9 @@ void data_flow_uplane_uplink_data_impl::decode_type1_message(unsigned           
     metrics_collector.increase_dropped_messages();
     return;
   }
+
+  // The host write below must not be overtaken by device writes queued earlier for the same REs.
+  flush_pending_grid_writes();
 
   decode_tp = ofh_tracer.now();
 
@@ -96,6 +102,17 @@ void data_flow_uplane_uplink_data_impl::decode_type1_message(unsigned           
   }
 
   notification_sender.notify_received_symbol(results.params.slot, results.params.symbol_id);
+}
+
+void data_flow_uplane_uplink_data_impl::flush_pending_grid_writes()
+{
+  iq_decompression_result result = uplane_decoder->flush_resource_grid_decompressions();
+  if (OCUDU_UNLIKELY(!is_iq_decompression_success(result))) {
+    logger.warning(
+        "Sector#{}: could not submit the queued Open Fronthaul uplink resource-grid writes, the affected REs "
+        "are left unwritten",
+        sector_id);
+  }
 }
 
 bool data_flow_uplane_uplink_data_impl::should_uplane_packet_be_filtered(unsigned                              eaxc,

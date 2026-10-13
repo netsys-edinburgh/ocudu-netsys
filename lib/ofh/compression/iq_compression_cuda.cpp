@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
 #include "iq_compression_cuda.h"
+#include "../support/ofh_ul_rx_diagnostics.h"
 #include "ocudu/ofh/compression/compression_factory.h"
 #include "ocudu/ofh/compression/compression_properties.h"
 #include "ocudu/phy/support/prach_buffer.h"
@@ -135,6 +136,23 @@ static bool read_host_iq_on_gpu()
   return (env_value != nullptr) && (env_value[0] != '\0') && (std::strcmp(env_value, "0") != 0);
 }
 
+/// \brief Reads whether writes into a device-visible resource grid are batched per symbol (default: enabled).
+///
+/// See iq_compression_cuda::enqueue_resource_grid_decompression(). Set OCUDU_OFH_CUDA_GRID_BATCH=0 to submit every
+/// message on its own (previous behaviour).
+static bool read_grid_batching_enabled()
+{
+  const char* env_value = std::getenv("OCUDU_OFH_CUDA_GRID_BATCH");
+  return (env_value == nullptr) || (env_value[0] == '\0') || (std::strcmp(env_value, "0") != 0);
+}
+
+/// Returns true if the batched decompression kernel supports the given data width.
+static bool is_grid_batch_data_width(unsigned data_width)
+{
+  return (data_width == 8U) || (data_width == 9U) || (data_width == 10U) || (data_width == 12U) ||
+         (data_width == 14U) || (data_width == 16U);
+}
+
 iq_compression_cuda::iq_compression_cuda(compression_type                         type_,
                                          ocudulog::basic_logger&                  logger_,
                                          float                                    iq_scaling_,
@@ -144,7 +162,11 @@ iq_compression_cuda::iq_compression_cuda(compression_type                       
   iq_scaling(iq_scaling_),
   force_fallback(read_force_fallback()),
   host_iq_on_gpu(read_host_iq_on_gpu()),
-  inject_next_gpu_failure(read_force_first_gpu_failure())
+  inject_next_gpu_failure(read_force_first_gpu_failure()),
+  grid_batch_input_capacity(
+      static_cast<unsigned>(grid_batch_input_ports * MAX_NOF_PRBS *
+                            get_compressed_prb_size(ru_compression_params{type_, MAX_IQ_WIDTH}).value())),
+  grid_batching(read_grid_batching_enabled())
 {
 #ifdef ENABLE_CUDA
   report_fatal_error_if_not((type == compression_type::none) || (type == compression_type::BFP),
@@ -185,6 +207,12 @@ iq_compression_cuda::iq_compression_cuda(compression_type                       
     ocudu_ofh_compression_handle* handle = nullptr;
     report_fatal_error_if_not(ocudu_ofh_compression_create(&handle) != 0,
                               "Failed to create CUDA OFH compression backend.");
+    if ((preallocation.direct_decompression_concurrency != 0U) && grid_batching.load(std::memory_order_relaxed)) {
+      // Reserve the batch input first: the direct decompression reservation below then finds the capacity and warms
+      // the mapped buffer. Devices without coherent access to mapped host memory have no batch input.
+      grid_batching.store(ocudu_ofh_batch_input_reserve(handle, grid_batch_input_capacity) != nullptr,
+                          std::memory_order_relaxed);
+    }
     if (preallocation.direct_decompression_concurrency != 0U) {
       ru_compression_params max_params{type, MAX_IQ_WIDTH};
       unsigned max_input_bytes  = static_cast<unsigned>(MAX_NOF_PRBS * get_compressed_prb_size(max_params).value());
@@ -270,6 +298,15 @@ void iq_compression_cuda::note_acceleration_failure(const char*                 
 iq_compression_cuda::~iq_compression_cuda()
 {
 #ifdef ENABLE_CUDA
+  // Queued writes are not submitted: their grids may no longer exist. The handle has no device work.
+  {
+    std::lock_guard<std::mutex> lock(grid_batch_mutex);
+    if (grid_batch.handle != nullptr) {
+      release_handle(grid_batch.handle);
+      grid_batch = {};
+    }
+  }
+
   std::vector<ocudu_ofh_compression_handle*> handles;
   {
     std::lock_guard<std::mutex> lock(mutex);
@@ -1202,6 +1239,182 @@ iq_decompression_result iq_compression_cuda::decompress_to_resource_grid(resourc
   (void)params;
   return iq_decompression_result::unsupported;
 #endif
+}
+
+iq_decompression_result iq_compression_cuda::enqueue_resource_grid_decompression(resource_grid_writer& grid,
+                                                                                 unsigned              port,
+                                                                                 unsigned              symbol,
+                                                                                 unsigned              start_prb,
+                                                                                 unsigned              nof_prbs,
+                                                                                 span<const uint8_t>   compressed_data,
+                                                                                 const ru_compression_params& params)
+{
+#ifdef ENABLE_CUDA
+  static_assert(max_grid_batch_regions == OCUDU_OFH_MAX_GRID_REGIONS, "Batch region capacity mismatch");
+
+  // Requests the batch cannot take, including invalid ones (reported by the direct path), go the direct path after the
+  // queued writes, so that writes to the same REs keep their order.
+  const bool batchable = grid_batching.load(std::memory_order_relaxed) && !force_fallback && (params.type == type) &&
+                         (nof_prbs != 0) && is_grid_batch_data_width(params.data_width) &&
+                         grid.supports_device_grid_mapping();
+  const unsigned nof_bytes = batchable ? nof_prbs * get_compressed_prb_size(params).value() : 0;
+  if (!batchable || (nof_bytes > grid_batch_input_capacity)) {
+    flush_resource_grid_decompressions();
+    return decompress_to_resource_grid(grid, port, symbol, start_prb, nof_prbs, compressed_data, params);
+  }
+  if (compressed_data.size() < nof_bytes) {
+    return iq_decompression_result::invalid_input;
+  }
+
+  std::unique_lock<std::mutex> lock(grid_batch_mutex);
+  if ((grid_batch.handle != nullptr) &&
+      ((grid_batch.grid != &grid) || (grid_batch.symbol != symbol) || (grid_batch.data_width != params.data_width) ||
+       grid_batch.regions.full() || (grid_batch.input_size + nof_bytes > grid_batch_input_capacity))) {
+    flush_grid_batch_locked();
+  }
+
+  if (grid_batch.handle == nullptr) {
+    ocudu_ofh_compression_handle* handle = acquire_handle();
+    void* input = (handle != nullptr) ? ocudu_ofh_batch_input_reserve(handle, grid_batch_input_capacity) : nullptr;
+    if (input == nullptr) {
+      if (handle != nullptr) {
+        // The device cannot read mapped host memory coherently: batching is not available on this device.
+        release_handle(handle);
+        grid_batching.store(false, std::memory_order_relaxed);
+        logger.info("CUDA OFH resource-grid decompression batching is not available on this device, using one "
+                    "submission per message");
+      }
+      lock.unlock();
+      // Without a free handle the direct path retries and, if it still has none, reports the failure.
+      return decompress_to_resource_grid(grid, port, symbol, start_prb, nof_prbs, compressed_data, params);
+    }
+    grid_batch.handle     = handle;
+    grid_batch.input      = static_cast<uint8_t*>(input);
+    grid_batch.input_size = 0;
+    grid_batch.grid       = &grid;
+    grid_batch.symbol     = symbol;
+    grid_batch.data_width = params.data_width;
+  }
+
+  std::memcpy(grid_batch.input + grid_batch.input_size, compressed_data.data(), nof_bytes);
+  grid_batch.regions.push_back({port, start_prb, nof_prbs, grid_batch.input_size});
+  grid_batch.input_size += nof_bytes;
+  return iq_decompression_result::success;
+#else
+  return decompress_to_resource_grid(grid, port, symbol, start_prb, nof_prbs, compressed_data, params);
+#endif
+}
+
+iq_decompression_result iq_compression_cuda::flush_resource_grid_decompressions()
+{
+#ifdef ENABLE_CUDA
+  std::lock_guard<std::mutex> lock(grid_batch_mutex);
+  return flush_grid_batch_locked();
+#else
+  return iq_decompression_result::success;
+#endif
+}
+
+iq_decompression_result iq_compression_cuda::flush_grid_batch_locked()
+{
+#ifdef ENABLE_CUDA
+  if (grid_batch.handle == nullptr) {
+    return iq_decompression_result::success;
+  }
+  const auto start = std::chrono::steady_clock::now();
+
+  // Take the batch: the grid batch is empty again whatever happens below.
+  grid_decompression_batch batch = std::move(grid_batch);
+  grid_batch                     = {};
+
+  ocudu_ofh_compression_handle* handle = batch.handle;
+  resource_grid_writer&         grid   = *batch.grid;
+  void*                         stream = ocudu_ofh_compression_get_stream(handle);
+
+  static_vector<ocudu_ofh_grid_region_t, max_grid_batch_regions> regions;
+  for (const auto& region : batch.regions) {
+    regions.push_back(
+        {static_cast<unsigned>((static_cast<size_t>(region.port) * grid.get_nof_symbols() + batch.symbol) *
+                                   grid.get_nof_subc() +
+                               region.start_prb * NOF_SUBCARRIERS_PER_RB),
+         region.input_offset,
+         region.nof_prbs});
+  }
+
+  if (!grid.prepare_device_grid_mapping(stream)) {
+    // Nothing was queued on the stream: the handle is idle.
+    iq_decompression_result result = resubmit_grid_batch(batch);
+    release_handle(handle);
+    return result;
+  }
+
+  if (ocudu_ofh_decompress_regions_to_device_grid_async(handle,
+                                                        to_cuda_compression_type(type),
+                                                        grid.get_device_grid_bf16(),
+                                                        regions.data(),
+                                                        regions.size(),
+                                                        batch.data_width) == 0) {
+    (void)ocudu_ofh_compression_synchronize(handle);
+    (void)grid.cancel_device_grid_mapping();
+    note_acceleration_failure("batched device-grid decompression", handle, false, "resubmitting message by message");
+    ul_rx_diagnostics::get().on_grid_batch_failure();
+    iq_decompression_result result = resubmit_grid_batch(batch);
+    discard_handle(handle);
+    return result;
+  }
+
+  // Keep the host mirror of the grid (if any) up to date on the same stream; see decompress_to_resource_grid().
+  for (const auto& region : batch.regions) {
+    (void)grid.mirror_device_grid_region(stream,
+                                         region.port,
+                                         batch.symbol,
+                                         region.start_prb * NOF_SUBCARRIERS_PER_RB,
+                                         region.nof_prbs * NOF_SUBCARRIERS_PER_RB);
+  }
+
+  if (!grid.on_device_grid_mapping_enqueued(stream)) {
+    bool synchronized = ocudu_ofh_compression_synchronize(handle) != 0;
+    (void)grid.cancel_device_grid_mapping();
+    if (!synchronized) {
+      note_acceleration_failure(
+          "batched device-grid decompression synchronization", handle, false, "dropping the batched messages");
+      discard_handle(handle);
+      return iq_decompression_result::acceleration_failure;
+    }
+    release_handle(handle);
+    return iq_decompression_result::destination_failure;
+  }
+
+  release_async_handle(handle);
+  nof_grid_batches.fetch_add(1, std::memory_order_relaxed);
+  ul_rx_diagnostics::get().on_grid_batch(
+      regions.size(),
+      std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
+  return iq_decompression_result::success;
+#else
+  return iq_decompression_result::success;
+#endif
+}
+
+iq_decompression_result iq_compression_cuda::resubmit_grid_batch(const grid_decompression_batch& failed_batch)
+{
+  iq_decompression_result result = iq_decompression_result::success;
+  ru_compression_params   params{type, failed_batch.data_width};
+  const unsigned          prb_size = get_compressed_prb_size(params).value();
+  for (const auto& region : failed_batch.regions) {
+    iq_decompression_result region_result = decompress_to_resource_grid(
+        *failed_batch.grid,
+        region.port,
+        failed_batch.symbol,
+        region.start_prb,
+        region.nof_prbs,
+        span<const uint8_t>(failed_batch.input + region.input_offset, region.nof_prbs * prb_size),
+        params);
+    if (!is_iq_decompression_success(region_result)) {
+      result = region_result;
+    }
+  }
+  return result;
 }
 
 iq_decompression_result iq_compression_cuda::decompress_to_prach_buffer(prach_buffer&                buffer,

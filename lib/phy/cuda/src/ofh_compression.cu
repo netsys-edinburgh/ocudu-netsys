@@ -2639,6 +2639,68 @@ static void launch_decompress(uint32_t*      output,
     }
 }
 
+/// Kernel parameters of a batched decompression: the regions and the prefix sum of their PRB counts.
+struct ofh_decompress_regions_params {
+    ocudu_ofh_grid_region_t regions[OCUDU_OFH_MAX_GRID_REGIONS];
+    unsigned                first_prb[OCUDU_OFH_MAX_GRID_REGIONS + 1];
+    unsigned                nof_regions;
+};
+
+/// One thread per PRB over every region of the batch; the per-PRB decoder is the one of the single-region kernels.
+template <unsigned DATA_WIDTH, bool BFP>
+__global__ void ofh_decompress_regions_kernel_t(uint32_t*                           output_grid,
+                                                const uint8_t*                      input,
+                                                const ofh_decompress_regions_params params,
+                                                unsigned                            prb_size)
+{
+    unsigned index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= params.first_prb[params.nof_regions]) {
+        return;
+    }
+    unsigned region = 0;
+    while (index >= params.first_prb[region + 1]) {
+        ++region;
+    }
+    const ocudu_ofh_grid_region_t& r   = params.regions[region];
+    unsigned                       prb = index - params.first_prb[region];
+    decompress_prb_t<DATA_WIDTH, BFP>(output_grid + r.grid_offset_re + prb * NOF_SUBCARRIERS_PER_RB,
+                                      input + r.input_offset + static_cast<size_t>(prb) * prb_size);
+}
+
+template <bool BFP>
+static bool launch_decompress_regions_width(uint32_t*                            output_grid,
+                                            const uint8_t*                       input,
+                                            const ofh_decompress_regions_params& params,
+                                            unsigned                             data_width,
+                                            unsigned                             prb_size,
+                                            cudaStream_t                         stream)
+{
+    dim3 block(128);
+    dim3 grid((params.first_prb[params.nof_regions] + block.x - 1U) / block.x);
+    switch (data_width) {
+        case 8:
+            ofh_decompress_regions_kernel_t<8, BFP><<<grid, block, 0, stream>>>(output_grid, input, params, prb_size);
+            return true;
+        case 9:
+            ofh_decompress_regions_kernel_t<9, BFP><<<grid, block, 0, stream>>>(output_grid, input, params, prb_size);
+            return true;
+        case 10:
+            ofh_decompress_regions_kernel_t<10, BFP><<<grid, block, 0, stream>>>(output_grid, input, params, prb_size);
+            return true;
+        case 12:
+            ofh_decompress_regions_kernel_t<12, BFP><<<grid, block, 0, stream>>>(output_grid, input, params, prb_size);
+            return true;
+        case 14:
+            ofh_decompress_regions_kernel_t<14, BFP><<<grid, block, 0, stream>>>(output_grid, input, params, prb_size);
+            return true;
+        case 16:
+            ofh_decompress_regions_kernel_t<16, BFP><<<grid, block, 0, stream>>>(output_grid, input, params, prb_size);
+            return true;
+        default:
+            return false;
+    }
+}
+
 __global__ void copy_decompressed_re_kernel(uint32_t*       output,
                                             const uint32_t* input,
                                             unsigned        input_start_re,
@@ -3917,6 +3979,67 @@ extern "C" int ocudu_ofh_decompress_to_device_grid_async(ocudu_ofh_compression_h
                       prb_size,
                       handle->stream);
     if (!record_cuda_status(handle, cudaGetLastError(), "launch O-FH compression backend kernel")) {
+        return 0;
+    }
+    return enqueue_async_completion(handle);
+}
+
+extern "C" void* ocudu_ofh_batch_input_reserve(ocudu_ofh_compression_handle_t* handle, size_t nof_bytes)
+{
+    if ((handle == nullptr) || !handle->use_mapped_direct_input) {
+        return nullptr;
+    }
+    if (!ensure_mapped_host_capacity(handle,
+                                     &handle->h_direct_in,
+                                     &handle->d_direct_in_mapped,
+                                     &handle->h_direct_in_cap,
+                                     nof_bytes,
+                                     "allocate mapped batch decompression input")) {
+        return nullptr;
+    }
+    return handle->h_direct_in;
+}
+
+extern "C" int ocudu_ofh_decompress_regions_to_device_grid_async(ocudu_ofh_compression_handle_t* handle,
+                                                                 int                             compression_type,
+                                                                 void*                           output_grid_cbf16,
+                                                                 const ocudu_ofh_grid_region_t*  regions,
+                                                                 unsigned                        nof_regions,
+                                                                 unsigned                        data_width)
+{
+    if ((handle == nullptr) || (output_grid_cbf16 == nullptr) || (regions == nullptr) || (nof_regions == 0) ||
+        (nof_regions > OCUDU_OFH_MAX_GRID_REGIONS) || !handle->use_mapped_direct_input ||
+        (handle->d_direct_in_mapped == nullptr)) {
+        return 0;
+    }
+    if ((compression_type != OCUDU_OFH_COMPRESSION_TYPE_NONE) && (compression_type != OCUDU_OFH_COMPRESSION_TYPE_BFP)) {
+        return 0;
+    }
+
+    unsigned                      prb_size = compressed_prb_size(compression_type, data_width);
+    ofh_decompress_regions_params params   = {};
+    params.nof_regions                     = nof_regions;
+    for (unsigned i = 0; i != nof_regions; ++i) {
+        if ((regions[i].nof_prbs == 0) ||
+            (regions[i].input_offset + static_cast<size_t>(regions[i].nof_prbs) * prb_size > handle->h_direct_in_cap)) {
+            return 0;
+        }
+        params.regions[i]       = regions[i];
+        params.first_prb[i + 1] = params.first_prb[i] + regions[i].nof_prbs;
+    }
+
+    arm_async_completion(handle);
+    uint32_t* output = static_cast<uint32_t*>(output_grid_cbf16);
+    bool      launched =
+        (compression_type == OCUDU_OFH_COMPRESSION_TYPE_BFP)
+                 ? launch_decompress_regions_width<true>(
+                  output, handle->d_direct_in_mapped, params, data_width, prb_size, handle->stream)
+                 : launch_decompress_regions_width<false>(
+                  output, handle->d_direct_in_mapped, params, data_width, prb_size, handle->stream);
+    if (!launched) {
+        return 0;
+    }
+    if (!record_cuda_status(handle, cudaGetLastError(), "launch batched O-FH decompression kernel")) {
         return 0;
     }
     return enqueue_async_completion(handle);

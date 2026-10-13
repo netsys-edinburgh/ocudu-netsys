@@ -80,6 +80,9 @@ public:
   // See interface for the documentation.
   operation_controller& get_operation_controller() override { return controller; }
 
+  /// Returns the uplink data flow of this receiver.
+  data_flow_uplane_uplink_data& get_uplink_data_flow() { return *data_flow_uplink; }
+
   // See interface for the documentation.
   message_receiver_metrics_collector* get_metrics_collector() override
   {

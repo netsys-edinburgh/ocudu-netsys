@@ -69,6 +69,40 @@ iq_decompression_result iq_decompressor_selector::decompress_to_resource_grid(re
       grid, port, symbol, start_prb, nof_prbs, compressed_data, params);
 }
 
+iq_decompression_result
+iq_decompressor_selector::enqueue_resource_grid_decompression(resource_grid_writer&        grid,
+                                                              unsigned                     port,
+                                                              unsigned                     symbol,
+                                                              unsigned                     start_prb,
+                                                              unsigned                     nof_prbs,
+                                                              span<const uint8_t>          compressed_data,
+                                                              const ru_compression_params& params)
+{
+  // A write in another format may target the same REs; submit what the other decompressors queued first.
+  for (unsigned i = 0, e = decompressors.size(); i != e; ++i) {
+    if ((i != static_cast<unsigned>(params.type)) && decompressors[i]) {
+      decompressors[i]->flush_resource_grid_decompressions();
+    }
+  }
+  return decompressors[static_cast<unsigned>(params.type)]->enqueue_resource_grid_decompression(
+      grid, port, symbol, start_prb, nof_prbs, compressed_data, params);
+}
+
+iq_decompression_result iq_decompressor_selector::flush_resource_grid_decompressions()
+{
+  iq_decompression_result result = iq_decompression_result::success;
+  for (auto& decompressor : decompressors) {
+    if (!decompressor) {
+      continue;
+    }
+    iq_decompression_result flush_result = decompressor->flush_resource_grid_decompressions();
+    if (!is_iq_decompression_success(flush_result)) {
+      result = flush_result;
+    }
+  }
+  return result;
+}
+
 iq_decompression_result iq_decompressor_selector::decompress_to_prach_buffer(prach_buffer&       buffer,
                                                                              unsigned            port,
                                                                              unsigned            td_occasion,

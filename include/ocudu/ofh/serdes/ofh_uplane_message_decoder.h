@@ -110,6 +110,23 @@ public:
     return iq_decompression_result::unsupported;
   }
 
+  /// \brief Queues the decompression of a previously decoded section into a resource grid.
+  ///
+  /// See \ref iq_decompressor::enqueue_resource_grid_decompression(). The default implementation decompresses
+  /// immediately.
+  virtual iq_decompression_result enqueue_resource_grid_decompression(resource_grid_writer&        grid,
+                                                                      unsigned                     port,
+                                                                      unsigned                     symbol,
+                                                                      unsigned                     start_prb,
+                                                                      unsigned                     nof_prbs,
+                                                                      const uplane_section_params& section)
+  {
+    return decompress_to_resource_grid(grid, port, symbol, start_prb, nof_prbs, section);
+  }
+
+  /// Completes every decompression queued by \ref enqueue_resource_grid_decompression().
+  virtual iq_decompression_result flush_resource_grid_decompressions() { return iq_decompression_result::success; }
+
   /// Decompresses a previously decoded section directly into a PRACH buffer.
   ///
   /// \param[out] buffer         Destination PRACH buffer.

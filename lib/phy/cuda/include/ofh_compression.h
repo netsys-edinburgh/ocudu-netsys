@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -94,6 +95,36 @@ int ocudu_ofh_decompress_to_device_grid_async(ocudu_ofh_compression_handle_t* ha
                                               unsigned                        start_prb,
                                               unsigned                        nof_prbs,
                                               unsigned                        data_width);
+
+/// Maximum number of grid regions of one ocudu_ofh_decompress_regions_to_device_grid_async() call.
+enum { OCUDU_OFH_MAX_GRID_REGIONS = 32 };
+
+/// One destination region of a batched decompression: nof_prbs compressed PRBs read from input_offset (bytes) of the
+/// handle's batch input and written to grid_offset_re (REs from the start of the grid).
+typedef struct {
+  unsigned grid_offset_re;
+  unsigned input_offset;
+  unsigned nof_prbs;
+} ocudu_ofh_grid_region_t;
+
+/// \brief Returns the host address of the handle's batch input, a host buffer the GPU reads in place (zero copy).
+///
+/// The buffer holds at least \c nof_bytes; it may be reallocated, so call it only while no work using it is queued on
+/// the handle. Returns NULL when the device cannot read mapped host memory coherently (the batch path is then not
+/// available) or the allocation fails.
+void* ocudu_ofh_batch_input_reserve(ocudu_ofh_compression_handle_t* handle, size_t nof_bytes);
+
+/// \brief Decompresses the regions of the handle's batch input into a device-visible grid, with one kernel launch.
+///
+/// The batch input must have been filled through ocudu_ofh_batch_input_reserve(). The completion is reported like
+/// ocudu_ofh_decompress_to_device_grid_async(). Every region uses the same compression type and data width. Returns
+/// zero on failure, including an unsupported data width (nothing is then queued).
+int ocudu_ofh_decompress_regions_to_device_grid_async(ocudu_ofh_compression_handle_t* handle,
+                                                      int                             compression_type,
+                                                      void*                           output_grid_cbf16,
+                                                      const ocudu_ofh_grid_region_t*  regions,
+                                                      unsigned                        nof_regions,
+                                                      unsigned                        data_width);
 
 int ocudu_ofh_decompress_to_device_prach_buffer_async(ocudu_ofh_compression_handle_t* handle,
                                                       int                             compression_type,

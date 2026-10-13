@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ocudu/adt/static_vector.h"
 #include "ocudu/ocudulog/logger.h"
 #include "ocudu/ofh/compression/compression_params.h"
 #include "ocudu/ofh/compression/iq_compressor.h"
@@ -126,6 +127,28 @@ public:
                                                       span<const uint8_t>          compressed_data,
                                                       const ru_compression_params& params) override;
 
+  /// \brief Queues a decompression into a device-visible resource grid.
+  ///
+  /// Writes into the same grid, symbol and data width are gathered (payloads copied into the batch input of one
+  /// handle, which the GPU reads in place) and submitted by \ref flush_resource_grid_decompressions() with one kernel,
+  /// one grid mapping and one completion, instead of one of each per message. A write to another grid, symbol or data
+  /// width, or one that does not fit, submits the queued ones first. Writes that cannot be batched (host grid, device
+  /// without coherent access to mapped host memory such as discrete PCIe GPUs, batching disabled with
+  /// OCUDU_OFH_CUDA_GRID_BATCH=0) take the \ref decompress_to_resource_grid() path, after the queued ones.
+  iq_decompression_result enqueue_resource_grid_decompression(resource_grid_writer&        grid,
+                                                              unsigned                     port,
+                                                              unsigned                     symbol,
+                                                              unsigned                     start_prb,
+                                                              unsigned                     nof_prbs,
+                                                              span<const uint8_t>          compressed_data,
+                                                              const ru_compression_params& params) override;
+
+  /// \brief Submits the queued decompressions.
+  ///
+  /// If the batched submission fails, the queued writes are submitted one by one through
+  /// \ref decompress_to_resource_grid() before returning, so a backend failure costs no data.
+  iq_decompression_result flush_resource_grid_decompressions() override;
+
   iq_decompression_result decompress_to_prach_buffer(prach_buffer&                buffer,
                                                      unsigned                     port,
                                                      unsigned                     td_occasion,
@@ -146,6 +169,9 @@ public:
 
   /// Returns the number of fresh-handle GPU retries attempted after an accelerated backend failure.
   uint64_t get_nof_acceleration_retries() const { return nof_acceleration_retries.load(std::memory_order_relaxed); }
+
+  /// Returns the number of batched resource-grid decompression submissions.
+  uint64_t get_nof_grid_batches() const { return nof_grid_batches.load(std::memory_order_relaxed); }
 
 private:
   ocudu_ofh_compression_handle* acquire_handle();
@@ -178,6 +204,35 @@ private:
   /// headroom while avoiding continuous CUDA completion queries.
   static constexpr std::chrono::microseconds async_handle_poll_period{50};
 
+  /// Maximum number of regions of a batched resource-grid decompression (OCUDU_OFH_MAX_GRID_REGIONS).
+  static constexpr unsigned max_grid_batch_regions = 32;
+  /// Number of full-bandwidth ports a batched resource-grid decompression input holds.
+  static constexpr unsigned grid_batch_input_ports = 4;
+
+  /// Resource-grid decompressions queued for one grid, symbol and data width.
+  struct grid_decompression_batch {
+    struct region {
+      unsigned port;
+      unsigned start_prb;
+      unsigned nof_prbs;
+      unsigned input_offset;
+    };
+    /// Handle that owns the batch input; null when nothing is queued.
+    ocudu_ofh_compression_handle*                 handle     = nullptr;
+    uint8_t*                                      input      = nullptr;
+    unsigned                                      input_size = 0;
+    resource_grid_writer*                         grid       = nullptr;
+    unsigned                                      symbol     = 0;
+    unsigned                                      data_width = 0;
+    static_vector<region, max_grid_batch_regions> regions;
+  };
+
+  /// Submits the queued decompressions; \c grid_batch_mutex must be held.
+  iq_decompression_result flush_grid_batch_locked();
+
+  /// Submits the regions of the given batch one by one through decompress_to_resource_grid().
+  iq_decompression_result resubmit_grid_batch(const grid_decompression_batch& failed_batch);
+
   compression_type                           type;
   ocudulog::basic_logger&                    logger;
   float                                      iq_scaling;
@@ -191,6 +246,13 @@ private:
   std::unique_ptr<iq_decompressor>           fallback_decompressor;
   std::atomic<uint64_t>                      nof_acceleration_retries  = {0};
   std::atomic<uint64_t>                      nof_acceleration_failures = {0};
+  std::atomic<uint64_t>                      nof_grid_batches          = {0};
+  /// Batch input capacity in bytes (grid_batch_input_ports full-bandwidth ports at the widest data width).
+  unsigned grid_batch_input_capacity = 0;
+  /// Resource-grid batching is enabled and the device supports it (cleared on the first handle without batch input).
+  std::atomic<bool>                          grid_batching = {false};
+  std::mutex                                 grid_batch_mutex;
+  grid_decompression_batch                   grid_batch;
   std::vector<ocudu_ofh_compression_handle*> all_handles;
   std::vector<ocudu_ofh_compression_handle*> available_handles;
   std::vector<ocudu_ofh_compression_handle*> pending_handles;

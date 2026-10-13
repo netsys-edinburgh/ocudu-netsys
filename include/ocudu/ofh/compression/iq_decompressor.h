@@ -98,6 +98,30 @@ public:
     return iq_decompression_result::unsupported;
   }
 
+  /// \brief Queues the decompression of received compressed PRBs into a resource grid.
+  ///
+  /// Same contract as \ref decompress_to_resource_grid(), except that an implementation may defer the device work and
+  /// complete it in \ref flush_resource_grid_decompressions(), so that consecutive writes of one OFDM symbol (all its
+  /// ports and fragments) take one device submission. The caller must flush before a consumer reads the written REs.
+  /// The compressed payload is copied before returning. The default implementation decompresses immediately.
+  virtual iq_decompression_result enqueue_resource_grid_decompression(resource_grid_writer&        grid,
+                                                                      unsigned                     port,
+                                                                      unsigned                     symbol,
+                                                                      unsigned                     start_prb,
+                                                                      unsigned                     nof_prbs,
+                                                                      span<const uint8_t>          compressed_data,
+                                                                      const ru_compression_params& params)
+  {
+    return decompress_to_resource_grid(grid, port, symbol, start_prb, nof_prbs, compressed_data, params);
+  }
+
+  /// \brief Completes the submission of every decompression queued by \ref enqueue_resource_grid_decompression().
+  ///
+  /// After it returns, the device work is ordered before every later consumer of the destination grids, exactly as
+  /// after \ref decompress_to_resource_grid(). Returns a failure when queued REs could not be submitted (they are then
+  /// left unwritten). The default implementation has nothing queued.
+  virtual iq_decompression_result flush_resource_grid_decompressions() { return iq_decompression_result::success; }
+
   /// \brief Decompress received compressed PRBs directly into a PRACH buffer.
   ///
   /// \param[out] buffer          Destination PRACH buffer.

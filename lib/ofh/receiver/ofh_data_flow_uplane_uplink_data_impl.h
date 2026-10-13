@@ -57,6 +57,9 @@ public:
   // See interface for documentation.
   data_flow_message_decoding_metrics_collector& get_metrics_collector() override { return metrics_collector; }
 
+  // See interface for documentation.
+  void flush_pending_grid_writes() override;
+
 private:
   /// Returns true if the User-Plane packet represented by the given User-Plane results and eAxC should be filtered,
   /// otherwise false.

@@ -49,6 +49,18 @@ public:
                                                       const ru_compression_params& params) override;
 
   // See interface for documentation.
+  iq_decompression_result enqueue_resource_grid_decompression(resource_grid_writer&        grid,
+                                                              unsigned                     port,
+                                                              unsigned                     symbol,
+                                                              unsigned                     start_prb,
+                                                              unsigned                     nof_prbs,
+                                                              span<const uint8_t>          compressed_data,
+                                                              const ru_compression_params& params) override;
+
+  // See interface for documentation.
+  iq_decompression_result flush_resource_grid_decompressions() override;
+
+  // See interface for documentation.
   iq_decompression_result decompress_to_prach_buffer(prach_buffer&                buffer,
                                                      unsigned                     port,
                                                      unsigned                     td_occasion,

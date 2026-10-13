@@ -118,6 +118,9 @@ receiver_impl::receiver_impl(const receiver_config& config, receiver_impl_depend
                       std::move(dependencies.eth_receiver)),
   ctrl(rcv_task_dispatcher, closed_window_handler)
 {
+  // Both run on the uplink executor: the closed window handler submits the writes the data flow queued before it hands
+  // incomplete grid symbols to their consumers.
+  closed_window_handler.set_uplink_data_flow(msg_receiver.get_uplink_data_flow());
 }
 
 ota_symbol_boundary_notifier* receiver_impl::get_ota_symbol_boundary_notifier()

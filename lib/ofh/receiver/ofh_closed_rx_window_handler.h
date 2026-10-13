@@ -6,6 +6,7 @@
 
 #include "../support/prach_context_repository.h"
 #include "../support/uplink_context_repository.h"
+#include "ofh_data_flow_uplane_uplink_data.h"
 #include "ocudu/ocudulog/logger.h"
 #include "ocudu/ofh/ofh_controller.h"
 #include "ocudu/ofh/ofh_uplane_rx_symbol_notifier.h"
@@ -69,6 +70,12 @@ public:
   /// Collects the metrics of the closed reception window metrics.
   void collect_metrics(closed_rx_window_metrics& metrics);
 
+  /// \brief Sets the uplink data flow whose queued resource-grid writes are submitted before a closed window hands a
+  /// grid symbol to its consumers.
+  ///
+  /// The data flow must run on the executor of this handler and outlive it.
+  void set_uplink_data_flow(data_flow_uplane_uplink_data& data_flow) { uplink_data_flow = &data_flow; }
+
 private:
   /// \brief Handles the uplink context for the closed reception window given by symbol point.
   ///
@@ -96,6 +103,7 @@ private:
   std::shared_ptr<prach_context_repository>  prach_repo;
   std::shared_ptr<uplink_context_repository> uplink_repo;
   std::shared_ptr<uplane_rx_symbol_notifier> notifier;
+  data_flow_uplane_uplink_data*              uplink_data_flow = nullptr;
   /// Counts every symbol not received when reception window closes.
   std::atomic<unsigned> nof_missed_uplink_symbols{0};
   /// Counts every PRACH not received when the reception window closes.

@@ -195,7 +195,8 @@ uplane_rx_symbol_data_flow_writer::write_compressed_to_resource_grid(unsigned   
         section_to_write->start_prb * NOF_SUBCARRIERS_PER_RB,
         section_to_write->nof_prbs * NOF_SUBCARRIERS_PER_RB,
         [&decoder, &decompression_result, rg_port, symbol, section_to_write](resource_grid_writer& writer) {
-          decompression_result = decoder.decompress_to_resource_grid(
+          // Queued per symbol; the data flow submits the queue before the grid symbol reaches its consumers.
+          decompression_result = decoder.enqueue_resource_grid_decompression(
               writer, rg_port, symbol, section_to_write->start_prb, section_to_write->nof_prbs, *section_to_write);
           return is_iq_decompression_success(decompression_result);
         });

@@ -90,6 +90,17 @@ public:
                                                       const uplane_section_params& section) override;
 
   // See interface for documentation.
+  iq_decompression_result enqueue_resource_grid_decompression(resource_grid_writer&        grid,
+                                                              unsigned                     port,
+                                                              unsigned                     symbol,
+                                                              unsigned                     start_prb,
+                                                              unsigned                     nof_prbs,
+                                                              const uplane_section_params& section) override;
+
+  // See interface for documentation.
+  iq_decompression_result flush_resource_grid_decompressions() override;
+
+  // See interface for documentation.
   iq_decompression_result decompress_to_prach_buffer(prach_buffer&                buffer,
                                                      unsigned                     port,
                                                      unsigned                     td_occasion,

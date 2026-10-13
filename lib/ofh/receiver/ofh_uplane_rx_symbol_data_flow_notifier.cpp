@@ -9,16 +9,9 @@
 using namespace ocudu;
 using namespace ofh;
 
-void uplane_rx_symbol_data_flow_notifier::notify_received_symbol(slot_point slot, unsigned symbol)
+void uplane_rx_symbol_data_flow_notifier::notify(uplink_context::uplink_context_resource_grid_info& ctx_value,
+                                                 unsigned                                           symbol)
 {
-  expected<uplink_context::uplink_context_resource_grid_info> context =
-      ul_context_repo->try_popping_complete_resource_grid_symbol(slot, symbol);
-
-  if (!context) {
-    return;
-  }
-
-  uplink_context::uplink_context_resource_grid_info& ctx_value = *context;
   uplane_rx_symbol_context notification_context = {ctx_value.context.slot, symbol, ctx_value.context.sector};
   notifier->on_new_uplink_symbol(notification_context, std::move(ctx_value.grid), true);
 

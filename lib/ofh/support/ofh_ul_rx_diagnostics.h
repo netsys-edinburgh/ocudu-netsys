@@ -25,6 +25,7 @@ namespace ofh {
 ///   - Message receiver (uplink thread): the time from the read to the processing of a frame, and the earliest and
 ///     latest arrival of the frames relative to their OTA symbol, measured with the kernel receive timestamp ("wire")
 ///     and at processing time (as the reception window metrics did before the kernel timestamp was used).
+///   - Batched device-grid decompression: submissions, regions per submission and the CPU time of a submission.
 ///
 /// The counters are process-wide and lock free (relaxed atomics); with several sectors they add up. The line is
 /// written by whichever thread calls \ref report_if_due() first after a second has elapsed. Set
@@ -96,6 +97,26 @@ public:
     update_max(processing_latest_symbol, processing_symbol_offset);
   }
 
+  /// Records a batched device-grid decompression submission of \c nof_regions regions that took \c submit_ns of CPU
+  /// time.
+  void on_grid_batch(unsigned nof_regions, uint64_t submit_ns)
+  {
+    if (!is_enabled) {
+      return;
+    }
+    grid_batch_regions.fetch_add(nof_regions, std::memory_order_relaxed);
+    update_max(grid_batch_max_regions, nof_regions);
+    accumulate(grid_batch_submit, submit_ns);
+  }
+
+  /// Records a batched device-grid decompression submission that failed (its regions are resubmitted one by one).
+  void on_grid_batch_failure()
+  {
+    if (is_enabled) {
+      grid_batch_failures.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
   /// Sets the OFDM symbol duration used to print the arrival offsets in microseconds.
   void set_symbol_duration(std::chrono::nanoseconds symbol_duration)
   {
@@ -123,15 +144,18 @@ public:
       return;
     }
 
-    const double symbol_us   = to_us(symbol_duration_ns.load(std::memory_order_relaxed));
-    const int    wire_min    = wire_earliest_symbol.exchange(no_min_symbol, std::memory_order_relaxed);
-    const int    wire_max    = wire_latest_symbol.exchange(no_max_symbol, std::memory_order_relaxed);
-    const int    process_max = processing_latest_symbol.exchange(no_max_symbol, std::memory_order_relaxed);
-    const bool   any_frame   = (wire_max != no_max_symbol);
+    const double   symbol_us   = to_us(symbol_duration_ns.load(std::memory_order_relaxed));
+    const int      wire_min    = wire_earliest_symbol.exchange(no_min_symbol, std::memory_order_relaxed);
+    const int      wire_max    = wire_latest_symbol.exchange(no_max_symbol, std::memory_order_relaxed);
+    const int      process_max = processing_latest_symbol.exchange(no_max_symbol, std::memory_order_relaxed);
+    const bool     any_frame   = (wire_max != no_max_symbol);
+    const uint64_t batches     = grid_batch_submit.count.load(std::memory_order_relaxed);
+    const uint64_t regions     = grid_batch_regions.exchange(0, std::memory_order_relaxed);
 
     logger.info("UL rx diagnostics: frames={} wakeups={} max_burst={} socket_drops={} max_poll_gap={:.1f}us "
                 "kernel_to_read=[avg={:.1f}us max={:.1f}us] read_to_process=[avg={:.1f}us max={:.1f}us] "
-                "wire_arrival=[{:.1f}us, {:.1f}us] processing_arrival_max={:.1f}us",
+                "wire_arrival=[{:.1f}us, {:.1f}us] processing_arrival_max={:.1f}us grid_batches={} "
+                "regions_per_batch=[avg={:.1f} max={}] batch_submit=[avg={:.1f}us max={:.1f}us] batch_failures={}",
                 rx_frames.exchange(0, std::memory_order_relaxed),
                 rx_wakeups.exchange(0, std::memory_order_relaxed),
                 rx_max_burst.exchange(0, std::memory_order_relaxed),
@@ -143,9 +167,16 @@ public:
                 max_us(read_to_process),
                 any_frame ? wire_min * symbol_us : 0.0,
                 any_frame ? wire_max * symbol_us : 0.0,
-                any_frame ? process_max * symbol_us : 0.0);
+                any_frame ? process_max * symbol_us : 0.0,
+                batches,
+                (batches != 0) ? static_cast<double>(regions) / static_cast<double>(batches) : 0.0,
+                grid_batch_max_regions.exchange(0, std::memory_order_relaxed),
+                avg_us(grid_batch_submit),
+                max_us(grid_batch_submit),
+                grid_batch_failures.exchange(0, std::memory_order_relaxed));
     reset(kernel_to_read);
     reset(read_to_process);
+    reset(grid_batch_submit);
   }
 
 private:
@@ -221,6 +252,10 @@ private:
   std::atomic<int>      wire_earliest_symbol{no_min_symbol};
   std::atomic<int>      wire_latest_symbol{no_max_symbol};
   std::atomic<int>      processing_latest_symbol{no_max_symbol};
+  duration_stats        grid_batch_submit;
+  std::atomic<uint64_t> grid_batch_regions{0};
+  std::atomic<unsigned> grid_batch_max_regions{0};
+  std::atomic<uint64_t> grid_batch_failures{0};
 };
 
 } // namespace ofh

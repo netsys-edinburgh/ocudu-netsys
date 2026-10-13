@@ -36,6 +36,12 @@ void closed_rx_window_handler::on_new_symbol(const slot_symbol_point_context& sy
   if (!executor.defer([internal_slot = symbol_point_context.symbol_point - notification_delay_in_symbols,
                        this,
                        tk = std::move(token)]() {
+        // Submit queued grid writes before an incomplete grid symbol can be handed to its consumers below. Writes are
+        // queued for one symbol at a time, so this also bounds their lifetime to one symbol period.
+        if (uplink_data_flow != nullptr) {
+          uplink_data_flow->flush_pending_grid_writes();
+        }
+
         // Add pending contexts to the repository.
         uplink_repo->process_pending_contexts();
         prach_repo->process_pending_contexts();

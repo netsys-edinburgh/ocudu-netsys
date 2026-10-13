@@ -70,6 +70,29 @@ public:
     return iq_decompression_result::success;
   }
 
+  iq_decompression_result enqueue_resource_grid_decompression(resource_grid_writer&,
+                                                              unsigned,
+                                                              unsigned,
+                                                              unsigned,
+                                                              unsigned,
+                                                              const uplane_section_params&) override
+  {
+    ++direct_decompression_count;
+    ++nof_queued_writes;
+    return iq_decompression_result::success;
+  }
+
+  iq_decompression_result flush_resource_grid_decompressions() override
+  {
+    if (nof_queued_writes != 0) {
+      ++nof_flushes_with_queued_writes;
+      symbol_notified_at_flush =
+          (symbol_notifier != nullptr) && symbol_notifier->has_new_uplink_symbol_function_been_called();
+    }
+    nof_queued_writes = 0;
+    return iq_decompression_result::success;
+  }
+
   bool decode_with_compressed_iq(uplane_message_decoder_results& results, span<const uint8_t> message) override
   {
     ++compressed_decode_count;
@@ -79,8 +102,14 @@ public:
 
   void set_results(const uplane_message_decoder_results& results) { spy_results = results; }
 
+  /// Notifier checked at flush time: queued writes must be submitted before the symbol is notified.
+  const uplane_rx_symbol_notifier_spy* symbol_notifier = nullptr;
+
   bool     direct_decompression_enabled = false;
   bool     assemble_fragments           = false;
+  bool     symbol_notified_at_flush       = false;
+  unsigned nof_queued_writes              = 0;
+  unsigned nof_flushes_with_queued_writes = 0;
   bool     compressed_decode_succeeds   = true;
   unsigned host_decode_count            = 0;
   unsigned compressed_decode_count      = 0;
@@ -353,4 +382,50 @@ TEST_F(data_flow_uplane_uplink_data_impl_fixture, partial_prb_inside_cplane_prbs
   ASSERT_FALSE(notifier->has_new_prach_function_been_called());
   ASSERT_TRUE(rg_writer.has_grid_been_written());
   ASSERT_EQ(num_prbs, rg_writer.get_nof_prbs_written());
+}
+
+TEST_F(data_flow_uplane_uplink_data_impl_fixture, queued_device_writes_are_submitted_before_the_symbol_is_notified)
+{
+  constexpr ru_compression_params compression = {compression_type::BFP, 9};
+  std::vector<uint8_t>            compressed_payload(nof_prbs * get_compressed_prb_size(compression).value());
+  uplane_message_decoder_results  deco_results     = build_valid_decoder_results();
+  deco_results.sections.front().ud_comp_hdr        = compression;
+  deco_results.sections.front().compressed_iq_data = compressed_payload;
+  uplane_decoder->set_results(deco_results);
+  uplane_decoder->direct_decompression_enabled = true;
+  uplane_decoder->symbol_notifier              = notifier;
+  rg_writer.device_mapping_enabled             = true;
+
+  data_flow.decode_type1_message(eaxc, {}, true);
+
+  ASSERT_TRUE(notifier->has_new_uplink_symbol_function_been_called());
+  ASSERT_EQ(1U, uplane_decoder->nof_flushes_with_queued_writes);
+  ASSERT_FALSE(uplane_decoder->symbol_notified_at_flush);
+  ASSERT_EQ(0U, uplane_decoder->host_decode_count);
+}
+
+TEST_F(data_flow_uplane_uplink_data_impl_fixture, queued_device_writes_of_an_incomplete_symbol_stay_queued)
+{
+  constexpr ru_compression_params compression      = {compression_type::BFP, 9};
+  constexpr unsigned              nof_written_prbs = 25;
+  std::vector<uint8_t>            compressed_payload(nof_written_prbs * get_compressed_prb_size(compression).value());
+  uplane_message_decoder_results  deco_results = build_valid_decoder_results();
+  auto&                           section      = deco_results.sections.front();
+  section.nof_prbs                             = nof_written_prbs;
+  section.ud_comp_hdr                          = compression;
+  section.compressed_iq_data                   = compressed_payload;
+  uplane_decoder->set_results(deco_results);
+  uplane_decoder->direct_decompression_enabled = true;
+  rg_writer.device_mapping_enabled             = true;
+
+  data_flow.decode_type1_message(eaxc, {}, true);
+
+  ASSERT_FALSE(notifier->has_new_uplink_symbol_function_been_called());
+  ASSERT_EQ(1U, uplane_decoder->nof_queued_writes);
+  ASSERT_EQ(0U, uplane_decoder->nof_flushes_with_queued_writes);
+
+  // Submitted on request (e.g., by the closed reception window handler).
+  data_flow.flush_pending_grid_writes();
+  ASSERT_EQ(1U, uplane_decoder->nof_flushes_with_queued_writes);
+  ul_context_repo->clear();
 }

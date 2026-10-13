@@ -27,6 +27,13 @@ public:
 
   /// Returns the metrics collector of this data flow.
   virtual data_flow_message_decoding_metrics_collector& get_metrics_collector() = 0;
+
+  /// \brief Submits the resource-grid writes this data flow has queued.
+  ///
+  /// A data flow may defer the device work of its resource-grid writes to submit the writes of a symbol together. It
+  /// must be called, on the executor that decodes the messages, before a grid symbol is handed to its consumers by a
+  /// component other than this data flow (e.g., when the reception window closes).
+  virtual void flush_pending_grid_writes() {}
 };
 
 } // namespace ofh

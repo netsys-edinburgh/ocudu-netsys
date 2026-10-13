@@ -2060,3 +2060,179 @@ TEST_P(ofh_iq_compression_cuda_test, cuda_compressor_device_grid_regions_match_c
   }
   cudaStreamDestroy(stream);
 }
+
+namespace {
+
+/// A write of compressed PRBs into one port of a grid symbol.
+struct grid_write {
+  unsigned port;
+  unsigned start_prb;
+  unsigned nof_prbs;
+};
+
+/// Creates an uplink grid with device mapping (managed memory), as the O-RAN receiver uses on integrated GPUs.
+std::unique_ptr<resource_grid>
+create_device_mapped_uplink_grid(unsigned nof_ports, unsigned nof_symbols, unsigned nof_prbs)
+{
+  EXPECT_EQ(::setenv("OCUDU_UL_CUDA_VISIBLE_GRID", "managed", 1), 0);
+  std::shared_ptr<resource_grid_factory> grid_factory = create_phy_acceleration_resource_grid_factory(
+      create_resource_grid_factory(), phy_acceleration_resource_grid_direction::uplink, true);
+  EXPECT_EQ(::unsetenv("OCUDU_UL_CUDA_VISIBLE_GRID"), 0);
+  return grid_factory->create(nof_ports, nof_symbols, nof_prbs * NOF_SUBCARRIERS_PER_RB);
+}
+
+} // namespace
+
+/// Writes of one symbol (several ports, a port split into fragments, a partial port) queued with
+/// enqueue_resource_grid_decompression() are submitted together and give the CPU decompressor's result; moving to
+/// another symbol submits the queued writes on its own.
+TEST_P(ofh_iq_compression_cuda_test, cuda_grid_batch_matches_cpu_reference)
+{
+  static constexpr unsigned            nof_ports     = 4;
+  static constexpr unsigned            nof_symbols   = 14;
+  static constexpr unsigned            grid_nof_prbs = 106;
+  static constexpr unsigned            symbol        = 5;
+  static const std::vector<grid_write> writes        = {
+      {0, 0, grid_nof_prbs}, {1, 0, 40}, {1, 40, grid_nof_prbs - 40}, {2, 10, 20}, {3, 0, grid_nof_prbs}};
+
+  ofh::compression_type                 type              = GetParam();
+  std::unique_ptr<ofh::iq_compressor>   cpu_compressor    = ofh::create_iq_compressor(type, logger, 1.0F, "generic");
+  std::unique_ptr<ofh::iq_decompressor> cpu_decompressor  = ofh::create_iq_decompressor(type, logger, "generic");
+  std::unique_ptr<ofh::iq_decompressor> cuda_decompressor = ofh::create_iq_decompressor(type, logger, "cuda");
+  auto&                                 cuda_impl         = static_cast<ofh::iq_compression_cuda&>(*cuda_decompressor);
+
+  std::unique_ptr<resource_grid> grid = create_device_mapped_uplink_grid(nof_ports, nof_symbols, grid_nof_prbs);
+  ASSERT_NE(grid, nullptr);
+  if (!grid->get_writer().supports_device_grid_mapping()) {
+    GTEST_SKIP() << "Device-mapped uplink grids are not available.";
+  }
+
+  for (unsigned data_width : {8U, 9U, 12U, 14U, 16U}) {
+    ofh::ru_compression_params params   = {type, data_width};
+    const unsigned             prb_size = ofh::get_compressed_prb_size(params).value();
+
+    std::vector<std::vector<uint8_t>> compressed;
+    std::vector<std::vector<cbf16_t>> expected;
+    for (const grid_write& write : writes) {
+      std::vector<cbf16_t> iq = generate_iq(write.nof_prbs);
+      compressed.emplace_back(write.nof_prbs * prb_size);
+      cpu_compressor->compress(compressed.back(), iq, params);
+      expected.emplace_back(iq.size());
+      cpu_decompressor->decompress(expected.back(), compressed.back(), params);
+    }
+
+    const uint64_t batches_before = cuda_impl.get_nof_grid_batches();
+    for (unsigned i = 0; i != writes.size(); ++i) {
+      ASSERT_EQ(cuda_decompressor->enqueue_resource_grid_decompression(grid->get_writer(),
+                                                                       writes[i].port,
+                                                                       symbol,
+                                                                       writes[i].start_prb,
+                                                                       writes[i].nof_prbs,
+                                                                       compressed[i],
+                                                                       params),
+                ofh::iq_decompression_result::success);
+    }
+    // Queued, not submitted yet.
+    EXPECT_EQ(cuda_impl.get_nof_grid_batches(), batches_before);
+
+    // A write to another symbol submits the queued writes on its own.
+    ASSERT_EQ(cuda_decompressor->enqueue_resource_grid_decompression(
+                  grid->get_writer(), 0, symbol + 1, 0, writes[0].nof_prbs, compressed[0], params),
+              ofh::iq_decompression_result::success);
+    EXPECT_EQ(cuda_impl.get_nof_grid_batches(), batches_before + 1);
+    ASSERT_EQ(cuda_decompressor->flush_resource_grid_decompressions(), ofh::iq_decompression_result::success);
+    EXPECT_EQ(cuda_impl.get_nof_grid_batches(), batches_before + 2);
+    // Nothing left to submit.
+    ASSERT_EQ(cuda_decompressor->flush_resource_grid_decompressions(), ofh::iq_decompression_result::success);
+    EXPECT_EQ(cuda_impl.get_nof_grid_batches(), batches_before + 2);
+
+    for (unsigned i = 0; i != writes.size(); ++i) {
+      span<const cbf16_t> actual =
+          grid->get_reader()
+              .get_view(writes[i].port, symbol)
+              .subspan(writes[i].start_prb * NOF_SUBCARRIERS_PER_RB, writes[i].nof_prbs * NOF_SUBCARRIERS_PER_RB);
+      ASSERT_TRUE(std::equal(expected[i].begin(), expected[i].end(), actual.begin()))
+          << "compression type=" << ofh::to_string(type) << " width=" << data_width << " write=" << i;
+    }
+    span<const cbf16_t> next_symbol = grid->get_reader().get_view(0, symbol + 1);
+    ASSERT_TRUE(std::equal(expected[0].begin(), expected[0].end(), next_symbol.begin()))
+        << "compression type=" << ofh::to_string(type) << " width=" << data_width << " next symbol";
+  }
+  EXPECT_EQ(cuda_impl.get_nof_acceleration_failures(), 0U);
+}
+
+/// With OCUDU_OFH_CUDA_GRID_BATCH=0 every queued write is submitted immediately, as decompress_to_resource_grid().
+TEST_P(ofh_iq_compression_cuda_test, cuda_grid_batch_disabled_writes_immediately)
+{
+  static constexpr unsigned nof_prbs = 51;
+
+  ofh::compression_type      type   = GetParam();
+  ofh::ru_compression_params params = {type, 9U};
+
+  std::unique_ptr<ofh::iq_compressor> cpu_compressor = ofh::create_iq_compressor(type, logger, 1.0F, "generic");
+  std::vector<cbf16_t>                iq             = generate_iq(nof_prbs);
+  std::vector<uint8_t>                compressed(nof_prbs * ofh::get_compressed_prb_size(params).value());
+  cpu_compressor->compress(compressed, iq, params);
+  std::vector<cbf16_t>                  expected(iq.size());
+  std::unique_ptr<ofh::iq_decompressor> cpu_decompressor = ofh::create_iq_decompressor(type, logger, "generic");
+  cpu_decompressor->decompress(expected, compressed, params);
+
+  ASSERT_EQ(::setenv("OCUDU_OFH_CUDA_GRID_BATCH", "0", 1), 0);
+  std::unique_ptr<ofh::iq_decompressor> cuda_decompressor = ofh::create_iq_decompressor(type, logger, "cuda");
+  ASSERT_EQ(::unsetenv("OCUDU_OFH_CUDA_GRID_BATCH"), 0);
+
+  std::unique_ptr<resource_grid> grid = create_device_mapped_uplink_grid(1, 1, nof_prbs);
+  ASSERT_NE(grid, nullptr);
+  if (!grid->get_writer().supports_device_grid_mapping()) {
+    GTEST_SKIP() << "Device-mapped uplink grids are not available.";
+  }
+
+  ASSERT_EQ(
+      cuda_decompressor->enqueue_resource_grid_decompression(grid->get_writer(), 0, 0, 0, nof_prbs, compressed, params),
+      ofh::iq_decompression_result::success);
+  // Readable without a flush.
+  span<const cbf16_t> actual = grid->get_reader().get_view(0, 0);
+  ASSERT_TRUE(std::equal(expected.begin(), expected.end(), actual.begin()));
+  EXPECT_EQ(static_cast<ofh::iq_compression_cuda&>(*cuda_decompressor).get_nof_grid_batches(), 0U);
+}
+
+/// Invalid requests are reported as by decompress_to_resource_grid() and do not disturb the queued writes.
+TEST_P(ofh_iq_compression_cuda_test, cuda_grid_batch_rejects_invalid_requests)
+{
+  static constexpr unsigned nof_prbs = 24;
+
+  ofh::compression_type      type   = GetParam();
+  ofh::ru_compression_params params = {type, 9U};
+
+  std::unique_ptr<ofh::iq_compressor> cpu_compressor = ofh::create_iq_compressor(type, logger, 1.0F, "generic");
+  std::vector<cbf16_t>                iq             = generate_iq(nof_prbs);
+  std::vector<uint8_t>                compressed(nof_prbs * ofh::get_compressed_prb_size(params).value());
+  cpu_compressor->compress(compressed, iq, params);
+  std::vector<cbf16_t>                  expected(iq.size());
+  std::unique_ptr<ofh::iq_decompressor> cpu_decompressor = ofh::create_iq_decompressor(type, logger, "generic");
+  cpu_decompressor->decompress(expected, compressed, params);
+
+  std::unique_ptr<ofh::iq_decompressor> cuda_decompressor = ofh::create_iq_decompressor(type, logger, "cuda");
+  std::unique_ptr<resource_grid>        grid              = create_device_mapped_uplink_grid(1, 1, nof_prbs);
+  ASSERT_NE(grid, nullptr);
+  if (!grid->get_writer().supports_device_grid_mapping()) {
+    GTEST_SKIP() << "Device-mapped uplink grids are not available.";
+  }
+
+  ASSERT_EQ(
+      cuda_decompressor->enqueue_resource_grid_decompression(grid->get_writer(), 0, 0, 0, nof_prbs, compressed, params),
+      ofh::iq_decompression_result::success);
+
+  ofh::ru_compression_params invalid_width = {type, 0U};
+  EXPECT_EQ(cuda_decompressor->enqueue_resource_grid_decompression(
+                grid->get_writer(), 0, 0, 0, nof_prbs, compressed, invalid_width),
+            ofh::iq_decompression_result::invalid_input);
+  EXPECT_EQ(
+      cuda_decompressor->enqueue_resource_grid_decompression(
+          grid->get_writer(), 0, 0, 0, nof_prbs, span<const uint8_t>(compressed).first(compressed.size() - 1), params),
+      ofh::iq_decompression_result::invalid_input);
+
+  ASSERT_EQ(cuda_decompressor->flush_resource_grid_decompressions(), ofh::iq_decompression_result::success);
+  span<const cbf16_t> actual = grid->get_reader().get_view(0, 0);
+  ASSERT_TRUE(std::equal(expected.begin(), expected.end(), actual.begin()));
+}
