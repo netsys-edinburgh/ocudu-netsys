@@ -221,6 +221,12 @@ The injection points sit on the real data path. In OAI, the MAC/RLC/PDCP hooks r
 - The thread collectors (procfs or eBPF) are driven by the publisher once per interval, so every published interval is
   complete. OAI used a free-running collector thread that raced the reset and could destroy the BPF skeleton while still
   reading its maps.
+- **eBPF counters are cumulative.** The BPF programs never reset the per-TID entries, and user space never writes to
+  them: each interval it looks up the TID of every monitored slot (no map walk) and publishes the deltas against the
+  previous totals. The per-interval maximum comes from an `interval_epoch` map that user space advances once per
+  interval. Entries of exited threads are deleted when their slot is freed.
+  - OAI reset every entry while walking the hash map with `get_next_key`. An update moves the element to the head of
+    its bucket, so two TIDs in one bucket made the walk loop forever and hung the publisher.
 - **eBPF voluntary/involuntary context switches** follow the kernel's `nvcsw`/`nivcsw` rule: a switch is involuntary
   when the task was still runnable (`prev_state` "R" or "R+").
   - OAI counted only "R+" (`0x100`) as involuntary.
