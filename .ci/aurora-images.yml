@@ -1,0 +1,73 @@
+# Local-only pipeline: builds the AURORA gNB (FHI 7.2 / DPDK) and aurora_reader images and pushes them to Docker Hub.
+#
+# This file lives outside .github/workflows on purpose, so GitHub never runs it. It is executed on this machine with
+# `act` through .ci/run.sh, which also git-pushes aurora-port once this workflow succeeds. See .ci/README.md.
+#
+# Jobs run directly on the host (act `-P self-hosted=-self-hosted`), so they use the host Docker daemon, its layer
+# cache and its Docker Hub login. act starts host jobs in an empty workspace, so each step changes to REPO_ROOT, which
+# .ci/run.sh passes in.
+
+name: AURORA images (local)
+
+on:
+  workflow_dispatch:
+
+env:
+  GNB_REPO: 24whitedevil/netsys-ocudu-gnb-fhi72-aurora
+  READER_REPO: 24whitedevil/netsys-ocudu-aurora-reader-fhi72
+  # Target CPU of the gNB server. x86-64-v4 requires AVX512.
+  MARCH: x86-64-v4
+  DPDK_VERSION: "25.11.2"
+  # Parallel compile jobs inside the gNB build. Bounded by host RAM (~2 GB per C++ job).
+  NUM_JOBS: "8"
+
+jobs:
+  build-reader:
+    runs-on: self-hosted
+    steps:
+      - name: Build aurora_reader image
+        run: |
+          cd "${REPO_ROOT:?REPO_ROOT not set, run through .ci/run.sh}"
+          SHORT_SHA="${GITHUB_SHA:0:10}"
+          BRANCH_TAG="${GITHUB_REF_NAME//\//-}"
+          docker build \
+            -f docker/aurora_reader/Dockerfile \
+            -t "${READER_REPO}:${SHORT_SHA}" \
+            -t "${READER_REPO}:${BRANCH_TAG}" \
+            --label org.opencontainers.image.revision="${GITHUB_SHA}" \
+            .
+
+  build-gnb:
+    runs-on: self-hosted
+    steps:
+      - name: Build gNB image (runtime-dpdk, COMPONENT=gnb)
+        run: |
+          cd "${REPO_ROOT:?REPO_ROOT not set, run through .ci/run.sh}"
+          SHORT_SHA="${GITHUB_SHA:0:10}"
+          BRANCH_TAG="${GITHUB_REF_NAME//\//-}"
+          docker build \
+            -f docker/Dockerfile \
+            --target runtime-dpdk \
+            --build-arg COMPONENT=gnb \
+            --build-arg MARCH="${MARCH}" \
+            --build-arg DPDK_VERSION="${DPDK_VERSION}" \
+            --build-arg NUM_JOBS="${NUM_JOBS}" \
+            -t "${GNB_REPO}:${SHORT_SHA}" \
+            -t "${GNB_REPO}:${BRANCH_TAG}" \
+            --label org.opencontainers.image.revision="${GITHUB_SHA}" \
+            .
+
+  # Runs only when both images built, so Docker Hub never gets one image without the other.
+  publish:
+    runs-on: self-hosted
+    needs: [build-reader, build-gnb]
+    steps:
+      - name: Push images to Docker Hub
+        run: |
+          cd "${REPO_ROOT:?REPO_ROOT not set, run through .ci/run.sh}"
+          SHORT_SHA="${GITHUB_SHA:0:10}"
+          BRANCH_TAG="${GITHUB_REF_NAME//\//-}"
+          for repo in "${READER_REPO}" "${GNB_REPO}"; do
+            docker push "${repo}:${SHORT_SHA}"
+            docker push "${repo}:${BRANCH_TAG}"
+          done
