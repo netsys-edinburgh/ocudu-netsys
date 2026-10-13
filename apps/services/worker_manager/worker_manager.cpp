@@ -205,9 +205,19 @@ void worker_manager::create_prio_worker(const std::string&                      
   }
 }
 
-os_sched_affinity_bitmask worker_manager::get_dedicated_worker_affinity(const os_sched_affinity_bitmask& mask)
+os_sched_affinity_bitmask worker_manager::get_dedicated_worker_affinity(const std::string&               name,
+                                                                        const os_sched_affinity_bitmask& mask)
 {
-  return mask.any() ? mask : main_pool_affinity_mng.calcute_affinity_mask(sched_affinity_mask_types::main);
+  if (not mask.any()) {
+    return main_pool_affinity_mng.calcute_affinity_mask(sched_affinity_mask_types::main);
+  }
+
+  for (size_t cpu : mask.get_cpu_ids()) {
+    if (main_pool_cpu_mask.test(cpu)) {
+      app_logger.warning("Worker \"{}\" shares CPU {} with the main thread pool", name, cpu);
+    }
+  }
+  return mask;
 }
 
 task_executor& worker_manager::create_dedicated_layer_worker(const std::string&               name,
@@ -220,7 +230,7 @@ task_executor& worker_manager::create_dedicated_layer_worker(const std::string& 
                      task_worker_queue_size,
                      concurrent_queue_policy::lockfree_mpmc,
                      main_pool_backoff_period,
-                     get_dedicated_worker_affinity(mask),
+                     get_dedicated_worker_affinity(name, mask),
                      prio);
   return *exec_mng.executors().at(exec_name);
 }
@@ -292,17 +302,18 @@ void worker_manager::create_du_high_executors(const worker_manager_config::du_hi
     using namespace execution_config_helper;
     odu::du_high_executor_config::dedicated_cell_worker_list cell_workers;
     for (unsigned i = 0; i != du_hi.nof_cells; ++i) {
-      const std::string               cell_str  = std::to_string(i);
-      const os_sched_affinity_bitmask cell_mask = i < du_hi.cell_worker_affinities.size()
-                                                      ? du_hi.cell_worker_affinities[i]
-                                                      : os_sched_affinity_bitmask{};
+      const std::string               cell_str    = std::to_string(i);
+      const std::string               worker_name = "mac_sched#" + cell_str;
+      const os_sched_affinity_bitmask cell_mask   = i < du_hi.cell_worker_affinities.size()
+                                                        ? du_hi.cell_worker_affinities[i]
+                                                        : os_sched_affinity_bitmask{};
       const priority_multiqueue_worker cell_worker{
-          "mac_sched#" + cell_str,
+          worker_name,
           {{"mac_sched_hi_exec#" + cell_str, concurrent_queue_policy::lockfree_mpmc, task_worker_queue_size},
            {"mac_sched_lo_exec#" + cell_str, concurrent_queue_policy::lockfree_mpmc, task_worker_queue_size}},
           main_pool_backoff_period,
           os_thread_realtime_priority::max() - 1,
-          get_dedicated_worker_affinity(cell_mask)};
+          get_dedicated_worker_affinity(worker_name, cell_mask)};
       if (not exec_mng.add_execution_context(create_execution_context(cell_worker))) {
         report_fatal_error("Failed to instantiate {} execution context", cell_worker.name);
       }
@@ -409,6 +420,7 @@ void worker_manager::create_main_worker_pool(const worker_manager_config& worker
   // Configure main worker pool.
   nof_workers_general_pool        = get_default_nof_workers(worker_cfg);
   main_pool_backoff_period        = worker_cfg.main_pool_backoff_period;
+  main_pool_cpu_mask              = worker_cfg.main_pool_affinity_cfg.mask;
   const auto     worker_pool_prio = os_thread_realtime_priority::max() - 2;
   const unsigned qsize            = worker_cfg.main_pool_task_queue_size;
   // Estimation of an upper bound on the number of implicit producers that are required.

@@ -101,6 +101,8 @@ private:
 
   /// Back-off period of the main thread pool workers, also used by the dedicated layer workers.
   std::chrono::microseconds main_pool_backoff_period{50};
+  /// CPU mask of the main thread pool workers. Empty when no CPUs were configured.
+  os_sched_affinity_bitmask main_pool_cpu_mask;
 
   /// Instantiated raw executors.
   task_executor* non_rt_low_prio_exec    = nullptr;
@@ -160,8 +162,12 @@ private:
                                                const os_sched_affinity_bitmask& mask,
                                                os_thread_realtime_priority      prio);
 
-  /// Returns \c mask if any CPU is set in it, otherwise the main thread pool affinity.
-  os_sched_affinity_bitmask get_dedicated_worker_affinity(const os_sched_affinity_bitmask& mask);
+  /// \brief Returns \c mask if any CPU is set in it, otherwise the main thread pool affinity.
+  ///
+  /// Logs a warning when \c mask shares CPUs with the main thread pool, as the worker named \c name then competes with
+  /// the pool workers for those CPUs.
+  os_sched_affinity_bitmask get_dedicated_worker_affinity(const std::string&               name,
+                                                          const os_sched_affinity_bitmask& mask);
 
   /// Helper method to create workers with non zero priority.
   void create_prio_worker(const std::string&                       name,
