@@ -161,7 +161,7 @@ typedef struct { double min, max, sum; int n; } agg_t;
 typedef struct {
     int      present;                          /* producer published an extension */
     uint64_t csi_reports, csi_invalid_reports;
-    agg_t    csi_ri, csi_li, csi_cqi_tb1, csi_cqi_tb2, csi_sb_cqi_diff, csi_nof_rs, csi_l1_rsrp_best;
+    agg_t    csi_ri, csi_li, csi_cqi_tb1, csi_cqi_tb2, csi_sb_cqi_diff;
     agg_t    csi_pmi_i11, csi_pmi_i2;
     uint32_t pmi_type_ues[4];                  /* UEs whose last report used AURORA_PMI_{NONE,TWO_PORT,TYPEI_SP,TYPEII} */
     uint32_t ul_failure_ues;
@@ -358,7 +358,6 @@ typedef struct {
 
     /* Group 11 — RC cell (cell 0 = primary serving cell) */
     int      rc_cell_count;
-    double   rc0_rsrp_avg;
     double   rc0_sinr_avg;
     uint32_t rc0_cell_load_pct;
     uint32_t rc0_interference_lvl;
@@ -429,10 +428,6 @@ static void fill_ext_snapshot(ext_snap_t *e, const struct aurora_metrics *m)
             double sum = 0;
             for (int k = 0; k < c->nof_subbands_tb1 && k < AURORA_CSI_MAX_SUBBANDS; k++) sum += c->sb_cqi_diff_tb1[k];
             agg_add(&e->csi_sb_cqi_diff, sum / c->nof_subbands_tb1);
-        }
-        if (c->nof_rs > 0) {
-            agg_add(&e->csi_nof_rs, c->nof_rs);
-            agg_add(&e->csi_l1_rsrp_best, c->l1_rsrp_best_dbm);
         }
         if (c->pmi_i11 != AURORA_CSI_NOT_REPORTED) agg_add(&e->csi_pmi_i11, c->pmi_i11);
         if (c->pmi_i2 != AURORA_CSI_NOT_REPORTED) agg_add(&e->csi_pmi_i2, c->pmi_i2);
@@ -704,7 +699,6 @@ static void fill_snapshot(snapshot_t *s, const struct aurora_metrics *m)
     s->rc_cell_count = (int)m->rc_cell_count;
     if (m->rc_cell_count > 0) {
         const aurora_rc_stats_t *rc = &m->rc_metrics[0];
-        s->rc0_rsrp_avg        = rc->rsrp_avg;
         s->rc0_sinr_avg        = rc->sinr_avg;
         s->rc0_cell_load_pct   = rc->cell_load_percent;
         s->rc0_interference_lvl = rc->interference_level;
@@ -827,7 +821,9 @@ static void write_ext_csv_header(FILE *fp, const csv_gates_t *g)
         fprintf(fp,
             ",csi_reports,csi_invalid_reports"
             "," AGG3("csi_ri") "," AGG3("csi_li") "," AGG3("csi_cqi_tb1") "," AGG3("csi_cqi_tb2")
-            "," AGG3("csi_sb_cqi_diff") "," AGG3("csi_nof_rs") "," AGG3("csi_l1_rsrp_best_dbm")
+            /* No csi_nof_rs / csi_l1_rsrp_best_dbm: OCUDU never configures L1-RSRP CSI reports
+             * (see kpm_L1M.DL-rsrpAvg). */
+            "," AGG3("csi_sb_cqi_diff")
             "," AGG3("csi_pmi_i11") "," AGG3("csi_pmi_i2")
             ",csi_pmi_none_ues,csi_pmi_two_port_ues,csi_pmi_typeI_ues,csi_pmi_typeII_ues"
             ",ul_failure_ues," AGG3("ul_failure_timer_ms"));
@@ -855,8 +851,6 @@ static void write_ext_csv_row(FILE *fp, const csv_gates_t *g, const ext_snap_t *
         write_agg3(fp, &e->csi_cqi_tb1);
         write_agg3(fp, &e->csi_cqi_tb2);
         write_agg3(fp, &e->csi_sb_cqi_diff);
-        write_agg3(fp, &e->csi_nof_rs);
-        write_agg3(fp, &e->csi_l1_rsrp_best);
         write_agg3(fp, &e->csi_pmi_i11);
         write_agg3(fp, &e->csi_pmi_i2);
         fprintf(fp, ",%u,%u,%u,%u,%u", e->pmi_type_ues[0], e->pmi_type_ues[1], e->pmi_type_ues[2],
@@ -981,7 +975,9 @@ static void write_csv_header(FILE *fp, const struct aurora_metrics *m)
     if (g.mac) {
         fprintf(fp,
             /* Group 8 — KPM items 11-16 (MAC-aggregator-derived) */
-            ",kpm_L1M.UL-sinrAvg,kpm_L1M.DL-rsrpAvg"
+            /* L1M.DL-rsrpAvg (KPM 12) is not written: OCUDU configures CSI reports as cri-RI-PMI-CQI only
+             * (csi_helper.cpp), so UEs never report L1-RSRP and it has no data source. */
+            ",kpm_L1M.UL-sinrAvg"
             ",kpm_DRB.RlcPacketDropRateDl,kpm_RRU.PrbTotDl"
             ",kpm_RRU.PrbTotUl,kpm_L1M.UL-dtxRatio"
             /* Group 12 — per-UE MAC aggregates */
@@ -1037,7 +1033,7 @@ static void write_csv_header(FILE *fp, const struct aurora_metrics *m)
 
     /* Group 11 — RC cell 0 */
     if (g.rc_cell_count) fprintf(fp, ",rc_cell_count");
-    if (g.mac)           fprintf(fp, ",rc0_rsrp_avg,rc0_sinr_avg,rc0_cell_load_pct,rc0_interference_lvl");
+    if (g.mac)           fprintf(fp, ",rc0_sinr_avg,rc0_cell_load_pct,rc0_interference_lvl");
     if (g.handover)      fprintf(fp, ",rc0_ho_attempts,rc0_ho_success,rc0_ho_success_rate");
 
     /* UE churn -- driven by gNB_scheduler_primitives.c (MAC scheduler, same gate as g.mac) */
@@ -1260,8 +1256,8 @@ static void write_csv_row(FILE *fp, const snapshot_t *s)
 
     if (g.mac) {
         fprintf(fp,
-            /* Group 8 — KPM items 11-16 */
-            ",%.2f,%.2f,%.6f,%.2f,%.2f,%.6f"
+            /* Group 8 — KPM items 11, 13-16 */
+            ",%.2f,%.6f,%.2f,%.2f,%.6f"
             /* Group 12 — MAC aggregates */
             ",%d"
             ",%.2f,%.2f,%.2f"
@@ -1289,8 +1285,8 @@ static void write_csv_row(FILE *fp, const snapshot_t *s)
             ",%.2f,%.2f,%.2f"
             ",%.2f,%.2f,%.2f",
 
-            /* Group 8 — KPM items 11-16 */
-            s->kpm[10], s->kpm[11], s->kpm[12], s->kpm[13], s->kpm[14], s->kpm[15],
+            /* Group 8 — KPM items 11, 13-16 */
+            s->kpm[10], s->kpm[12], s->kpm[13], s->kpm[14], s->kpm[15],
 
             /* Group 12 — MAC */
             s->mac_active_ues,
@@ -1360,9 +1356,7 @@ static void write_csv_row(FILE *fp, const snapshot_t *s)
     /* Group 11 — RC cell 0 */
     if (g.rc_cell_count) fprintf(fp, ",%d", s->rc_cell_count);
     if (g.mac) {
-        fprintf(fp, ",%.2f,%.2f,%u,%u",
-            s->rc0_rsrp_avg, s->rc0_sinr_avg,
-            s->rc0_cell_load_pct, s->rc0_interference_lvl);
+        fprintf(fp, ",%.2f,%u,%u", s->rc0_sinr_avg, s->rc0_cell_load_pct, s->rc0_interference_lvl);
     }
     if (g.handover) {
         fprintf(fp, ",%u,%u,%.4f",
@@ -1796,8 +1790,6 @@ int main(int argc, char **argv)
             printf("  UE rnti=0x%04x\n", u->rnti);
             printf("    CSI: RI=%u PMI(x1=%u,x2=%u) dl_max_mcs=%u\n",
                    u->ri, u->pmi_x1, u->pmi_x2, u->dl_max_mcs);
-            printf("    Beam: SSB_RSRP=%d CSI-RS_RSRP=%d SINR_csi=%.1f dB\n",
-                   u->ssb_rsrp_best, u->csirs_rsrp_best, (float)u->sinr_csi_x10 / 10.0f);
             if (u->ul_failure || u->pusch_consec_dtx > 3 || u->pucch_consec_dtx > 3) {
                 printf("    *** UL Health: ul_failure=%u timer=%u slots, pusch_dtx=%u pucch_dtx=%u ***\n",
                        u->ul_failure, u->ul_failure_timer, u->pusch_consec_dtx, u->pucch_consec_dtx);
@@ -1869,8 +1861,7 @@ int main(int argc, char **argv)
         }
 
         printf("\n--- RC cell 0 ---\n");
-        printf("  RSRP=%.2f dBm  SINR=%.2f dB  load=%u%%  intf=%u\n",
-               s.rc0_rsrp_avg, s.rc0_sinr_avg, s.rc0_cell_load_pct, s.rc0_interference_lvl);
+        printf("  SINR=%.2f dB  load=%u%%  intf=%u\n", s.rc0_sinr_avg, s.rc0_cell_load_pct, s.rc0_interference_lvl);
         printf("  HO attempts=%u  success=%u  rate=%.3f\n",
                s.rc0_ho_attempts, s.rc0_ho_success, s.rc0_ho_success_rate);
 
@@ -1884,11 +1875,10 @@ int main(int argc, char **argv)
                 for (int i = 0; i < MAX_NO_UEs; i++) {
                     const aurora_csi_ue_stats_t *c = &metrics->ext.csi[i];
                     if (c->rnti == 0) continue;
-                    printf("  UE 0x%04x: RI=%u LI=%u CQI(tb1/tb2)=%u/%u subbands=%u PMI type=%u i11=%u i12=%u i13=%u i2=%u"
-                           " nof_rs=%u best_L1-RSRP=%d dBm (%s)\n",
+                    printf("  UE 0x%04x: RI=%u LI=%u CQI(tb1/tb2)=%u/%u subbands=%u PMI type=%u"
+                           " i11=%u i12=%u i13=%u i2=%u\n",
                            c->rnti, c->ri, c->li, c->wb_cqi_tb1, c->wb_cqi_tb2, c->nof_subbands_tb1, c->pmi_type,
-                           c->pmi_i11, c->pmi_i12, c->pmi_i13, c->pmi_i2, c->nof_rs, c->l1_rsrp_best_dbm,
-                           c->rsrp_from_ssb ? "SSBRI" : "CRI");
+                           c->pmi_i11, c->pmi_i12, c->pmi_i13, c->pmi_i2);
                 }
                 printf("  UL failure: ues=%u timer_ms max=%.0f\n", e.ul_failure_ues,
                        e.ul_failure_timer_ms.n ? e.ul_failure_timer_ms.max : 0.0);
