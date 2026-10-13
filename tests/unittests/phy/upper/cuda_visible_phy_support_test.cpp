@@ -8,6 +8,7 @@
 
 #include "phy_acceleration_prach_buffer_factory.h"
 #include "phy_acceleration_resource_grid_factory.h"
+#include "phy_acceleration_runtime_options.h"
 #include "prach_buffer_cuda_visible_impl.h"
 #include "resource_grid_cuda_visible_impl.h"
 #include "ocudu/phy/support/resource_grid.h"
@@ -134,12 +135,16 @@ testing::AssertionResult cuda_concurrent_managed_access_available()
 
 bool cuda_direct_managed_host_access_available()
 {
-  int device_id                       = 0;
-  int direct_managed_access_from_host = 0;
-  return (cudaGetDevice(&device_id) == cudaSuccess) &&
-         (cudaDeviceGetAttribute(
-              &direct_managed_access_from_host, cudaDevAttrDirectManagedMemAccessFromHost, device_id) == cudaSuccess) &&
-         (direct_managed_access_from_host != 0);
+  int  device_id                       = 0;
+  int  direct_managed_access_from_host = 0;
+  bool direct =
+      (cudaGetDevice(&device_id) == cudaSuccess) &&
+      (cudaDeviceGetAttribute(&direct_managed_access_from_host, cudaDevAttrDirectManagedMemAccessFromHost, device_id) ==
+       cudaSuccess) &&
+      (direct_managed_access_from_host != 0);
+  // Honour the grid's override, used to run the policy of devices without direct host access to device-resident
+  // managed memory (GB10, Jetson, PCIe GPUs) on a coherent GH200-class device.
+  return phy_acceleration_env_flag_enabled("OCUDU_CUDA_VISIBLE_GRID_HOST_DIRECT", direct);
 }
 
 bool wait_for_flag(const std::atomic<bool>& flag, std::chrono::milliseconds timeout)
@@ -894,4 +899,317 @@ TEST(cuda_visible_phy_support_test, prach_buffer_sustained_device_only_cycles_re
     ASSERT_EQ(cudaStreamSynchronize(consumer_stream.get()), cudaSuccess);
     EXPECT_EQ(copied, expected);
   }
+}
+
+namespace {
+
+/// Uplink CUDA-visible grid as created by the PHY factory (host mirror enabled unless the environment disables it).
+std::unique_ptr<resource_grid> create_uplink_managed_grid(unsigned nof_ports, unsigned nof_symbols, unsigned nof_subc)
+{
+  auto factory = create_phy_acceleration_resource_grid_factory(
+      create_resource_grid_factory(), phy_acceleration_resource_grid_direction::uplink, true);
+  return factory->create(nof_ports, nof_symbols, nof_subc);
+}
+
+/// Device producer: writes \c payload (whole grid layout) for the given symbols of every port, as a GPU kernel would,
+/// optionally mirroring the written regions.
+::testing::AssertionResult produce_symbols(resource_grid_writer&           writer,
+                                           cudaStream_t                    stream,
+                                           span<const cbf16_t>             payload,
+                                           unsigned                        nof_ports,
+                                           unsigned                        nof_symbols,
+                                           unsigned                        nof_subc,
+                                           std::initializer_list<unsigned> symbols,
+                                           bool                            mirror)
+{
+  if (!writer.prepare_device_grid_mapping(stream)) {
+    return ::testing::AssertionFailure() << "prepare_device_grid_mapping failed";
+  }
+  auto* device_grid = static_cast<cbf16_t*>(writer.get_device_grid_bf16());
+  for (unsigned port = 0; port != nof_ports; ++port) {
+    for (unsigned symbol : symbols) {
+      const size_t offset = (static_cast<size_t>(port) * nof_symbols + symbol) * nof_subc;
+      if (cudaMemcpyAsync(device_grid + offset,
+                          payload.data() + offset,
+                          nof_subc * sizeof(cbf16_t),
+                          cudaMemcpyHostToDevice,
+                          stream) != cudaSuccess) {
+        return ::testing::AssertionFailure() << "producer copy failed";
+      }
+      if (mirror && !writer.mirror_device_grid_region(stream, port, symbol, 0, nof_subc)) {
+        return ::testing::AssertionFailure() << "mirror_device_grid_region failed";
+      }
+    }
+  }
+  if (!writer.on_device_grid_mapping_enqueued(stream)) {
+    return ::testing::AssertionFailure() << "on_device_grid_mapping_enqueued failed";
+  }
+  return ::testing::AssertionSuccess();
+}
+
+/// Device consumer of the grid that stays in flight until the gate is released.
+::testing::AssertionResult
+start_blocked_device_reader(const resource_grid_reader& reader, cudaStream_t stream, cuda_callback_gate& gate)
+{
+  if (!reader.prepare_device_grid_reading(stream)) {
+    return ::testing::AssertionFailure() << "prepare_device_grid_reading failed";
+  }
+  if (cudaLaunchHostFunc(stream, wait_for_cuda_callback_gate, &gate) != cudaSuccess) {
+    reader.release_device_grid_reading();
+    return ::testing::AssertionFailure() << "cudaLaunchHostFunc failed";
+  }
+  if (!reader.on_device_grid_reading_enqueued(stream)) {
+    return ::testing::AssertionFailure() << "on_device_grid_reading_enqueued failed";
+  }
+  if (!wait_for_flag(gate.entered, std::chrono::seconds(2))) {
+    return ::testing::AssertionFailure() << "device reader did not start";
+  }
+  return ::testing::AssertionSuccess();
+}
+
+} // namespace
+
+// A host read of a mirrored grid orders after the producers only: it does not wait for device consumers of the grid
+// (e.g. PUSCH) still in flight, and it returns the producer's data.
+TEST(cuda_visible_phy_support_test, uplink_host_read_does_not_wait_for_device_consumers_with_mirror)
+{
+  testing::AssertionResult cuda_available = cuda_managed_memory_available();
+  if (!cuda_available) {
+    GTEST_SKIP() << cuda_available.message();
+  }
+  scoped_env_var grid_mode("OCUDU_UL_CUDA_VISIBLE_GRID");
+  ASSERT_TRUE(grid_mode.set("managed"));
+  scoped_env_var mirror_mode("OCUDU_CUDA_VISIBLE_GRID_HOST_MIRROR");
+  ASSERT_TRUE(mirror_mode.unset());
+
+  static constexpr unsigned      nof_ports = 2, nof_symbols = 14, nof_subc = 48;
+  std::unique_ptr<resource_grid> grid = create_uplink_managed_grid(nof_ports, nof_symbols, nof_subc);
+  ASSERT_NE(grid, nullptr);
+  resource_grid_writer&       writer = grid->get_writer();
+  const resource_grid_reader& reader = grid->get_reader();
+  ASSERT_TRUE(writer.supports_device_grid_mapping());
+
+  cuda_stream_guard producer_stream, consumer_stream;
+  ASSERT_TRUE(producer_stream.create());
+  ASSERT_TRUE(consumer_stream.create());
+
+  std::vector<cbf16_t> payload = generate_grid_payload(nof_ports, nof_symbols, nof_subc);
+  ASSERT_TRUE(
+      produce_symbols(writer, producer_stream.get(), payload, nof_ports, nof_symbols, nof_subc, {0, 3, 13}, true));
+
+  cuda_callback_gate gate;
+  ASSERT_TRUE(start_blocked_device_reader(reader, consumer_stream.get(), gate));
+
+  const auto          start   = std::chrono::steady_clock::now();
+  span<const cbf16_t> view    = reader.get_view(1, 3);
+  const auto          elapsed = std::chrono::steady_clock::now() - start;
+  const size_t        offset  = (static_cast<size_t>(1) * nof_symbols + 3) * nof_subc;
+  expect_equal(view, span<const cbf16_t>(payload.data() + offset, nof_subc));
+  // The legacy path waits up to 5 ms for the in-flight consumer and then fails; the mirror read does not wait for it.
+  EXPECT_LT(elapsed, std::chrono::milliseconds(2));
+
+  gate.released.store(true, std::memory_order_release);
+  ASSERT_EQ(cudaStreamSynchronize(consumer_stream.get()), cudaSuccess);
+}
+
+// With the mirror disabled, host reads keep the legacy ordering: they wait for the device consumers of the grid.
+TEST(cuda_visible_phy_support_test, uplink_host_read_waits_for_device_consumers_without_mirror)
+{
+  testing::AssertionResult cuda_available = cuda_managed_memory_available();
+  if (!cuda_available) {
+    GTEST_SKIP() << cuda_available.message();
+  }
+  scoped_env_var grid_mode("OCUDU_UL_CUDA_VISIBLE_GRID");
+  ASSERT_TRUE(grid_mode.set("managed"));
+  scoped_env_var mirror_mode("OCUDU_CUDA_VISIBLE_GRID_HOST_MIRROR");
+  ASSERT_TRUE(mirror_mode.set("0"));
+
+  static constexpr unsigned      nof_ports = 1, nof_symbols = 14, nof_subc = 48;
+  std::unique_ptr<resource_grid> grid = create_uplink_managed_grid(nof_ports, nof_symbols, nof_subc);
+  ASSERT_NE(grid, nullptr);
+  resource_grid_writer&       writer = grid->get_writer();
+  const resource_grid_reader& reader = grid->get_reader();
+
+  cuda_stream_guard producer_stream, consumer_stream;
+  ASSERT_TRUE(producer_stream.create());
+  ASSERT_TRUE(consumer_stream.create());
+
+  std::vector<cbf16_t> payload = generate_grid_payload(nof_ports, nof_symbols, nof_subc);
+  // Without a mirror the grid refuses to mirror regions.
+  ASSERT_TRUE(writer.prepare_device_grid_mapping(producer_stream.get()));
+  EXPECT_FALSE(writer.mirror_device_grid_region(producer_stream.get(), 0, 2, 0, nof_subc));
+  EXPECT_TRUE(writer.cancel_device_grid_mapping());
+  ASSERT_TRUE(produce_symbols(writer, producer_stream.get(), payload, nof_ports, nof_symbols, nof_subc, {2}, false));
+
+  cuda_callback_gate gate;
+  ASSERT_TRUE(start_blocked_device_reader(reader, consumer_stream.get(), gate));
+
+  std::thread releaser([&gate]() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(3));
+    gate.released.store(true, std::memory_order_release);
+  });
+  const auto  start = std::chrono::steady_clock::now();
+  (void)reader.get_view(0, 2);
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+  releaser.join();
+  EXPECT_GE(elapsed, std::chrono::milliseconds(2));
+  ASSERT_EQ(cudaStreamSynchronize(consumer_stream.get()), cudaSuccess);
+}
+
+// A producer that does not mirror its writes makes host reads fall back to the live grid, with the right data.
+TEST(cuda_visible_phy_support_test, uplink_host_read_falls_back_to_live_grid_after_unmirrored_producer)
+{
+  testing::AssertionResult cuda_available = cuda_managed_memory_available();
+  if (!cuda_available) {
+    GTEST_SKIP() << cuda_available.message();
+  }
+  scoped_env_var grid_mode("OCUDU_UL_CUDA_VISIBLE_GRID");
+  ASSERT_TRUE(grid_mode.set("managed"));
+  scoped_env_var mirror_mode("OCUDU_CUDA_VISIBLE_GRID_HOST_MIRROR");
+  ASSERT_TRUE(mirror_mode.unset());
+
+  static constexpr unsigned      nof_ports = 1, nof_symbols = 14, nof_subc = 48;
+  std::unique_ptr<resource_grid> grid = create_uplink_managed_grid(nof_ports, nof_symbols, nof_subc);
+  ASSERT_NE(grid, nullptr);
+  resource_grid_writer&       writer = grid->get_writer();
+  const resource_grid_reader& reader = grid->get_reader();
+
+  cuda_stream_guard stream;
+  ASSERT_TRUE(stream.create());
+  std::vector<cbf16_t> payload = generate_grid_payload(nof_ports, nof_symbols, nof_subc);
+  // Symbol 4 mirrored, symbol 5 written by a producer that does not mirror.
+  ASSERT_TRUE(produce_symbols(writer, stream.get(), payload, nof_ports, nof_symbols, nof_subc, {4}, true));
+  ASSERT_TRUE(produce_symbols(writer, stream.get(), payload, nof_ports, nof_symbols, nof_subc, {5}, false));
+
+  expect_equal(reader.get_view(0, 4), span<const cbf16_t>(payload.data() + 4 * nof_subc, nof_subc));
+  expect_equal(reader.get_view(0, 5), span<const cbf16_t>(payload.data() + 5 * nof_subc, nof_subc));
+}
+
+// A host write makes the mirror stale: reads then see the host-written data.
+TEST(cuda_visible_phy_support_test, uplink_host_write_invalidates_mirror)
+{
+  testing::AssertionResult cuda_available = cuda_managed_memory_available();
+  if (!cuda_available) {
+    GTEST_SKIP() << cuda_available.message();
+  }
+  scoped_env_var grid_mode("OCUDU_UL_CUDA_VISIBLE_GRID");
+  ASSERT_TRUE(grid_mode.set("managed"));
+  scoped_env_var mirror_mode("OCUDU_CUDA_VISIBLE_GRID_HOST_MIRROR");
+  ASSERT_TRUE(mirror_mode.unset());
+
+  static constexpr unsigned      nof_ports = 1, nof_symbols = 14, nof_subc = 48;
+  std::unique_ptr<resource_grid> grid = create_uplink_managed_grid(nof_ports, nof_symbols, nof_subc);
+  ASSERT_NE(grid, nullptr);
+  resource_grid_writer&       writer = grid->get_writer();
+  const resource_grid_reader& reader = grid->get_reader();
+
+  cuda_stream_guard stream;
+  ASSERT_TRUE(stream.create());
+  std::vector<cbf16_t> payload = generate_grid_payload(nof_ports, nof_symbols, nof_subc);
+  ASSERT_TRUE(produce_symbols(writer, stream.get(), payload, nof_ports, nof_symbols, nof_subc, {6}, true));
+  expect_equal(reader.get_view(0, 6), span<const cbf16_t>(payload.data() + 6 * nof_subc, nof_subc));
+
+  std::vector<cbf16_t> host_written = generate_symbol_payload(nof_subc, 0.011F);
+  writer.put(0, 6, 0, 1, span<const cbf16_t>(host_written));
+  expect_equal(reader.get_view(0, 6), host_written);
+}
+
+// A clear zeroes the grid and the mirror and makes the mirror usable again for later producers.
+TEST(cuda_visible_phy_support_test, uplink_clear_restores_mirror)
+{
+  testing::AssertionResult cuda_available = cuda_managed_memory_available();
+  if (!cuda_available) {
+    GTEST_SKIP() << cuda_available.message();
+  }
+  scoped_env_var grid_mode("OCUDU_UL_CUDA_VISIBLE_GRID");
+  ASSERT_TRUE(grid_mode.set("managed"));
+  scoped_env_var mirror_mode("OCUDU_CUDA_VISIBLE_GRID_HOST_MIRROR");
+  ASSERT_TRUE(mirror_mode.unset());
+
+  static constexpr unsigned      nof_ports = 1, nof_symbols = 14, nof_subc = 48;
+  std::unique_ptr<resource_grid> grid = create_uplink_managed_grid(nof_ports, nof_symbols, nof_subc);
+  ASSERT_NE(grid, nullptr);
+  resource_grid_writer&       writer = grid->get_writer();
+  const resource_grid_reader& reader = grid->get_reader();
+
+  cuda_stream_guard producer_stream, consumer_stream;
+  ASSERT_TRUE(producer_stream.create());
+  ASSERT_TRUE(consumer_stream.create());
+  std::vector<cbf16_t> payload = generate_grid_payload(nof_ports, nof_symbols, nof_subc);
+
+  // Make the mirror stale, then clear.
+  writer.put(0, 1, 0, 1, span<const cbf16_t>(generate_symbol_payload(nof_subc, 0.02F)));
+  grid->set_all_zero();
+  for (cbf16_t value : reader.get_view(0, 1)) {
+    EXPECT_EQ(value, cbf16_t());
+  }
+
+  ASSERT_TRUE(produce_symbols(writer, producer_stream.get(), payload, nof_ports, nof_symbols, nof_subc, {9}, true));
+  cuda_callback_gate gate;
+  ASSERT_TRUE(start_blocked_device_reader(reader, consumer_stream.get(), gate));
+  const auto          start   = std::chrono::steady_clock::now();
+  span<const cbf16_t> view    = reader.get_view(0, 9);
+  const auto          elapsed = std::chrono::steady_clock::now() - start;
+  expect_equal(view, span<const cbf16_t>(payload.data() + 9 * nof_subc, nof_subc));
+  EXPECT_LT(elapsed, std::chrono::milliseconds(2));
+  for (cbf16_t value : reader.get_view(0, 1)) {
+    EXPECT_EQ(value, cbf16_t());
+  }
+  gate.released.store(true, std::memory_order_release);
+  ASSERT_EQ(cudaStreamSynchronize(consumer_stream.get()), cudaSuccess);
+}
+
+// Regions mirrored by successive mappings (one per O-RAN U-plane message) are all visible to host readers, and a
+// region only partially covering a symbol leaves the rest of the symbol as cleared.
+TEST(cuda_visible_phy_support_test, uplink_mirror_accumulates_regions_across_mappings)
+{
+  testing::AssertionResult cuda_available = cuda_managed_memory_available();
+  if (!cuda_available) {
+    GTEST_SKIP() << cuda_available.message();
+  }
+  scoped_env_var grid_mode("OCUDU_UL_CUDA_VISIBLE_GRID");
+  ASSERT_TRUE(grid_mode.set("managed"));
+  scoped_env_var mirror_mode("OCUDU_CUDA_VISIBLE_GRID_HOST_MIRROR");
+  ASSERT_TRUE(mirror_mode.unset());
+
+  static constexpr unsigned      nof_ports = 2, nof_symbols = 14, nof_subc = 48;
+  std::unique_ptr<resource_grid> grid = create_uplink_managed_grid(nof_ports, nof_symbols, nof_subc);
+  ASSERT_NE(grid, nullptr);
+  resource_grid_writer&       writer = grid->get_writer();
+  const resource_grid_reader& reader = grid->get_reader();
+  grid->set_all_zero();
+
+  cuda_stream_guard stream;
+  ASSERT_TRUE(stream.create());
+  std::vector<cbf16_t> payload = generate_grid_payload(nof_ports, nof_symbols, nof_subc);
+  for (unsigned symbol = 0; symbol != nof_symbols; ++symbol) {
+    ASSERT_TRUE(produce_symbols(writer, stream.get(), payload, nof_ports, nof_symbols, nof_subc, {symbol}, true));
+  }
+  // A partial region (second half of symbol 0, port 0) written by one more mapping.
+  std::vector<cbf16_t> update = payload;
+  for (unsigned k = nof_subc / 2; k != nof_subc; ++k) {
+    update[k] = cbf16_t(0.5F, -0.25F);
+  }
+  ASSERT_TRUE(writer.prepare_device_grid_mapping(stream.get()));
+  ASSERT_EQ(cudaMemcpyAsync(static_cast<cbf16_t*>(writer.get_device_grid_bf16()) + nof_subc / 2,
+                            update.data() + nof_subc / 2,
+                            (nof_subc / 2) * sizeof(cbf16_t),
+                            cudaMemcpyHostToDevice,
+                            stream.get()),
+            cudaSuccess);
+  ASSERT_TRUE(writer.mirror_device_grid_region(stream.get(), 0, 0, nof_subc / 2, nof_subc / 2));
+  ASSERT_TRUE(writer.on_device_grid_mapping_enqueued(stream.get()));
+
+  for (unsigned port = 0; port != nof_ports; ++port) {
+    for (unsigned symbol = 0; symbol != nof_symbols; ++symbol) {
+      const size_t offset = (static_cast<size_t>(port) * nof_symbols + symbol) * nof_subc;
+      expect_equal(reader.get_view(port, symbol), span<const cbf16_t>(update.data() + offset, nof_subc));
+    }
+  }
+  // Out-of-range regions are rejected and do not affect the mirror.
+  ASSERT_TRUE(writer.prepare_device_grid_mapping(stream.get()));
+  EXPECT_FALSE(writer.mirror_device_grid_region(stream.get(), nof_ports, 0, 0, nof_subc));
+  EXPECT_FALSE(writer.mirror_device_grid_region(stream.get(), 0, nof_symbols, 0, nof_subc));
+  EXPECT_FALSE(writer.mirror_device_grid_region(stream.get(), 0, 0, nof_subc / 2, nof_subc));
+  EXPECT_TRUE(writer.cancel_device_grid_mapping());
 }

@@ -4,6 +4,15 @@
 # Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 
+# Owned-snapshot copy kernel of the CUDA-visible resource grids (resource_grid_cuda_visible_impl.h): host reads never
+# touch the live managed memory. The grid is header-only, so every user of it links this kernel, with or without the
+# upper PHY.
+if(CUDA_ACCEL_FOUND)
+    add_library(ocudu_cuda_grid_snapshot STATIC owned_grid_snapshot_copy.cu)
+    target_link_libraries(ocudu_cuda_grid_snapshot PRIVATE CUDA::cudart)
+    add_to_exported_libs(ocudu_cuda_grid_snapshot)
+endif()
+
 add_subdirectory(channel_coding)
 add_subdirectory(channel_modulation)
 add_subdirectory(channel_processors)
@@ -57,8 +66,7 @@ target_link_libraries(ocudu_upper_phy
         $<$<BOOL:${CUDA_ACCEL_FOUND}>:CUDA::cudart>)
 if(CUDA_ACCEL_FOUND)
     target_compile_definitions(ocudu_upper_phy PRIVATE ENABLE_CUDA)
-    # Owned-snapshot copy kernel for CUDA-visible grids (host reads never touch the live managed VA).
-    target_sources(ocudu_upper_phy PRIVATE owned_grid_snapshot_copy.cu)
+    target_link_libraries(ocudu_upper_phy ocudu_cuda_grid_snapshot)
 endif()
 
 add_library(log_likelihood_ratio log_likelihood_ratio.cpp)

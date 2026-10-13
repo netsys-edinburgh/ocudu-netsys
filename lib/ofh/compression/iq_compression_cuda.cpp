@@ -1046,6 +1046,12 @@ iq_decompression_result iq_compression_cuda::decompress_to_resource_grid(resourc
                                           : iq_decompression_result::acceleration_failure;
     }
 
+    // Keep the grid's host mirror (if it has one) up to date with the REs just written, on the same stream, so that
+    // host consumers of this grid (PUCCH) read the mirror instead of synchronising with the device grid. A grid
+    // without a mirror returns false; its host reads then synchronise with the device grid as before.
+    (void)grid.mirror_device_grid_region(
+        stream, port, symbol, start_prb * NOF_SUBCARRIERS_PER_RB, nof_prbs * NOF_SUBCARRIERS_PER_RB);
+
     if (!grid.on_device_grid_mapping_enqueued(stream)) {
       bool synchronized = ocudu_ofh_compression_synchronize(handle) != 0;
       (void)grid.cancel_device_grid_mapping();

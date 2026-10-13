@@ -33,7 +33,7 @@ set(PUSCH_PROCESSOR_LIBRARIES ocudu_phy_support
         ocuduvec)
 
 if (CUDA_ACCEL_FOUND)
-    list(APPEND PUSCH_PROCESSOR_LIBRARIES ocudu_ldpc_cuda)
+    list(APPEND PUSCH_PROCESSOR_LIBRARIES ocudu_ldpc_cuda ocudu_cuda_grid_snapshot)
     target_compile_definitions(pusch_processor_benchmark PRIVATE ENABLE_CUDA)
 endif ()
 

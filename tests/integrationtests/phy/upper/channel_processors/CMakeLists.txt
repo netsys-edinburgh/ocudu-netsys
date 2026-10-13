@@ -109,7 +109,7 @@ if(CUDA_ACCEL_FOUND)
   target_include_directories(pdsch_gpu_latency_benchmark PRIVATE
           ${CMAKE_SOURCE_DIR}/lib/phy/upper
           ${CMAKE_SOURCE_DIR}/lib/phy/upper/channel_coding/ldpc)
-  target_link_libraries(pdsch_gpu_latency_benchmark ocudu_ldpc_cuda CUDA::cudart)
+  target_link_libraries(pdsch_gpu_latency_benchmark ocudu_ldpc_cuda ocudu_cuda_grid_snapshot CUDA::cudart)
   target_compile_definitions(pdsch_gpu_latency_benchmark PRIVATE ENABLE_CUDA)
 endif()
 

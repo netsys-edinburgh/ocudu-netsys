@@ -11,6 +11,7 @@
 #include "../support/resource_grid_allocation_info.h"
 #include "../support/resource_grid_reader_impl.h"
 #include "../support/resource_grid_writer_impl.h"
+#include "owned_grid_snapshot_copy.h"
 #include "phy_acceleration_runtime_options.h"
 #include "resource_grid_pinned_impl.h"
 #include "ocudu/adt/tensor.h"
@@ -77,7 +78,8 @@ public:
                              unsigned nof_subc_,
                              int      nvcuda_device_id                  = 0,
                              bool     enable_concurrent_downlink_writes = false,
-                             bool     uplink_no_host_migrate_           = false) :
+                             bool     uplink_no_host_migrate_           = false,
+                             bool     enable_host_mirror                = false) :
     alloc_mask(nof_ports_, nof_symbols_, divide_ceil(nof_subc_, NOF_SUBCARRIERS_PER_RB)),
     uplink_no_host_migrate(uplink_no_host_migrate_),
     device_id(nvcuda_device_id),
@@ -90,7 +92,10 @@ public:
 
     const cuda_visible_managed_access_policy access =
         query_cuda_visible_managed_access_policy(device_id, enable_concurrent_downlink_writes);
-    host_reads_device_memory_directly = access.host_reads_device_resident_directly;
+    // OCUDU_CUDA_VISIBLE_GRID_HOST_DIRECT=0 forces the policy of devices without direct host access to device-resident
+    // managed memory (GB10, Jetson, PCIe GPUs) on a coherent GH200-class part, to reproduce and test that path there.
+    host_reads_device_memory_directly = phy_acceleration_env_flag_enabled("OCUDU_CUDA_VISIBLE_GRID_HOST_DIRECT",
+                                                                          access.host_reads_device_resident_directly);
     prefetch_enabled =
         phy_acceleration_env_flag_enabled("OCUDU_CUDA_VISIBLE_GRID_PREFETCH", access.prefetch_by_default);
     // Concurrent host/device writes to disjoint REs are only safe when prefetch
@@ -179,6 +184,12 @@ public:
       }
     }
 
+    // Host mirror (see mirror_device_region()): device producers mirror the REs they write into pinned host memory,
+    // so that host readers never wait for device consumers nor touch the managed allocation.
+    if (enable_host_mirror && phy_acceleration_env_flag_enabled("OCUDU_CUDA_VISIBLE_GRID_HOST_MIRROR", true)) {
+      allocate_host_mirror();
+    }
+
     // Set all the resource elements to zero. This cannot defer to set_all_zero(), because the allocation mask starts
     // out empty and that would skip the clear, leaving the uninitialised cudaMallocManaged() contents in the grid.
     for (unsigned port = 0; port != nof_ports; ++port) {
@@ -190,6 +201,16 @@ public:
   {
     if (maintenance_stream != nullptr) {
       cudaStreamSynchronize(static_cast<cudaStream_t>(maintenance_stream));
+    }
+    if (mirror_host != nullptr) {
+      // Producers record their events after the mirror copy; wait them out before freeing the destination.
+      for (void* event : grid_ready_events) {
+        (void)cudaEventSynchronize(static_cast<cudaEvent_t>(event));
+      }
+      mirror_reader.reset();
+      mirror_buffer.reset();
+      cudaFreeHost(mirror_host);
+      mirror_host = nullptr;
     }
     for (void* event : grid_ready_events) {
       cudaEventDestroy(static_cast<cudaEvent_t>(event));
@@ -254,6 +275,7 @@ public:
       alloc_mask.reset_all();
       return;
     }
+    invalidate_host_mirror();
 
     // GB10: any host touch of the live UL VA can migrate PTEs home; the
     // next fade/PUSCH load Xid 31's FAULT_PTE @ 0x140000. Do not depend
@@ -372,8 +394,13 @@ private:
                    unsigned                                   k_init,
                    const bounded_bitset<MAX_NOF_SUBCARRIERS>& mask) const override
     {
-      if (parent.prepare_host_access()) {
-        return resource_grid_reader_impl::get(symbols, port, l, k_init, mask);
+      switch (parent.prepare_host_read()) {
+        case host_read_source::mirror:
+          return parent.mirror_reader->get(symbols, port, l, k_init, mask);
+        case host_read_source::live:
+          return resource_grid_reader_impl::get(symbols, port, l, k_init, mask);
+        case host_read_source::failed:
+          break;
       }
       span<const cbf16_t> symb = parent.host_snapshot_symbol(port, l);
       if (symb.empty() || k_init + mask.size() > symb.size()) {
@@ -399,8 +426,13 @@ private:
                       unsigned                                   k_init,
                       const bounded_bitset<MAX_NOF_SUBCARRIERS>& mask) const override
     {
-      if (parent.prepare_host_access()) {
-        return resource_grid_reader_impl::get(symbols, port, l, k_init, mask);
+      switch (parent.prepare_host_read()) {
+        case host_read_source::mirror:
+          return parent.mirror_reader->get(symbols, port, l, k_init, mask);
+        case host_read_source::live:
+          return resource_grid_reader_impl::get(symbols, port, l, k_init, mask);
+        case host_read_source::failed:
+          break;
       }
       span<const cbf16_t> symb = parent.host_snapshot_symbol(port, l);
       if (symb.empty() || k_init + mask.size() > symb.size()) {
@@ -422,9 +454,15 @@ private:
 
     void get(span<cf_t> symbols, unsigned port, unsigned l, unsigned k_init, unsigned stride = 1) const override
     {
-      if (parent.prepare_host_access()) {
-        resource_grid_reader_impl::get(symbols, port, l, k_init, stride);
-        return;
+      switch (parent.prepare_host_read()) {
+        case host_read_source::mirror:
+          parent.mirror_reader->get(symbols, port, l, k_init, stride);
+          return;
+        case host_read_source::live:
+          resource_grid_reader_impl::get(symbols, port, l, k_init, stride);
+          return;
+        case host_read_source::failed:
+          break;
       }
       span<const cbf16_t> rg_symbol = parent.host_snapshot_symbol(port, l);
       if (rg_symbol.empty() || stride == 0 ||
@@ -445,9 +483,15 @@ private:
 
     void get(span<cbf16_t> symbols, unsigned port, unsigned l, unsigned k_init) const override
     {
-      if (parent.prepare_host_access()) {
-        resource_grid_reader_impl::get(symbols, port, l, k_init);
-        return;
+      switch (parent.prepare_host_read()) {
+        case host_read_source::mirror:
+          parent.mirror_reader->get(symbols, port, l, k_init);
+          return;
+        case host_read_source::live:
+          resource_grid_reader_impl::get(symbols, port, l, k_init);
+          return;
+        case host_read_source::failed:
+          break;
       }
       span<const cbf16_t> rg_symbol = parent.host_snapshot_symbol(port, l);
       if (rg_symbol.empty() || k_init + symbols.size() > rg_symbol.size()) {
@@ -459,8 +503,13 @@ private:
 
     span<const cbf16_t> get_view(unsigned port, unsigned l) const override
     {
-      if (parent.prepare_host_access()) {
-        return resource_grid_reader_impl::get_view(port, l);
+      switch (parent.prepare_host_read()) {
+        case host_read_source::mirror:
+          return parent.mirror_reader->get_view(port, l);
+        case host_read_source::live:
+          return resource_grid_reader_impl::get_view(port, l);
+        case host_read_source::failed:
+          break;
       }
       span<const cbf16_t> shadow = parent.host_snapshot_symbol(port, l);
       if (shadow.empty()) {
@@ -474,8 +523,13 @@ private:
 
     span<const cbf16_t> get_contiguous_view() const override
     {
-      if (parent.prepare_host_access()) {
-        return resource_grid_reader_impl::get_contiguous_view();
+      switch (parent.prepare_host_read()) {
+        case host_read_source::mirror:
+          return parent.mirror_reader->get_contiguous_view();
+        case host_read_source::live:
+          return resource_grid_reader_impl::get_contiguous_view();
+        case host_read_source::failed:
+          break;
       }
       span<const cbf16_t> shadow = parent.host_snapshot_all();
       if (shadow.empty()) {
@@ -590,6 +644,15 @@ private:
       return true;
     }
 
+    bool mirror_device_grid_region(void*    stream,
+                                   unsigned port,
+                                   unsigned symbol,
+                                   unsigned first_subc,
+                                   unsigned nof_subc_) override
+    {
+      return parent.mirror_device_region(stream, port, symbol, first_subc, nof_subc_);
+    }
+
     bool supports_owned_device_grid_snapshot() const override { return parent.owned_snapshot_words != 0; }
 
     bool publish_owned_device_grid_snapshot(void* stream) override
@@ -629,6 +692,15 @@ private:
     grid_ready_recorded             = !pending_grid_ready_events.empty();
     device_mapping_active           = false;
     device_mapping_replaces_pending = false;
+    // The producer's stream waited for every pending event (prepare_device_mapping), so its event orders after all
+    // earlier producers: host reads of the mirror only need this one. A producer that wrote REs without mirroring
+    // them leaves the mirror stale until the next clear.
+    if (!mapping_mirrored) {
+      mirror_coherent = false;
+    }
+    mapping_mirrored       = false;
+    last_producer_event    = event;
+    producer_event_pending = true;
     // A GPU producer just ran. Live-VA device reads are legal until a host
     // consumer pulls the pages home (see pull_pages_home).
     pages_device_resident = true;
@@ -701,16 +773,30 @@ private:
 
   bool prepare_device_mapping(void* stream)
   {
+    const auto start =
+        grid_stats_enabled() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     std::unique_lock<std::mutex> lock(grid_ready_mutex);
+    if (grid_stats_enabled()) {
+      account_producer_wait(std::chrono::steady_clock::now() - start);
+    }
     if (managed_data == nullptr) {
       return false;
     }
     if (!wait_for_active_device_mapping_locked(lock) || !wait_for_device_mapping_locked(stream)) {
       return false;
     }
-    const managed_prefetch_status status = prefetch_managed_memory(device_location(), stream);
-    if (status == managed_prefetch_status::failed) {
-      return false;
+    // Prefetch to the device only when a host access may have migrated the pages since the last GPU access
+    // (pages_device_resident is cleared only by pull_pages_home()). Otherwise the pages are where the last GPU
+    // producer or consumer left them, and a whole-grid cudaMemPrefetchAsync() per mapping (one per O-RAN U-plane
+    // message) only costs driver time on the producer thread, under this lock, and work ahead of the producer kernel.
+    if (!pages_device_resident) {
+      const managed_prefetch_status status = prefetch_managed_memory(device_location(), stream);
+      if (status == managed_prefetch_status::failed) {
+        return false;
+      }
+      if (grid_stats_enabled() && (status == managed_prefetch_status::done)) {
+        host_read_stats().device_prefetches.fetch_add(1, std::memory_order_relaxed);
+      }
     }
     // Do not treat prefetch-to-device success as residency on GB10: it is a
     // no-op there. Residency is set when a GPU kernel is actually enqueued
@@ -720,6 +806,7 @@ private:
     }
     device_mapping_active           = true;
     device_mapping_replaces_pending = true;
+    mapping_mirrored                = false;
     return true;
   }
 
@@ -728,6 +815,11 @@ private:
     std::lock_guard<std::mutex> lock(grid_ready_mutex);
     device_mapping_active           = false;
     device_mapping_replaces_pending = false;
+    if (mapping_mirrored) {
+      // Part of the cancelled mapping may have reached the mirror.
+      mirror_coherent  = false;
+      mapping_mirrored = false;
+    }
     return true;
   }
 
@@ -768,6 +860,7 @@ private:
 
   bool prepare_host_write() const
   {
+    invalidate_host_mirror();
     // A downlink scheduler maps reference signals and PDSCH data to disjoint resource elements. On coherent
     // unified-memory systems, avoid making the next PDU's host-generated reference signal wait for the previous
     // PDSCH kernel. Grid clears complete before set_all_zero() returns and readers still wait for every producer.
@@ -1124,11 +1217,19 @@ private:
       return false;
     }
     if (cudaMemsetAsync(managed_data, 0, managed_bytes, stream) != cudaSuccess) {
+      mirror_coherent = false;
       return false;
     }
+    const bool mirror_cleared =
+        (mirror_dev != nullptr) && (cudaMemsetAsync(mirror_dev, 0, managed_bytes, stream) == cudaSuccess);
     if (cudaEventRecord(static_cast<cudaEvent_t>(event), stream) != cudaSuccess) {
+      mirror_coherent = false;
       return false;
     }
+    mirror_coherent        = mirror_cleared;
+    mapping_mirrored       = false;
+    last_producer_event    = event;
+    producer_event_pending = true;
     if (concurrent_downlink_writes &&
         (cuda_event_synchronize_yielding(static_cast<cudaEvent_t>(event)) != cudaSuccess)) {
       return false;
@@ -1144,6 +1245,262 @@ private:
     pages_device_resident           = true;
     return true;
   }
+
+  // ---------------------------------------------------------------------------------------------------------------
+  // Host mirror.
+  //
+  // Why: a host read of the live grid has to order after *every* pending grid event, including the events that GPU
+  // consumers (PUSCH, SRS) record after reading the grid, and on devices without direct host access to
+  // device-resident managed memory it also migrates the pages home (and the next GPU producer migrates them back).
+  // A host consumer such as PUCCH therefore waited for the slot's GPU PUSCH work and thrashed the pages every slot.
+  // Reads never need to order after other reads: a host read only needs the producers that wrote the REs.
+  //
+  // How: device producers mirror the REs they write into a pinned, device-mapped host buffer on their own stream
+  // (mirror_device_region(), before on_device_grid_mapping_enqueued()). The producer event recorded afterwards
+  // therefore also covers the mirror. While the mirror is coherent, host reads wait only for the last producer event
+  // and read the mirror; they never wait for device consumers and never touch the managed allocation, which is what
+  // GB10, Jetson and PCIe-attached GPUs need and is also cheaper on coherent GH200-class parts.
+  //
+  // Invariants (all fields guarded by grid_ready_mutex):
+  //  - mirror_coherent: every RE written since the last clear_on_device() reached the mirror in the same order as the
+  //    device grid. Cleared by host writes, by mappings that did not mirror their writes, by cancelled mirrored
+  //    mappings and by a failed or host-side clear; set again only by a successful clear_on_device(), which zeroes
+  //    the device grid and the mirror on the same stream.
+  //  - last_producer_event: the event of the latest producer (mapping or clear). Each producer's stream waits for all
+  //    pending grid events before writing (prepare_device_mapping), so this event orders after every earlier write.
+  // Non-mirrored producers and host writers stay correct: reads then take the live-grid path as before.
+  // ---------------------------------------------------------------------------------------------------------------
+
+  enum class host_read_source { mirror, live, failed };
+
+  void allocate_host_mirror()
+  {
+#ifdef ENABLE_CUDA
+    void* host   = nullptr;
+    void* device = nullptr;
+    if (cudaHostAlloc(&host, managed_bytes, cudaHostAllocMapped) != cudaSuccess) {
+      (void)cudaGetLastError();
+      return;
+    }
+    if (cudaHostGetDevicePointer(&device, host, 0) != cudaSuccess) {
+      (void)cudaGetLastError();
+      cudaFreeHost(host);
+      return;
+    }
+    std::memset(host, 0, managed_bytes);
+    mirror_host   = host;
+    mirror_dev    = device;
+    mirror_buffer = std::make_unique<managed_tensor>(
+        static_cast<cbf16_t*>(mirror_host), managed_tensor::dimensions_size_type{nof_subc, nof_symbols, nof_ports});
+    mirror_reader = std::make_unique<resource_grid_reader_impl>(*mirror_buffer, alloc_mask);
+    // Both the managed grid (zeroed by the constructor) and the mirror are all zeros.
+    mirror_coherent = true;
+#endif
+  }
+
+  void invalidate_host_mirror() const
+  {
+    if (mirror_reader == nullptr) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(grid_ready_mutex);
+    mirror_coherent = false;
+  }
+
+  /// Mirrors a region of the current device mapping into the host mirror on the producer stream.
+  bool mirror_device_region(void* stream, unsigned port, unsigned symbol, unsigned first_subc, unsigned nof_re)
+  {
+#ifdef ENABLE_CUDA
+    std::lock_guard<std::mutex> lock(grid_ready_mutex);
+    if ((mirror_dev == nullptr) || (stream == nullptr) || !device_mapping_active || (port >= nof_ports) ||
+        (symbol >= nof_symbols) || (nof_re == 0) || (first_subc >= nof_subc) || (nof_re > nof_subc - first_subc)) {
+      return false;
+    }
+    const size_t offset = (static_cast<size_t>(port) * nof_symbols + symbol) * nof_subc + first_subc;
+    // One cbf16 RE is one 32-bit word. The copy reads REs this stream has just written (device-resident pages, the
+    // same access as any GPU consumer) and writes the device-mapped pinned mirror.
+    if (!detail::launch_owned_grid_snapshot_copy(static_cast<const uint32_t*>(managed_data) + offset,
+                                                 static_cast<uint32_t*>(mirror_dev) + offset,
+                                                 nof_re,
+                                                 stream)) {
+      return false;
+    }
+    mapping_mirrored = true;
+    if (grid_stats_enabled()) {
+      host_read_stats().mirrored_regions.fetch_add(1, std::memory_order_relaxed);
+    }
+    return true;
+#else
+    (void)stream;
+    (void)port;
+    (void)symbol;
+    (void)first_subc;
+    (void)nof_re;
+    return false;
+#endif
+  }
+
+  /// Prepares a host read: from the mirror when it is coherent, else from the synchronised live grid.
+  host_read_source prepare_host_read() const
+  {
+    const auto start =
+        grid_stats_enabled() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    const host_read_source source = (mirror_reader != nullptr)
+                                        ? prepare_host_read_from_mirror_or_live()
+                                        : (prepare_host_access() ? host_read_source::live : host_read_source::failed);
+    if (grid_stats_enabled()) {
+      account_host_read(source, std::chrono::steady_clock::now() - start);
+    }
+    return source;
+  }
+
+  host_read_source prepare_host_read_from_mirror_or_live() const
+  {
+    std::unique_lock<std::mutex> lock(grid_ready_mutex);
+    if (mirror_coherent) {
+      // A producer between prepare and record has not recorded its event yet; it is short (one kernel launch).
+      if (!wait_for_active_device_mapping_locked(lock)) {
+        return host_read_source::failed;
+      }
+      while (mirror_coherent && producer_event_pending) {
+        // Wait without the lock so that producers and device consumers are not blocked meanwhile. An event that
+        // gets re-recorded in the meantime only belongs to later work in the same producer chain.
+        void* event = last_producer_event;
+        lock.unlock();
+        const cudaError_t status = cuda_event_synchronize_yielding(static_cast<cudaEvent_t>(event));
+        lock.lock();
+        if (status == cudaErrorTimeout) {
+          host_access_refusal = "a grid producer had not finished after the GPU wait timeout";
+          return host_read_source::failed;
+        }
+        if (status != cudaSuccess) {
+          record_host_access_error(status, "wait for the grid producers before a host-mirror read");
+          return host_read_source::failed;
+        }
+        if (last_producer_event == event) {
+          producer_event_pending = false;
+        }
+      }
+      if (mirror_coherent) {
+        return host_read_source::mirror;
+      }
+    }
+    return pull_pages_home_locked(lock) ? host_read_source::live : host_read_source::failed;
+  }
+
+  // Optional diagnostics (OCUDU_CUDA_VISIBLE_GRID_STATS=1): host-read source and wait time, printed once a second.
+  struct grid_host_read_stats {
+    std::atomic<uint64_t> mirror{0};
+    std::atomic<uint64_t> live{0};
+    std::atomic<uint64_t> failed{0};
+    std::atomic<uint64_t> wait_ns{0};
+    std::atomic<uint64_t> max_wait_ns{0};
+    std::atomic<uint64_t> over_100us{0};
+    std::atomic<uint64_t> over_1ms{0};
+    std::atomic<int64_t>  last_report_ns{0};
+    // Producer side: time device producers (e.g. O-RAN U-plane decompression) wait for the grid lock before mapping.
+    std::atomic<uint64_t> producer_prepares{0};
+    std::atomic<uint64_t> producer_wait_ns{0};
+    std::atomic<uint64_t> producer_max_wait_ns{0};
+    std::atomic<uint64_t> producer_over_100us{0};
+    std::atomic<uint64_t> mirrored_regions{0};
+    std::atomic<uint64_t> device_prefetches{0};
+  };
+
+  static void account_producer_wait(std::chrono::steady_clock::duration wait)
+  {
+    grid_host_read_stats& st      = host_read_stats();
+    const uint64_t        wait_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(wait).count();
+    st.producer_prepares.fetch_add(1, std::memory_order_relaxed);
+    st.producer_wait_ns.fetch_add(wait_ns, std::memory_order_relaxed);
+    uint64_t prev_max = st.producer_max_wait_ns.load(std::memory_order_relaxed);
+    while (wait_ns > prev_max &&
+           !st.producer_max_wait_ns.compare_exchange_weak(prev_max, wait_ns, std::memory_order_relaxed)) {
+    }
+    if (wait_ns > 100000) {
+      st.producer_over_100us.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
+  static bool grid_stats_enabled()
+  {
+    static const bool enabled = phy_acceleration_env_flag_enabled("OCUDU_CUDA_VISIBLE_GRID_STATS", false);
+    return enabled;
+  }
+
+  static grid_host_read_stats& host_read_stats()
+  {
+    static grid_host_read_stats stats;
+    return stats;
+  }
+
+  static void account_host_read(host_read_source source, std::chrono::steady_clock::duration wait)
+  {
+    grid_host_read_stats& st      = host_read_stats();
+    const uint64_t        wait_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(wait).count();
+    (source == host_read_source::mirror ? st.mirror
+     : source == host_read_source::live ? st.live
+                                        : st.failed)
+        .fetch_add(1, std::memory_order_relaxed);
+    st.wait_ns.fetch_add(wait_ns, std::memory_order_relaxed);
+    uint64_t prev_max = st.max_wait_ns.load(std::memory_order_relaxed);
+    while (wait_ns > prev_max && !st.max_wait_ns.compare_exchange_weak(prev_max, wait_ns, std::memory_order_relaxed)) {
+    }
+    if (wait_ns > 100000) {
+      st.over_100us.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (wait_ns > 1000000) {
+      st.over_1ms.fetch_add(1, std::memory_order_relaxed);
+    }
+    const int64_t now =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    int64_t last = st.last_report_ns.load(std::memory_order_relaxed);
+    if ((now - last < 1000000000) || !st.last_report_ns.compare_exchange_strong(last, now)) {
+      return;
+    }
+    const uint64_t mirror   = st.mirror.exchange(0, std::memory_order_relaxed);
+    const uint64_t live     = st.live.exchange(0, std::memory_order_relaxed);
+    const uint64_t failed   = st.failed.exchange(0, std::memory_order_relaxed);
+    const uint64_t total_ns = st.wait_ns.exchange(0, std::memory_order_relaxed);
+    const uint64_t max_ns   = st.max_wait_ns.exchange(0, std::memory_order_relaxed);
+    const uint64_t n100us   = st.over_100us.exchange(0, std::memory_order_relaxed);
+    const uint64_t n1ms     = st.over_1ms.exchange(0, std::memory_order_relaxed);
+    const uint64_t reads    = mirror + live + failed;
+    const uint64_t prepares = st.producer_prepares.exchange(0, std::memory_order_relaxed);
+    const uint64_t p_ns     = st.producer_wait_ns.exchange(0, std::memory_order_relaxed);
+    const uint64_t p_max_ns = st.producer_max_wait_ns.exchange(0, std::memory_order_relaxed);
+    const uint64_t p_100us  = st.producer_over_100us.exchange(0, std::memory_order_relaxed);
+    const uint64_t mirrored = st.mirrored_regions.exchange(0, std::memory_order_relaxed);
+    const uint64_t prefetch = st.device_prefetches.exchange(0, std::memory_order_relaxed);
+    fmt::print(stderr,
+               "OCUDU grid stats/s: host reads {} (mirror {}, live {}, failed {}) wait avg {:.1f} us max {:.1f} us, "
+               "{} > 100 us, {} > 1 ms; device mappings {} (mirrored regions {}, device prefetches {}) lock wait avg "
+               "{:.1f} us max {:.1f} us, {} > 100 us\n",
+               reads,
+               mirror,
+               live,
+               failed,
+               reads != 0 ? static_cast<double>(total_ns) / reads / 1000.0 : 0.0,
+               static_cast<double>(max_ns) / 1000.0,
+               n100us,
+               n1ms,
+               prepares,
+               mirrored,
+               prefetch,
+               prepares != 0 ? static_cast<double>(p_ns) / prepares / 1000.0 : 0.0,
+               static_cast<double>(p_max_ns) / 1000.0,
+               p_100us);
+  }
+
+  void*                                      mirror_host = nullptr;
+  void*                                      mirror_dev  = nullptr;
+  std::unique_ptr<managed_tensor>            mirror_buffer;
+  std::unique_ptr<resource_grid_reader_impl> mirror_reader;
+  mutable bool                               mirror_coherent        = false;
+  mutable bool                               mapping_mirrored       = false;
+  mutable void*                              last_producer_event    = nullptr;
+  mutable bool                               producer_event_pending = false;
 
   mutable cudaError_t           host_access_error{cudaSuccess};
   mutable const char*           host_access_stage{nullptr};
@@ -1686,8 +2043,15 @@ public:
       // UL fade is skipped (Xid 31 @ 0x140000). PUCCH must host-read the
       // live grid — do not set uplink_no_host_migrate or CSI is zeros and
       // UEs RLF.
-      auto grid = std::make_unique<cuda_visible_resource_grid>(
-          nof_ports, nof_symbols, nof_subc, device_id, grid_direction == direction::downlink, false);
+      // Uplink grids are written on the device (O-RAN decompression, OFDM demodulation) and read on both sides:
+      // they keep a host mirror for the host consumers (PUCCH, host PUSCH/SRS).
+      auto grid = std::make_unique<cuda_visible_resource_grid>(nof_ports,
+                                                               nof_symbols,
+                                                               nof_subc,
+                                                               device_id,
+                                                               grid_direction == direction::downlink,
+                                                               false,
+                                                               grid_direction == direction::uplink);
       if (grid->is_valid()) {
         return grid;
       }

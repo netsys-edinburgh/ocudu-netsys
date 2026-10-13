@@ -150,6 +150,26 @@ public:
   /// live CUDA-managed grid.
   virtual bool publish_owned_device_grid_snapshot(void*) { return false; }
 
+  /// \brief Mirrors a region written by the current device-grid mapping into the grid's host-readable copy.
+  ///
+  /// A grid whose device backing store is costly or unsafe for the CPU to read in place (CUDA managed memory on
+  /// integrated or PCIe-attached GPUs) can keep a pinned host mirror of it. A device producer calls this on its stream
+  /// after enqueuing the writes to subcarriers [first_subc, first_subc + nof_subc) of symbol \c symbol and port
+  /// \c port, and before on_device_grid_mapping_enqueued(). Host readers then only order after the producers and
+  /// read the mirror, instead of waiting for device consumers of the grid and synchronising its device copy.
+  ///
+  /// Producers that do not mirror their writes remain correct: host reads of a grid that a non-mirrored mapping wrote
+  /// fall back to synchronising the device grid.
+  /// \return True if the region was mirrored.
+  virtual bool mirror_device_grid_region(void* /*stream*/,
+                                         unsigned /*port*/,
+                                         unsigned /*symbol*/,
+                                         unsigned /*first_subc*/,
+                                         unsigned /*nof_subc*/)
+  {
+    return false;
+  }
+
   /// Cancels a device-grid mapping attempt before it records completion.
   virtual bool cancel_device_grid_mapping() { return true; }
 

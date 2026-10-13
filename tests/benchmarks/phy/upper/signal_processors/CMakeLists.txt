@@ -44,7 +44,7 @@ foreach(srs_gpu_benchmark
         target_include_directories(${srs_gpu_benchmark} PRIVATE
                 ${CMAKE_SOURCE_DIR}/lib/phy/upper
                 ${CMAKE_SOURCE_DIR}/lib/phy/upper/channel_coding/ldpc)
-        target_link_libraries(${srs_gpu_benchmark} ocudu_ldpc_cuda CUDA::cudart)
+        target_link_libraries(${srs_gpu_benchmark} ocudu_ldpc_cuda ocudu_cuda_grid_snapshot CUDA::cudart)
         target_compile_definitions(${srs_gpu_benchmark} PRIVATE ENABLE_CUDA)
     else()
         target_compile_options(${srs_gpu_benchmark} PRIVATE
