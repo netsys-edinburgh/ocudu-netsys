@@ -106,6 +106,8 @@ void ocudu::fill_cu_up_worker_manager_config(worker_manager_config& config, cons
   config.cu_up_cfg->strand_batch_size           = unit_cfg.exec_cfg.strand_batch_size;
   config.cu_up_cfg->executor_tracing_enable     = unit_cfg.trace_cfg.cu_up_enable;
   config.cu_up_cfg->skip_cu_up_executor         = unit_cfg.metrics.layers_cfg.skip_cu_up_executor;
+  config.cu_up_cfg->dedicated_pdcp_worker       = unit_cfg.exec_cfg.pdcp_worker_enable;
+  config.cu_up_cfg->pdcp_worker_affinity        = unit_cfg.exec_cfg.pdcp_worker_cpus;
 
   auto& pcap_cfg = config.pcap_cfg;
   if (unit_cfg.pcap_cfg.e1ap.enabled) {

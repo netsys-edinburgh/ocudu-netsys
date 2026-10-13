@@ -59,6 +59,16 @@ static bool validate_plmn_list(span<const std::string> plmns)
   return true;
 }
 
+static bool validate_cu_up_execution_appconfig(const cu_up_unit_execution_config& config)
+{
+  if (!config.pdcp_worker_enable and config.pdcp_worker_cpus.any()) {
+    fmt::println("PDCP worker CPU affinity is set, but the dedicated PDCP worker is disabled");
+    return false;
+  }
+
+  return true;
+}
+
 bool ocudu::validate_cu_up_unit_config(const cu_up_unit_config& config, bool tracing_enabled)
 {
   if (!validate_qos_appconfig(config.qos_cfg)) {
@@ -78,6 +88,10 @@ bool ocudu::validate_cu_up_unit_config(const cu_up_unit_config& config, bool tra
   }
 
   if (!validate_xnu_sockets_appconfig(config.xnu_cfg.sockets_cfg)) {
+    return false;
+  }
+
+  if (!validate_cu_up_execution_appconfig(config.exec_cfg)) {
     return false;
   }
 

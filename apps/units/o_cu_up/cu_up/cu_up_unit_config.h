@@ -7,6 +7,7 @@
 #include "apps/helpers/metrics/metrics_config.h"
 #include "apps/helpers/network/udp_appconfig.h"
 #include "apps/helpers/xnu/xnu_appconfig.h"
+#include "apps/services/worker_manager/os_sched_affinity_manager.h"
 #include "apps/units/o_cu_up/cu_up/cu_up_unit_pcap_config.h"
 #include "cu_up_unit_logger_config.h"
 #include "ocudu/ran/gnb_cu_up_id.h"
@@ -107,6 +108,11 @@ struct cu_up_unit_execution_config {
   uint32_t ul_ue_executor_queue_size   = 8192;
   uint32_t ctrl_ue_executor_queue_size = 8192;
   unsigned strand_batch_size           = 256;
+  /// \brief Whether the CU-UP strand (CU-UP control, UE UL and UE DL tasks, i.e. PDCP) runs on a dedicated worker,
+  /// named "pdcp", instead of on the main thread pool.
+  bool pdcp_worker_enable = false;
+  /// CPU affinity of the dedicated PDCP worker. An empty mask uses the main thread pool affinity.
+  os_sched_affinity_bitmask pdcp_worker_cpus;
 };
 
 /// CU-UP application unit configuration.

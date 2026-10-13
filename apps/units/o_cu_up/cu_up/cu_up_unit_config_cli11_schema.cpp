@@ -7,6 +7,7 @@
 #include "apps/helpers/metrics/metrics_config_cli11_schema.h"
 #include "apps/helpers/network/udp_cli11_schema.h"
 #include "apps/helpers/xnu/xnu_cli11_schema.h"
+#include "apps/services/worker_manager/cli11_cpu_affinities_parser_helper.h"
 #include "apps/units/o_cu_up/cu_up/cu_up_unit_config.h"
 #include "apps/units/o_cu_up/cu_up/cu_up_unit_pcap_config.h"
 #include "ocudu/ran/cu_up_constants.h"
@@ -71,6 +72,22 @@ static void configure_cli11_execution_args(CLI::App& app, cu_up_unit_execution_c
       ->capture_default_str();
   add_option(*queues_subcmd, "--cu_up_strand_batch_size", exec_cfg.strand_batch_size, "CU-UP's strands batch size")
       ->capture_default_str();
+
+  CLI::App* threads_subcmd = add_subcommand(app, "threads", "Threads configuration")->configurable();
+  CLI::App* pdcp_subcmd =
+      add_subcommand(*threads_subcmd, "pdcp", "Dedicated PDCP worker configuration")->configurable();
+  add_option(*pdcp_subcmd,
+             "--enable",
+             exec_cfg.pdcp_worker_enable,
+             "Run the CU-UP strand (PDCP) on a dedicated worker instead of on the main thread pool")
+      ->capture_default_str();
+
+  CLI::App* affinities_subcmd = add_subcommand(app, "affinities", "CPU affinities configuration")->configurable();
+  add_option_function<std::string>(
+      *affinities_subcmd,
+      "--pdcp_cpus",
+      [&exec_cfg](const std::string& value) { parse_affinity_mask(exec_cfg.pdcp_worker_cpus, value, "pdcp_cpus"); },
+      "CPU cores assigned to the dedicated PDCP worker");
 }
 
 static void configure_cli11_ngu_args(CLI::App& app, cu_up_unit_ngu_config& ngu_params)

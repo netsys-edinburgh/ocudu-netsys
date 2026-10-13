@@ -7,6 +7,7 @@
 #include "apps/helpers/network/udp_config_yaml_writer.h"
 #include "apps/helpers/xnu/xnu_config_yaml_writer.h"
 #include "cu_up_unit_config.h"
+#include "ocudu/adt/format.h"
 #include "ocudu/adt/span.h"
 
 using namespace ocudu;
@@ -153,6 +154,14 @@ static void fill_cu_up_qos_section(YAML::Node node, span<const cu_up_unit_qos_co
   }
 }
 
+static void fill_cu_up_expert_execution_section(YAML::Node node, const cu_up_unit_execution_config& config)
+{
+  node["threads"]["pdcp"]["enable"] = config.pdcp_worker_enable;
+  if (config.pdcp_worker_cpus.any()) {
+    node["affinities"]["pdcp_cpus"] = fmt::format("{:n}", span<const size_t>(config.pdcp_worker_cpus.get_cpu_ids()));
+  }
+}
+
 void ocudu::fill_cu_up_config_in_yaml_schema(YAML::Node& node, const cu_up_unit_config& config)
 {
   node["gnb_id"]            = config.gnb_id.id;
@@ -165,6 +174,7 @@ void ocudu::fill_cu_up_config_in_yaml_schema(YAML::Node& node, const cu_up_unit_
   fill_cu_up_trace_section(node["trace"], config.trace_cfg);
   fill_cu_up_log_section(node["log"], config.loggers);
   fill_cu_up_pcap_section(node["pcap"], config.pcap_cfg);
+  fill_cu_up_expert_execution_section(node["expert_execution"], config.exec_cfg);
 
   YAML::Node cu_up_node = node["cu_up"];
   fill_cu_up_section(cu_up_node, config);
