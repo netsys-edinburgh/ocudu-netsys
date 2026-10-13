@@ -125,7 +125,9 @@ private:
   unsigned              device_grid_nof_ports   = 0;
   unsigned              device_grid_nof_symbols = 0;
   unsigned              device_grid_nof_subc    = 0;
-  std::vector<uint16_t> host_grid_words;
+  /// Pinned staging copy of the device grid, one 32-bit word per RE.
+  uint32_t*             host_grid_words    = nullptr;
+  size_t                host_grid_capacity = 0;
   std::vector<void*>    grid_ready_events;
   std::vector<void*>    pending_grid_ready_events;
   mutable std::mutex    grid_ready_mutex;

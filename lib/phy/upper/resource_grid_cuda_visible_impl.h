@@ -407,6 +407,7 @@ private:
         parent.log_host_access_failure("read");
         return symbols;
       }
+      parent.log_host_access_failure("read, served from the host snapshot");
       symb                      = symb.subspan(k_init, mask.size());
       const unsigned mask_count = mask.count();
       if (mask_count && mask.is_contiguous()) {
@@ -439,6 +440,7 @@ private:
         parent.log_host_access_failure("read");
         return symbols;
       }
+      parent.log_host_access_failure("read, served from the host snapshot");
       symb                      = symb.subspan(k_init, mask.size());
       const unsigned mask_count = mask.count();
       if (mask_count && mask.is_contiguous()) {
@@ -470,6 +472,7 @@ private:
         parent.log_host_access_failure("read");
         return;
       }
+      parent.log_host_access_failure("read, served from the host snapshot");
       if (stride == 1) {
         ocuduvec::convert(symbols, rg_symbol.subspan(k_init, symbols.size()));
       } else {
@@ -512,9 +515,8 @@ private:
           break;
       }
       span<const cbf16_t> shadow = parent.host_snapshot_symbol(port, l);
-      if (shadow.empty()) {
-        parent.log_host_access_failure("read");
-      }
+      // A snapshot is not this slot's grid on a downlink or live grid: say so, since what it returns goes on air.
+      parent.log_host_access_failure(shadow.empty() ? "read" : "read, served from the host snapshot");
       return shadow;
     }
 

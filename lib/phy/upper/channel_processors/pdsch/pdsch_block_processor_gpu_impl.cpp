@@ -109,6 +109,19 @@ bool is_encode_cache_disabled()
   return disabled;
 }
 
+/// \brief Returns true unless OCUDU_PDSCH_DEVICE_PRECODING is set to 0.
+///
+/// When disabled, PDSCH with a precoding matrix other than a single real weight is mapped by the host mapper, which
+/// precodes it, rather than by the precoded device mappers.
+bool is_device_precoding_enabled()
+{
+  static const bool enabled = []() {
+    const char* value = std::getenv("OCUDU_PDSCH_DEVICE_PRECODING");
+    return (value == nullptr) || (std::strcmp(value, "0") != 0);
+  }();
+  return enabled;
+}
+
 bool is_gpu_mapper_disabled(int device_id, bool device_grid_mapping)
 {
   {
@@ -350,6 +363,9 @@ bool pdsch_block_processor_gpu_impl::map_ports_in_order(span<const uint32_t>    
   // A single real weight keeps the scalar mappers. Any other matrix is applied in full, as the host precoder does.
   float                     weight_real    = 0.0F;
   bool                      scalar_weight  = get_scalar_weight(weights, weight_real);
+  if (!scalar_weight && !is_device_precoding_enabled()) {
+    return false;
+  }
   pdsch_precoding_weights_t device_weights = {};
   if (!scalar_weight) {
     device_weights = to_device_weights(weights);

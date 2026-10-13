@@ -3815,9 +3815,17 @@ static nr_ldpc_status_t tb_batch_encoder_encode_to_symbols_int8_uncaptured(tb_ba
     int N_cols = (handle->tb_cfg.ldpc_cfg.base_graph == 1) ? 68 : 52;
     int N_full = N_cols * Z;
     int N_cb = N_full - 2 * Z;
+    // Limited-buffer rate matching: N_cb = min(N, N_ref), which sets both k0 and the wrap-around point.
+    if ((handle->config.tb_cfg.N_ref > 0) && (handle->config.tb_cfg.N_ref < N_cb)) {
+        N_cb = handle->config.tb_cfg.N_ref;
+    }
     int F = handle->tb_cfg.ldpc_cfg.num_filler_bits;
     int Kd = Kb * Z - 2 * Z - F;
     int puncture_offset = 2 * Z;
+    // The filler bits must lie inside the circular buffer, as in the host rate matcher.
+    if (N_cb <= Kd + F) {
+        return NR_LDPC_ERROR_INVALID_CONFIG;
+    }
     int k0 = rate_matcher_compute_k0(handle->tb_cfg.ldpc_cfg.base_graph,
                                      Z,
                                      handle->config.tb_cfg.redundancy_version,

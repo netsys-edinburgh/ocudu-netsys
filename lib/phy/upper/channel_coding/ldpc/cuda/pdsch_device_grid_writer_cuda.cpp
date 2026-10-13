@@ -5,6 +5,7 @@
 
 #include "pdsch_device_grid_writer_cuda.h"
 #include "cuda_rt_utils.h"
+#include <algorithm>
 #include <cstring>
 #include <cuda_runtime.h>
 
@@ -45,6 +46,10 @@ pdsch_device_grid_writer_cuda::~pdsch_device_grid_writer_cuda()
     cudaFree(d_grid_bf16);
     d_grid_bf16 = nullptr;
   }
+  if (host_grid_words != nullptr) {
+    cudaFreeHost(host_grid_words);
+    host_grid_words = nullptr;
+  }
 }
 
 void pdsch_device_grid_writer_cuda::rebind(resource_grid_writer& host_writer_)
@@ -82,7 +87,20 @@ bool pdsch_device_grid_writer_cuda::resize(unsigned nof_ports_, unsigned nof_sym
   device_grid_nof_ports   = nof_ports_;
   device_grid_nof_symbols = nof_symbols_;
   device_grid_nof_subc    = nof_subc_;
-  host_grid_words.resize(device_grid_bytes / sizeof(uint16_t));
+  // Pinned, so that the device-to-host copy of the grid is a direct DMA rather than staged through a bounce buffer.
+  if (required_bytes > host_grid_capacity) {
+    if (host_grid_words != nullptr) {
+      cudaFreeHost(host_grid_words);
+      host_grid_words = nullptr;
+    }
+    void* pinned = nullptr;
+    if (cudaMallocHost(&pinned, required_bytes) != cudaSuccess) {
+      host_grid_capacity = 0;
+      return false;
+    }
+    host_grid_words    = static_cast<uint32_t*>(pinned);
+    host_grid_capacity = required_bytes;
+  }
   {
     std::lock_guard<std::mutex> lock(grid_ready_mutex);
     pending_grid_ready_events.clear();
@@ -221,27 +239,31 @@ bool pdsch_device_grid_writer_cuda::materialize_nonzero_device_grid_to_host()
     return false;
   }
 
-  if (host_grid_words.size() * sizeof(uint16_t) < device_grid_bytes) {
-    host_grid_words.resize(device_grid_bytes / sizeof(uint16_t));
+  if ((host_grid_words == nullptr) || (host_grid_capacity < device_grid_bytes)) {
+    return false;
   }
   if (allocation_mode == grid_allocation_mode::managed) {
-    std::memcpy(host_grid_words.data(), d_grid_bf16, device_grid_bytes);
-  } else if (cudaMemcpy(host_grid_words.data(), d_grid_bf16, device_grid_bytes, cudaMemcpyDeviceToHost) !=
-             cudaSuccess) {
+    std::memcpy(host_grid_words, d_grid_bf16, device_grid_bytes);
+  } else if (cudaMemcpy(host_grid_words, d_grid_bf16, device_grid_bytes, cudaMemcpyDeviceToHost) != cudaSuccess) {
     return false;
   }
 
-  static_assert(sizeof(cbf16_t) == 2U * sizeof(uint16_t), "Unexpected cbf16_t layout.");
-  const unsigned nof_re_per_port = device_grid_nof_symbols * device_grid_nof_subc;
+  // Each RE is one 32-bit word, the BF16 real and imaginary parts. The device grid is cleared before the mapping, so a
+  // zero word is an RE that PDSCH did not map: the host grid keeps what the other channels wrote there (DM-RS, PDCCH,
+  // CSI-RS...), which may still be in progress, so it is not written. Symbols without PDSCH are skipped.
+  static_assert(sizeof(cbf16_t) == sizeof(uint32_t), "Unexpected cbf16_t layout.");
+  const size_t nof_re_per_port = static_cast<size_t>(device_grid_nof_symbols) * device_grid_nof_subc;
   for (unsigned port = 0; port != device_grid_nof_ports; ++port) {
     for (unsigned symbol = 0; symbol != device_grid_nof_symbols; ++symbol) {
-      span<cbf16_t> host_symbol = host_writer->get_view(port, symbol);
-      unsigned      symbol_base = (port * nof_re_per_port + symbol * device_grid_nof_subc) * 2U;
+      const uint32_t* src =
+          host_grid_words + port * nof_re_per_port + static_cast<size_t>(symbol) * device_grid_nof_subc;
+      if (std::all_of(src, src + device_grid_nof_subc, [](uint32_t word) { return word == 0U; })) {
+        continue;
+      }
+      auto* dst = reinterpret_cast<uint32_t*>(host_writer->get_view(port, symbol).data());
       for (unsigned subc = 0; subc != device_grid_nof_subc; ++subc) {
-        unsigned word_index = symbol_base + subc * 2U;
-        if ((host_grid_words[word_index] != 0U) || (host_grid_words[word_index + 1] != 0U)) {
-          host_symbol[subc].real = bf16_t(host_grid_words[word_index]);
-          host_symbol[subc].imag = bf16_t(host_grid_words[word_index + 1]);
+        if (src[subc] != 0U) {
+          dst[subc] = src[subc];
         }
       }
     }
