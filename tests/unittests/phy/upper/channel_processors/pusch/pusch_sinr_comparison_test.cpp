@@ -36,11 +36,18 @@
 #include "ocudu/support/math/math_utils.h"
 #include "fmt/format.h"
 #include "gtest/gtest.h"
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <optional>
 #include <random>
+#include <thread>
 #include <vector>
+#ifdef OCUDU_TEST_CUDA_STREAM_GATE
+#include <cuda.h>
+#include <cuda_runtime.h>
+#endif
 
 using namespace ocudu;
 
@@ -107,6 +114,35 @@ public:
 
 private:
   std::vector<log_likelihood_ratio> temp_buffer;
+};
+
+/// Codeword buffer that keeps every soft bit it receives.
+class llr_capture_buffer : public pusch_codeword_buffer
+{
+public:
+  span<log_likelihood_ratio> get_next_block_view(unsigned block_size) override
+  {
+    block.resize(block_size);
+    return block;
+  }
+
+  void on_new_block(span<const log_likelihood_ratio> new_data, const bit_buffer& /*new_sequence*/) override
+  {
+    softbits.insert(softbits.end(), new_data.begin(), new_data.end());
+  }
+
+  void on_end_codeword() override {}
+
+  /// Tells whether any soft bit carries information.
+  bool has_information() const
+  {
+    return std::any_of(softbits.begin(), softbits.end(), [](log_likelihood_ratio llr) { return llr != 0; });
+  }
+
+  std::vector<log_likelihood_ratio> softbits;
+
+private:
+  std::vector<log_likelihood_ratio> block;
 };
 
 /// Mock channel estimator results that provides controlled noise variance and flat channel.
@@ -531,3 +567,106 @@ TEST_F(PuschSinrComparisonTest, CpuSinrMatchesExpected)
 }
 
 } // namespace
+
+#ifdef OCUDU_TEST_CUDA_STREAM_GATE
+// A stuck GPU must not hold the PUSCH worker for ever. The demodulation in flight gives up after the GPU wait timeout
+// and hands the decoder erased soft bits and no SINR, so the transport block fails its CRC. Until the stuck work has
+// finished, the next PUSCH is demodulated on the CPU without waiting; afterwards, the GPU is used again.
+TEST_F(PuschSinrComparisonTest, GpuWaitTimeoutErasesTheSoftBitsAndUsesTheCpuUntilTheGpuDrains)
+{
+  if (!gpu_demodulator) {
+    GTEST_SKIP() << "GPU demodulator not available.";
+  }
+
+  static constexpr unsigned          nof_prb = 6;
+  std::mt19937                       rgen(7);
+  auto                               grid            = create_test_grid(nof_prb, 20.0F, rgen);
+  unsigned                           nof_subcarriers = nof_prb * NOF_SUBCARRIERS_PER_RB;
+  bounded_bitset<MAX_NSYMB_PER_SLOT> symbols_mask(NOF_SYMBOLS_PER_SLOT);
+  symbols_mask.fill(0, NOF_SYMBOLS_PER_SLOT, true);
+  bounded_bitset<MAX_NOF_SUBCARRIERS> re_mask(MAX_NOF_SUBCARRIERS);
+  re_mask.fill(0, nof_subcarriers, true);
+  mock_channel_estimator_results est_results(1, 1, NOF_SYMBOLS_PER_SLOT, nof_subcarriers, 0.01F, symbols_mask, re_mask);
+  auto                           config = create_demod_config(nof_prb);
+
+  auto demodulate = [&](llr_capture_buffer& buffer, sinr_capture_notifier& notifier) {
+    gpu_demodulator->demodulate(buffer, notifier, grid->get_reader(), est_results, config);
+  };
+
+  // The GPU demodulates normally.
+  ASSERT_TRUE(gpu_demodulator->supports_resident_mode());
+  {
+    llr_capture_buffer    buffer;
+    sinr_capture_notifier notifier;
+    demodulate(buffer, notifier);
+    ASSERT_TRUE(buffer.has_information());
+  }
+
+  // Hold the demodulator stream behind a gate that only the test releases.
+  auto         stream         = static_cast<cudaStream_t>(gpu_demodulator->get_resident_softbits().execution_context);
+  uint32_t*    gate_word      = nullptr;
+  cudaStream_t release_stream = nullptr;
+  ASSERT_NE(stream, nullptr);
+  ASSERT_EQ(cudaMalloc(&gate_word, sizeof(*gate_word)), cudaSuccess);
+  ASSERT_EQ(cudaMemset(gate_word, 0, sizeof(*gate_word)), cudaSuccess);
+  ASSERT_EQ(cudaStreamCreateWithFlags(&release_stream, cudaStreamNonBlocking), cudaSuccess);
+  CUresult gate_result = cuStreamWaitValue32(
+      reinterpret_cast<CUstream>(stream), reinterpret_cast<CUdeviceptr>(gate_word), 1U, CU_STREAM_WAIT_VALUE_EQ);
+  if (gate_result == CUDA_ERROR_NOT_SUPPORTED) {
+    (void)cudaStreamDestroy(release_stream);
+    (void)cudaFree(gate_word);
+    GTEST_SKIP() << "CUDA stream memory operations are not supported by this device.";
+  }
+  ASSERT_EQ(gate_result, CUDA_SUCCESS);
+  auto release_gate = [&]() {
+    EXPECT_EQ(cuStreamWriteValue32(reinterpret_cast<CUstream>(release_stream),
+                                   reinterpret_cast<CUdeviceptr>(gate_word),
+                                   1U,
+                                   CU_STREAM_WRITE_VALUE_DEFAULT),
+              CUDA_SUCCESS);
+    EXPECT_EQ(cudaStreamSynchronize(release_stream), cudaSuccess);
+  };
+
+  // The demodulation in flight gives up: every soft bit is erased and no SINR is reported.
+  {
+    llr_capture_buffer    buffer;
+    sinr_capture_notifier notifier;
+    notifier.captured_sinr_db = 0.0F;
+    demodulate(buffer, notifier);
+    EXPECT_FALSE(buffer.softbits.empty());
+    EXPECT_FALSE(buffer.has_information());
+    EXPECT_FALSE(notifier.captured_sinr_db.has_value());
+  }
+  EXPECT_FALSE(gpu_demodulator->supports_resident_mode());
+
+  // While the stuck work is pending, the next PUSCH is demodulated on the CPU, without waiting for the GPU.
+  {
+    llr_capture_buffer    buffer;
+    sinr_capture_notifier notifier;
+    auto                  start = std::chrono::steady_clock::now();
+    demodulate(buffer, notifier);
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    EXPECT_TRUE(buffer.has_information());
+    EXPECT_TRUE(notifier.captured_sinr_db.has_value());
+    EXPECT_LT(elapsed, std::chrono::milliseconds(50));
+  }
+
+  // Once the stuck work has finished, the GPU is used again.
+  release_gate();
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!gpu_demodulator->supports_resident_mode() && (std::chrono::steady_clock::now() < deadline)) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  EXPECT_TRUE(gpu_demodulator->supports_resident_mode());
+  {
+    llr_capture_buffer    buffer;
+    sinr_capture_notifier notifier;
+    demodulate(buffer, notifier);
+    EXPECT_TRUE(buffer.has_information());
+  }
+
+  EXPECT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
+  EXPECT_EQ(cudaStreamDestroy(release_stream), cudaSuccess);
+  EXPECT_EQ(cudaFree(gate_word), cudaSuccess);
+}
+#endif // OCUDU_TEST_CUDA_STREAM_GATE

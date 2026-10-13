@@ -198,6 +198,7 @@ const char* nr_ldpc_get_error_string(nr_ldpc_status_t status) {
         case NR_LDPC_ERROR_CUDA_FAILED: return "CUDA operation failed";
         case NR_LDPC_ERROR_ALLOC_FAILED: return "Memory allocation failed";
         case NR_LDPC_ERROR_SIZE_MISMATCH: return "Size mismatch";
+        case NR_LDPC_ERROR_TIMEOUT: return "GPU wait timed out";
         default: return "Unknown error";
     }
 }

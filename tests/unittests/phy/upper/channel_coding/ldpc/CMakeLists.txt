@@ -35,6 +35,13 @@ if(CUDA_ACCEL_FOUND)
         gtest_main)
     add_test(ldpc_encoder_gpu_cpu_test ldpc_encoder_gpu_cpu_test)
 
+    add_executable(cuda_gpu_wait_test cuda_gpu_wait_test.cpp)
+    target_include_directories(cuda_gpu_wait_test PRIVATE ${CMAKE_SOURCE_DIR}/lib/phy/upper/channel_coding/ldpc/cuda)
+    target_link_libraries(cuda_gpu_wait_test CUDA::cudart CUDA::cuda_driver GTest::gtest GTest::gtest_main)
+    # A short GPU wait timeout keeps the stuck-stream cases fast.
+    gtest_discover_tests(cuda_gpu_wait_test PROPERTIES RESOURCE_LOCK ocudu_cuda_device
+                         ENVIRONMENT OCUDU_CUDA_GPU_WAIT_TIMEOUT_US=20000)
+
     add_executable(ldpc_decoder_gpu_cpu_test ldpc_decoder_gpu_cpu_test.cpp)
     target_include_directories(ldpc_decoder_gpu_cpu_test PRIVATE
         ${CMAKE_SOURCE_DIR}/lib/phy/upper/channel_coding/ldpc/cuda)

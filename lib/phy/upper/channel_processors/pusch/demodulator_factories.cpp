@@ -114,7 +114,10 @@ public:
                   const dmrs_pusch_estimator_results& est_results,
                   const configuration&                config) override
   {
-    if (supports_accelerated_demod(config)) {
+    // The accelerated demodulator reports itself unusable while the work of a timed-out GPU wait is pending, unless
+    // the processor already planned a resident decode on it.
+    if (supports_accelerated_demod(config) &&
+        (accelerated_demodulator->is_resident_mode_enabled() || accelerated_demodulator->supports_resident_mode())) {
       accelerated_demodulator->demodulate(codeword_buffer, notifier, grid, est_results, config);
       return;
     }

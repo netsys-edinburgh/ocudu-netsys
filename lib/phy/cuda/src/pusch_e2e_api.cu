@@ -13,6 +13,7 @@
  */
 
 #include "pusch_e2e.h"
+#include "../include/cuda_gpu_wait_timeout.h"
 #include "pusch_e2e_internal.cuh"
 #include "pusch_e2e_launch.cuh"
 #include "pusch_e2e_low_papr.cuh"   // NOF_LOW_PAPR_GROUPS
@@ -47,7 +48,11 @@ static nr_ldpc_status_t sync_pusch_precompute_stream(cudaStream_t stream, const 
 {
     cudaError_t err = cudaGetLastError();
     if (err == cudaSuccess) {
-        err = cudaStreamSynchronize(stream);
+        err = ocudu_cuda_stream_wait_bounded(stream);
+    }
+    if (err == cudaErrorTimeout) {
+        // The precomputation stays queued; the caller takes the GPU out of use until it finishes.
+        return NR_LDPC_ERROR_TIMEOUT;
     }
     if (err != cudaSuccess) {
         std::fprintf(stderr,
@@ -56,6 +61,11 @@ static nr_ldpc_status_t sync_pusch_precompute_stream(cudaStream_t stream, const 
                      cudaGetErrorString(err));
     }
     return (err == cudaSuccess) ? NR_LDPC_SUCCESS : NR_LDPC_ERROR_CUDA_FAILED;
+}
+
+cudaStream_t pusch_e2e_get_precompute_stream(pusch_e2e_handle_t handle)
+{
+    return (handle != nullptr) ? handle->precompute_stream : nullptr;
 }
 
 static bool pusch_e2e_env_flag_disabled(const char* name)

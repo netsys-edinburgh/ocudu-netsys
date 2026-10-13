@@ -126,7 +126,8 @@ typedef enum {
   NR_LDPC_ERROR_INVALID_CONFIG = 3,
   NR_LDPC_ERROR_CUDA_FAILED    = 4,
   NR_LDPC_ERROR_ALLOC_FAILED   = 5,
-  NR_LDPC_ERROR_SIZE_MISMATCH  = 6
+  NR_LDPC_ERROR_SIZE_MISMATCH  = 6,
+  NR_LDPC_ERROR_TIMEOUT        = 7 ///< A wait for GPU work gave up after the GPU wait timeout.
 } nr_ldpc_status_t;
 
 // Helper function declarations

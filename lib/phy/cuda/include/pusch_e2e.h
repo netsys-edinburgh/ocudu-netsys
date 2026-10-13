@@ -135,6 +135,14 @@ void pusch_e2e_destroy(pusch_e2e_handle_t handle);
 nr_ldpc_status_t pusch_e2e_configure(pusch_e2e_handle_t handle, const pusch_e2e_config_t* cfg);
 
 /**
+ * @brief Gets the stream on which pusch_e2e_configure() and pusch_e2e_update_data_params() run their precomputation.
+ *
+ * Both return NR_LDPC_ERROR_TIMEOUT when the precomputation does not finish within the GPU wait timeout; the work then
+ * stays queued on this stream.
+ */
+cudaStream_t pusch_e2e_get_precompute_stream(pusch_e2e_handle_t handle);
+
+/**
  * Update per-slot config values that change between PUSCH transmissions.
  *
  * This function updates the handle's config with per-slot values without

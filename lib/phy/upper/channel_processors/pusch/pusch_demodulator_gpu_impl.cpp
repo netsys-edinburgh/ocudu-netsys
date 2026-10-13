@@ -259,111 +259,6 @@ bool launch_polar_uci_decode_half(const void*                d_llrs_half,
   return true;
 }
 
-/// \brief RT-friendly CUDA stream synchronization.
-///
-/// This function synchronizes on a CUDA stream while yielding the CPU to other threads.
-/// When the calling thread has real-time (SCHED_FIFO/SCHED_RR) priority, a blocking
-/// cudaStreamSynchronize() can cause priority inversion by preventing GPU driver threads
-/// (which run at normal priority) from making progress.
-///
-/// This function uses cudaStreamQuery() in a loop with sched_yield() to allow other
-/// threads to run while waiting for the GPU to complete.
-///
-/// \param stream The CUDA stream to synchronize on.
-/// \return cudaSuccess on success, or an error code if the stream had an error.
-/// Experiment knobs shared with cuda_rt_utils.h: OCUDU_CUDA_SYNC_BLOCKING=1 switches the
-/// yielding query loops to plain blocking synchronization calls; OCUDU_CUDA_SYNC_SLEEP_US=N
-/// throttles polling to one query every N microseconds.
-inline bool cuda_sync_blocking_enabled()
-{
-  static const bool enabled = []() {
-    const char* v = std::getenv("OCUDU_CUDA_SYNC_BLOCKING");
-    return (v != nullptr) && (v[0] != '0');
-  }();
-  return enabled;
-}
-
-inline unsigned cuda_sync_sleep_us()
-{
-  static const unsigned sleep_us = []() -> unsigned {
-    const char* v = std::getenv("OCUDU_CUDA_SYNC_SLEEP_US");
-    if (v == nullptr || *v == '\0') {
-      return 0;
-    }
-    return static_cast<unsigned>(std::strtoul(v, nullptr, 10));
-  }();
-  return sleep_us;
-}
-
-inline unsigned cuda_sync_spin_us()
-{
-  static const unsigned spin_us = []() -> unsigned {
-    const char* v = std::getenv("OCUDU_CUDA_SYNC_SPIN_US");
-    if (v == nullptr || *v == '\0') {
-      return 0;
-    }
-    return static_cast<unsigned>(std::strtoul(v, nullptr, 10));
-  }();
-  return spin_us;
-}
-
-inline void cuda_sync_poll_pause()
-{
-  const unsigned spin_us = cuda_sync_spin_us();
-  if (spin_us != 0) {
-    timespec t0;
-    clock_gettime(CLOCK_MONOTONIC, &t0);
-    const long budget_ns = static_cast<long>(spin_us) * 1000L;
-    for (;;) {
-      sched_yield();
-      timespec t1;
-      clock_gettime(CLOCK_MONOTONIC, &t1);
-      long elapsed_ns = (t1.tv_sec - t0.tv_sec) * 1000000000L + (t1.tv_nsec - t0.tv_nsec);
-      if (elapsed_ns >= budget_ns) {
-        return;
-      }
-    }
-  }
-  const unsigned sleep_us = cuda_sync_sleep_us();
-  if (sleep_us == 0) {
-    sched_yield();
-    return;
-  }
-  timespec ts = {0, static_cast<long>(sleep_us) * 1000L};
-  nanosleep(&ts, nullptr);
-}
-
-inline cudaError_t cudaStreamSynchronizeYielding(cudaStream_t stream)
-{
-  if (cuda_sync_blocking_enabled()) {
-    return cudaStreamSynchronize(stream);
-  }
-  cudaError_t err;
-  while ((err = cudaStreamQuery(stream)) == cudaErrorNotReady) {
-    cuda_sync_poll_pause();
-  }
-  return err;
-}
-
-/// \brief RT-friendly CUDA event synchronization.
-///
-/// Similar to cudaStreamSynchronizeYielding but for events.
-/// Waits for an event to complete while yielding the CPU.
-///
-/// \param event The CUDA event to wait for.
-/// \return cudaSuccess on success, or an error code if the event had an error.
-inline cudaError_t cudaEventSynchronizeYielding(cudaEvent_t event)
-{
-  if (cuda_sync_blocking_enabled()) {
-    return cudaEventSynchronize(event);
-  }
-  cudaError_t err;
-  while ((err = cudaEventQuery(event)) == cudaErrorNotReady) {
-    cuda_sync_poll_pause();
-  }
-  return err;
-}
-
 static unsigned get_gpu_ulsch_demultiplex_l1(const symbol_slot_mask& dmrs_symbol_mask)
 {
   int first_symbol_dmrs = dmrs_symbol_mask.find_lowest(true);
@@ -869,6 +764,17 @@ pusch_demodulator_gpu_impl::pusch_demodulator_gpu_impl(
     d_noise_vars_capacity_ = noise_bytes;
   }
 
+  // Pinned staging for the batch path uploads; without it the batch path demodulates on the CPU.
+  if ((cudaHostAlloc(reinterpret_cast<void**>(&h_batch_symbols_pinned_), symbols_bytes, cudaHostAllocDefault) ==
+       cudaSuccess) &&
+      (cudaHostAlloc(reinterpret_cast<void**>(&h_batch_noise_vars_pinned_), noise_bytes, cudaHostAllocDefault) ==
+       cudaSuccess) &&
+      (cudaEventCreateWithFlags(&batch_upload_done_, cudaEventDisableTiming) == cudaSuccess)) {
+    h_batch_pinned_capacity_ = MAX_RE_PER_SLOT;
+  } else {
+    static_cast<void>(cudaGetLastError());
+  }
+
   // Allocate triple-buffered FP16 LLR outputs for GPU-resident pipeline.
   size_t llrs_half_bytes = MAX_LLRS_PER_SLOT * sizeof(uint16_t);
   for (int i = 0; i < NUM_BUFFERS; i++) {
@@ -926,6 +832,10 @@ pusch_demodulator_gpu_impl::pusch_demodulator_gpu_impl(
     if (err == cudaSuccess) {
       d_sch_re_indices_capacity_[i] = MAX_RE_PER_SLOT;
     }
+    err = cudaHostAlloc(reinterpret_cast<void**>(&h_sch_re_indices_pinned_[i]), indices_bytes, cudaHostAllocDefault);
+    if (err != cudaSuccess) {
+      h_sch_re_indices_pinned_[i] = nullptr;
+    }
     // Preallocate UCI compaction buffers at max so first UCI-bearing PUSCH never
     // free+malloc under RT scheduling (same residency model as SCH LLRs/indices).
     err = cudaMalloc(&d_harq_ack_llrs_half_[i], uci_llrs_bytes);
@@ -964,6 +874,10 @@ pusch_demodulator_gpu_impl::pusch_demodulator_gpu_impl(
     }
   }
   unified_buf_cap_ = unified_total;
+  if ((h_sch_re_indices_pinned_[0] != nullptr) && (h_sch_re_indices_pinned_[1] != nullptr) &&
+      (h_sch_re_indices_pinned_[2] != nullptr)) {
+    h_sch_re_indices_pinned_capacity_ = MAX_RE_PER_SLOT;
+  }
 
   // Host compaction vectors: reserve max so .resize/.push_back never realloc on the hot path.
   h_re_indices_.reserve(MAX_RE_PER_SLOT);
@@ -1171,6 +1085,16 @@ pusch_demodulator_gpu_impl::~pusch_demodulator_gpu_impl()
 
   if (h_llrs_half_pinned_)
     cudaFreeHost(h_llrs_half_pinned_);
+  if (h_batch_symbols_pinned_)
+    cudaFreeHost(h_batch_symbols_pinned_);
+  if (h_batch_noise_vars_pinned_)
+    cudaFreeHost(h_batch_noise_vars_pinned_);
+  if (batch_upload_done_)
+    cudaEventDestroy(batch_upload_done_);
+  for (int i = 0; i < NUM_BUFFERS; ++i) {
+    if (h_sch_re_indices_pinned_[i])
+      cudaFreeHost(h_sch_re_indices_pinned_[i]);
+  }
   if (d2h_stream_)
     cudaStreamDestroy(d2h_stream_);
   if (d2h_event_)
@@ -1280,6 +1204,88 @@ pusch_demodulator_gpu_impl::get_ch_data_estimates(const dmrs_pusch_estimator_res
   return ch_estimates_copy;
 }
 
+bool pusch_demodulator_gpu_impl::is_gpu_usable() const
+{
+  cuda_gpu_wait_quarantine::state state = gpu_wait_quarantine_.poll();
+  if (state == cuda_gpu_wait_quarantine::state::back_on_gpu) {
+    ocudulog::fetch_basic_logger("PHY").warning(
+        "PUSCH GPU demodulation: the GPU work of the timed-out waits has finished; using the GPU again");
+  }
+  return state != cuda_gpu_wait_quarantine::state::off_gpu;
+}
+
+void pusch_demodulator_gpu_impl::on_gpu_wait_timeout(cudaStream_t stream, const char* stage) const
+{
+  unsigned count = gpu_wait_quarantine_.on_wait_timeout(stream);
+  if (is_gpu_failure_count_logged(count)) {
+    ocudulog::fetch_basic_logger("PHY").error(
+        "PUSCH GPU demodulation: GPU wait timed out ({}); demodulating on the CPU until the GPU work finishes ({} "
+        "timeouts so far)",
+        stage,
+        count);
+  }
+}
+
+bool pusch_demodulator_gpu_impl::check_gpu_wait(cudaError_t status, cudaStream_t stream, const char* stage) const
+{
+  if (status == cudaSuccess) {
+    return true;
+  }
+  if (status == cudaErrorTimeout) {
+    on_gpu_wait_timeout(stream, stage);
+  } else {
+    static_cast<void>(cudaGetLastError());
+  }
+  return false;
+}
+
+bool pusch_demodulator_gpu_impl::wait_for_buffer_slot(int buf_idx) const
+{
+  // An event that was never recorded completes at once, so the first use of a slot does not wait.
+  if ((d2h_complete_[buf_idx] != nullptr) &&
+      !check_gpu_wait(cuda_event_wait_bounded(d2h_complete_[buf_idx]), stream_, "triple-buffer slot reuse")) {
+    return false;
+  }
+  if ((h2d_complete_[buf_idx] != nullptr) && (h2d_stream_ != nullptr) &&
+      !check_gpu_wait(cuda_event_wait_bounded(h2d_complete_[buf_idx]), h2d_stream_, "triple-buffer slot reuse")) {
+    return false;
+  }
+  return true;
+}
+
+bool pusch_demodulator_gpu_impl::is_host_memory_pinned(const void* address)
+{
+  for (const pinned_memory_check& check : pinned_memory_checks_) {
+    if ((check.address == address) && (address != nullptr)) {
+      return check.pinned;
+    }
+  }
+  cudaPointerAttributes attributes = {};
+  bool                  pinned     = (cudaPointerGetAttributes(&attributes, address) == cudaSuccess) &&
+                ((attributes.type == cudaMemoryTypeHost) || (attributes.type == cudaMemoryTypeManaged));
+  static_cast<void>(cudaGetLastError());
+  pinned_memory_checks_[next_pinned_memory_check_] = {address, pinned};
+  next_pinned_memory_check_                        = (next_pinned_memory_check_ + 1) % pinned_memory_checks_.size();
+  return pinned;
+}
+
+void pusch_demodulator_gpu_impl::write_erased_codeword(pusch_codeword_buffer& codeword_buffer, size_t nof_softbits)
+{
+  size_t offset = 0;
+  while (offset < nof_softbits) {
+    size_t remain = std::min(nof_softbits - offset, size_t(pusch_constants::MAX_NOF_BITS_PER_OFDM_SYMBOL));
+    span<log_likelihood_ratio> block = codeword_buffer.get_next_block_view(remain);
+    if (block.empty()) {
+      break;
+    }
+    std::fill(block.begin(), block.end(), log_likelihood_ratio(0));
+    static_bit_buffer<pusch_constants::MAX_NOF_BITS_PER_OFDM_SYMBOL> dummy_seq(block.size());
+    codeword_buffer.on_new_block(block, dummy_seq);
+    offset += block.size();
+  }
+  host_codeword_written_ = true;
+}
+
 void pusch_demodulator_gpu_impl::demodulate(pusch_codeword_buffer&              codeword_buffer,
                                             pusch_demodulator_notifier&         notifier,
                                             const resource_grid_reader&         grid,
@@ -1328,9 +1334,12 @@ void pusch_demodulator_gpu_impl::demodulate(pusch_codeword_buffer&              
   unsigned nof_bits_per_re = config.nof_tx_layers * get_bits_per_symbol(config.modulation);
   ocudu_assert(nof_bits_per_re > 0, "Invalid bits per RE.");
 
+  // While the work of a timed-out GPU wait is pending, every GPU path stays unused.
+  const bool gpu_usable = gpu_available_ && is_gpu_usable();
+
   bool supported_gpu_mimo = (config.nof_tx_layers == 1) || (config.nof_tx_layers == 2) || (config.nof_tx_layers == 3) ||
                             (config.nof_tx_layers == 4);
-  bool can_use_gpu_eq = use_gpu_equalization_ && supported_gpu_mimo &&
+  bool can_use_gpu_eq = use_gpu_equalization_ && gpu_usable && supported_gpu_mimo &&
                         (nof_rx_ports == 1 || nof_rx_ports == 2 || nof_rx_ports == 4 || nof_rx_ports == 8) &&
                         (config.nof_tx_layers <= nof_rx_ports); // Layers <= ports required
 
@@ -1567,8 +1576,7 @@ void pusch_demodulator_gpu_impl::demodulate(pusch_codeword_buffer&              
       auto gpu_e2e_us  = std::chrono::duration_cast<std::chrono::microseconds>(gpu_e2e_end - gpu_e2e_start);
       ocudulog::fetch_basic_logger("PHY").info("PUSCH GPU: E2E path time: {} us", gpu_e2e_us.count());
     }
-  } else if (!can_use_gpu_eq && (config.nof_tx_layers == 1) && accumulated_count_ >= MIN_GPU_SYMBOLS &&
-             gpu_available_) {
+  } else if (!can_use_gpu_eq && (config.nof_tx_layers == 1) && accumulated_count_ >= MIN_GPU_SYMBOLS && gpu_usable) {
     // GPU soft demod with CPU equalization.
     if (enable_path_tracing_) {
       ocudulog::fetch_basic_logger("PHY").warning(
@@ -1654,6 +1662,16 @@ void pusch_demodulator_gpu_impl::process_gpu_batch(pusch_codeword_buffer&      c
   size_t noise_bytes     = num_symbols * sizeof(float);
   size_t llrs_half_bytes = num_llrs * sizeof(uint16_t);
 
+  // The uploads come from pinned staging and, outside the resident mode, the soft bits return into pinned memory: a
+  // copy to or from pageable memory can block until the stream drains, which defeats the bounded waits.
+  bool pinned_staging_ok =
+      (num_symbols <= h_batch_pinned_capacity_) &&
+      (gpu_resident_mode_ || ((h_llrs_half_pinned_ != nullptr) && (num_llrs <= h_llrs_half_pinned_cap_)));
+  if (!pinned_staging_ok) {
+    process_cpu_fallback(codeword_buffer, notifier, config);
+    return;
+  }
+
   if (symbols_bytes > d_symbols_capacity_ || noise_bytes > d_noise_vars_capacity_ ||
       llrs_half_bytes > d_llrs_half_capacity_[0]) {
     ocudulog::fetch_basic_logger("PHY").error(
@@ -1668,11 +1686,18 @@ void pusch_demodulator_gpu_impl::process_gpu_batch(pusch_codeword_buffer&      c
     return;
   }
 
-  // Copy symbols to GPU.
-  cudaMemcpyAsync(d_symbols_, accumulated_symbols_.data(), symbols_bytes, cudaMemcpyHostToDevice, stream_);
+  // The previous upload may still read the staging in the resident mode, where nothing waits for it.
+  if (!check_gpu_wait(cuda_event_wait_bounded(batch_upload_done_), stream_, "batch staging reuse")) {
+    process_cpu_fallback(codeword_buffer, notifier, config);
+    return;
+  }
+  std::copy_n(accumulated_symbols_.data(), num_symbols, h_batch_symbols_pinned_);
+  std::copy_n(accumulated_noise_vars_.data(), num_symbols, h_batch_noise_vars_pinned_);
 
-  // Copy noise variances to GPU.
-  cudaMemcpyAsync(d_noise_vars_, accumulated_noise_vars_.data(), noise_bytes, cudaMemcpyHostToDevice, stream_);
+  // Copy symbols and noise variances to GPU.
+  cudaMemcpyAsync(d_symbols_, h_batch_symbols_pinned_, symbols_bytes, cudaMemcpyHostToDevice, stream_);
+  cudaMemcpyAsync(d_noise_vars_, h_batch_noise_vars_pinned_, noise_bytes, cudaMemcpyHostToDevice, stream_);
+  cudaEventRecord(batch_upload_done_, stream_);
 
   // Configure and generate scrambling sequence.
   nr_scrambling_config_t scr_cfg = {};
@@ -1683,14 +1708,14 @@ void pusch_demodulator_gpu_impl::process_gpu_batch(pusch_codeword_buffer&      c
 
   nr_ldpc_status_t status = scrambler_configure(scr_handle_, &scr_cfg);
   if (status != NR_LDPC_SUCCESS) {
-    cudaStreamSynchronizeYielding(stream_);
+    check_gpu_wait(cuda_stream_wait_bounded(stream_), stream_, "batch path failure");
     process_cpu_fallback(codeword_buffer, notifier, config);
     return;
   }
 
   status = scrambler_generate_sequence(scr_handle_, static_cast<int>(num_llrs), stream_);
   if (status != NR_LDPC_SUCCESS) {
-    cudaStreamSynchronizeYielding(stream_);
+    check_gpu_wait(cuda_stream_wait_bounded(stream_), stream_, "batch path failure");
     process_cpu_fallback(codeword_buffer, notifier, config);
     return;
   }
@@ -1710,7 +1735,7 @@ void pusch_demodulator_gpu_impl::process_gpu_batch(pusch_codeword_buffer&      c
                                                     stream_);
 
   if (result != 0) {
-    cudaStreamSynchronizeYielding(stream_);
+    check_gpu_wait(cuda_stream_wait_bounded(stream_), stream_, "batch path failure");
     process_cpu_fallback(codeword_buffer, notifier, config);
     return;
   }
@@ -1745,15 +1770,15 @@ void pusch_demodulator_gpu_impl::process_gpu_batch(pusch_codeword_buffer&      c
     return;
   }
 
-  // Copy FP16 LLRs to host (batch path uses buffer 0).
-  uint16_t*             h_llrs_half = h_llrs_half_pinned_;
-  std::vector<uint16_t> h_llrs_half_fallback;
-  if (!h_llrs_half || num_llrs > h_llrs_half_pinned_cap_) {
-    h_llrs_half_fallback.resize(num_llrs);
-    h_llrs_half = h_llrs_half_fallback.data();
-  }
+  // Copy FP16 LLRs to host (batch path uses buffer 0). The pinned buffer was checked above.
+  uint16_t* h_llrs_half = h_llrs_half_pinned_;
   cudaMemcpyAsync(h_llrs_half, d_llrs_half_[0], num_llrs * sizeof(uint16_t), cudaMemcpyDeviceToHost, stream_);
-  cudaStreamSynchronizeYielding(stream_);
+  if (!check_gpu_wait(cuda_stream_wait_bounded(stream_), stream_, "batch soft-bit readback")) {
+    // The soft bits are not known to be complete: the decoder gets erasures and fails the CRC.
+    gpu_llrs_valid_ = false;
+    write_erased_codeword(codeword_buffer, num_llrs);
+    return;
+  }
 
   // Convert FP16 LLRs to INT8 and write to codeword buffer.
   constexpr float FP16_TO_INT8_SCALE = 4.0f;
@@ -1950,8 +1975,10 @@ void pusch_demodulator_gpu_impl::process_gpu_e2e(pusch_codeword_buffer&         
       stream     = s;
       armed_kind = kind::owned_snapshot;
     }
-    void commit()
+    /// Returns the status of the drain wait, or cudaSuccess when no drain was needed.
+    cudaError_t commit()
     {
+      cudaError_t status = cudaSuccess;
       if (armed_kind != kind::none && g != nullptr) {
         const bool recorded = armed_kind == kind::owned_snapshot ? g->on_owned_device_snapshot_reading_enqueued(stream)
                                                                  : g->on_device_grid_reading_enqueued(stream);
@@ -1959,10 +1986,11 @@ void pusch_demodulator_gpu_impl::process_gpu_e2e(pusch_codeword_buffer&         
           // No fence event could be recorded, so the enqueued grid read is
           // invisible to pull_pages_home; drain it before a host access can
           // migrate the pages out from under it (Xid 31 on GB10).
-          cudaStreamSynchronizeYielding(static_cast<cudaStream_t>(stream));
+          status = cuda_stream_wait_bounded(static_cast<cudaStream_t>(stream));
         }
         armed_kind = kind::none;
       }
+      return status;
     }
     void drop()
     {
@@ -2040,8 +2068,24 @@ void pusch_demodulator_gpu_impl::process_gpu_e2e(pusch_codeword_buffer&         
     return;
   }
 
-  bool compact_sch_llrs           = gpu_resident_mode_ && resident_compaction.enabled;
-  bool compact_uci_on_device      = compact_sch_llrs && resident_device_uci_demux_enabled(config);
+  bool compact_sch_llrs      = gpu_resident_mode_ && resident_compaction.enabled;
+  bool compact_uci_on_device = compact_sch_llrs && resident_device_uci_demux_enabled(config);
+
+  // Every readback goes into pinned memory and every large upload comes from pinned staging: a copy to or from
+  // pageable memory can block until the stream drains, which defeats the bounded waits.
+  bool pinned_buffers_ok =
+      (gpu_resident_mode_ || ((h_llrs_half_pinned_ != nullptr) && (num_llrs <= h_llrs_half_pinned_cap_))) &&
+      (!compact_sch_llrs || (h_sch_re_indices_pinned_capacity_ != 0)) &&
+      (!compact_uci_on_device ||
+       ((h_harq_ack_llrs_half_pinned_[buf_idx] != nullptr) && (h_csi_part1_llrs_half_pinned_[buf_idx] != nullptr) &&
+        (h_harq_ack_decode_result_pinned_[buf_idx] != nullptr) &&
+        (h_csi_part1_decode_result_pinned_[buf_idx] != nullptr)));
+  // The host staging of this triple-buffer slot is rewritten below; the work that last used it must have finished.
+  if (!pinned_buffers_ok || !wait_for_buffer_slot(buf_idx)) {
+    grid_hold.drop();
+    process_cpu_grid_fallback(codeword_buffer, notifier, grid, est_results, config);
+    return;
+  }
   bool decode_short_uci_on_device = false;
   if (compact_sch_llrs) {
     unsigned mod_order_compact = static_cast<unsigned>(mod_order);
@@ -2206,6 +2250,16 @@ void pusch_demodulator_gpu_impl::process_gpu_e2e(pusch_codeword_buffer&         
     }
   }
 
+  // The direct upload of a pageable grid could block until the stream drains; such a grid goes through the staging.
+  auto is_port_grid_pinned = [&]() {
+    for (unsigned port = 0; port != nof_rx_ports; ++port) {
+      if (!is_host_memory_pinned(port_grids[port].src)) {
+        return false;
+      }
+    }
+    return true;
+  };
+
   // Copy RE indices only when this triple-buffer slot does not already hold
   // the cached allocation/DMRS geometry.
   if (!re_indices_on_device) {
@@ -2312,6 +2366,9 @@ void pusch_demodulator_gpu_impl::process_gpu_e2e(pusch_codeword_buffer&         
     e2e_cfg.enable_evm_metric = (evm_calc || compute_post_eq_sinr) ? 1 : 0;
 
     status = pusch_e2e_configure(e2e_handle_, &e2e_cfg);
+    if (status == NR_LDPC_ERROR_TIMEOUT) {
+      on_gpu_wait_timeout(pusch_e2e_get_precompute_stream(e2e_handle_), "configuration precompute");
+    }
     if (status != NR_LDPC_SUCCESS) {
       ocudulog::fetch_basic_logger("PHY").warning("PUSCH GPU E2E configure failed with status {}; falling back to CPU.",
                                                   static_cast<int>(status));
@@ -2346,6 +2403,9 @@ void pusch_demodulator_gpu_impl::process_gpu_e2e(pusch_codeword_buffer&         
   } else if (structural_matched && !data_params_matched && e2e_handle_) {
     // MCS / RNTI-only change: update data scramble without DMRS re-precompute.
     status = pusch_e2e_update_data_params(e2e_handle_, static_cast<uint16_t>(config.rnti), config.n_id, mod_order);
+    if (status == NR_LDPC_ERROR_TIMEOUT) {
+      on_gpu_wait_timeout(pusch_e2e_get_precompute_stream(e2e_handle_), "data parameter precompute");
+    }
     if (status != NR_LDPC_SUCCESS) {
       ocudulog::fetch_basic_logger("PHY").warning(
           "PUSCH GPU E2E data-params update failed with status {}; falling back to CPU.", static_cast<int>(status));
@@ -2420,10 +2480,9 @@ void pusch_demodulator_gpu_impl::process_gpu_e2e(pusch_codeword_buffer&         
   if (use_device_grid_reader) {
     // Device-visible grid path: the producer has already made the BF16 grid visible
     // and prepare_device_grid_reading() ordered this stream after its ready event.
-  } else if (all_contiguous) {
+  } else if (all_contiguous && is_port_grid_pinned()) {
     // FAST PATH: DMA grid data directly from grid views → device (skip staging memcpy).
-    // When grid is backed by pinned memory (cudaHostRegister), this is a direct NVLink DMA.
-    // For unpinned grids, CUDA handles the copy transparently via internal staging.
+    // The grid is backed by pinned memory (cudaHostRegister), so this is a direct DMA.
     char* d_grid_base = static_cast<char*>(d_unified_input_[buf_idx]) + unified_grid_offset_;
 
     // Check if all ports are contiguous in memory (tensor layout: [subc, symbol, port]).
@@ -2546,8 +2605,8 @@ void pusch_demodulator_gpu_impl::process_gpu_e2e(pusch_codeword_buffer&         
   const auto t_post0 = std::chrono::steady_clock::now();
 
   if (status != NR_LDPC_SUCCESS) {
-    cudaStreamSynchronizeYielding(stream_);
     cudaError_t cuda_status = cudaGetLastError();
+    check_gpu_wait(cuda_stream_wait_bounded(stream_), stream_, "kernel failure");
     ocudulog::fetch_basic_logger("PHY").warning(
         "PUSCH GPU E2E kernel failed with status {} (CUDA: {}); falling back to CPU.",
         static_cast<int>(status),
@@ -2558,7 +2617,9 @@ void pusch_demodulator_gpu_impl::process_gpu_e2e(pusch_codeword_buffer&         
   }
 
   if (use_device_grid_reader) {
-    grid_hold.commit();
+    // A drain that times out leaves the read in flight; the timeout takes the GPU paths out of use, and the decoder's
+    // own wait on this stream reports the transport block as failed.
+    check_gpu_wait(grid_hold.commit(), stream_, "device grid read drain");
   }
 
   if (compact_sch_llrs) {
@@ -2861,14 +2922,24 @@ void pusch_demodulator_gpu_impl::process_gpu_e2e(pusch_codeword_buffer&         
 
   // Non-GPU-resident mode: sync and report SINR immediately.
   {
-    auto sync_start = std::chrono::steady_clock::now();
-    if (kernel_complete_[buf_idx]) {
-      cudaEventSynchronizeYielding(kernel_complete_[buf_idx]);
-    } else {
-      cudaStreamSynchronizeYielding(stream_);
+    auto        sync_start  = std::chrono::steady_clock::now();
+    cudaError_t sync_status = kernel_complete_[buf_idx] ? cuda_event_wait_bounded(kernel_complete_[buf_idx])
+                                                        : cuda_stream_wait_bounded(stream_);
+    auto        sync_end    = std::chrono::steady_clock::now();
+    last_demod_sync_us_     = std::chrono::duration<float, std::micro>(sync_end - sync_start).count();
+    if (!check_gpu_wait(sync_status, stream_, "demodulation")) {
+      // Nothing the GPU wrote can be trusted: report no measurements and let every decoder fail.
+      notifier.on_end_stats({});
+      if (compact_uci_on_device) {
+        // The decoder consumes the resident soft bits and its own wait on this stream fails the transport block. The
+        // UCI fields get erasures, so their decoders report a failed decode.
+        publish_erased_resident_uci();
+        return;
+      }
+      gpu_llrs_valid_ = false;
+      write_erased_codeword(codeword_buffer, num_llrs);
+      return;
     }
-    auto sync_end       = std::chrono::steady_clock::now();
-    last_demod_sync_us_ = std::chrono::duration<float, std::micro>(sync_end - sync_start).count();
 
     if (enable_path_tracing_) {
       pusch_e2e_print_diagnostics(e2e_handle_, stream_);
@@ -2902,13 +2973,8 @@ void pusch_demodulator_gpu_impl::process_gpu_e2e(pusch_codeword_buffer&         
     return;
   }
 
-  // Non-GPU-resident mode: Copy LLRs back to host.
-  uint16_t*             h_llrs_half = h_llrs_half_pinned_;
-  std::vector<uint16_t> h_llrs_half_fallback;
-  if (!h_llrs_half || num_llrs > h_llrs_half_pinned_cap_) {
-    h_llrs_half_fallback.resize(num_llrs);
-    h_llrs_half = h_llrs_half_fallback.data();
-  }
+  // Non-GPU-resident mode: Copy LLRs back to host. The pinned buffer was checked before the upload.
+  uint16_t* h_llrs_half = h_llrs_half_pinned_;
 
   // PHASE 2.2: Start D2H on d2h_stream_ for async overlap.
   // Use d2h_stream_ if available, otherwise fall back to main stream.
@@ -2946,11 +3012,12 @@ void pusch_demodulator_gpu_impl::process_gpu_e2e(pusch_codeword_buffer&         
   // PHASE 2.3: Sync on D2H completion event (more precise than stream sync).
   // This is necessary - CPU needs LLR data immediately to continue processing.
   // Using event sync allows overlap with other streams (H2D for next slot).
-  if (d2h_complete_[buf_idx]) {
-    cudaEventSynchronizeYielding(d2h_complete_[buf_idx]);
-  } else {
-    // Fallback if event not available.
-    cudaStreamSynchronizeYielding(download_stream);
+  cudaError_t readback_status = d2h_complete_[buf_idx] ? cuda_event_wait_bounded(d2h_complete_[buf_idx])
+                                                       : cuda_stream_wait_bounded(download_stream);
+  if (!check_gpu_wait(readback_status, download_stream, "soft-bit readback")) {
+    gpu_llrs_valid_ = false;
+    write_erased_codeword(codeword_buffer, num_llrs);
+    return;
   }
 
   // Convert/copy LLRs to the codeword buffer.
@@ -3101,6 +3168,18 @@ void pusch_demodulator_gpu_impl::process_cpu_fallback(pusch_codeword_buffer&    
   host_codeword_written_ = true;
 }
 
+void pusch_demodulator_gpu_impl::publish_erased_resident_uci()
+{
+  // Erased soft bits make the host UCI decoders report a failed decode, as for a lost transmission.
+  std::fill(h_harq_ack_llrs_.begin(), h_harq_ack_llrs_.end(), log_likelihood_ratio(0));
+  std::fill(h_csi_part1_llrs_.begin(), h_csi_part1_llrs_.end(), log_likelihood_ratio(0));
+  gpu_harq_ack_decoded_  = false;
+  gpu_csi_part1_decoded_ = false;
+  gpu_uci_decoded_valid_ = false;
+  gpu_uci_llrs_valid_    = !h_harq_ack_llrs_.empty() || !h_csi_part1_llrs_.empty();
+  gpu_uci_demux_pending_ = false;
+}
+
 void pusch_demodulator_gpu_impl::finalize_resident_uci()
 {
   if (!gpu_uci_demux_pending_ && (gpu_uci_llrs_valid_ || gpu_uci_decoded_valid_)) {
@@ -3112,14 +3191,13 @@ void pusch_demodulator_gpu_impl::finalize_resident_uci()
   // decode is skipped, make this method safe by waiting only when the recorded
   // demodulator completion event is still pending.
   if (gpu_uci_demux_pending_) {
-    const int buf_idx = last_buf_;
-    if ((buf_idx >= 0) && kernel_complete_[buf_idx]) {
-      cudaError_t query_status = cudaEventQuery(kernel_complete_[buf_idx]);
-      if (query_status == cudaErrorNotReady) {
-        cudaEventSynchronizeYielding(kernel_complete_[buf_idx]);
-      }
-    } else {
-      cudaStreamSynchronizeYielding(stream_);
+    const int   buf_idx     = last_buf_;
+    cudaError_t wait_status = ((buf_idx >= 0) && kernel_complete_[buf_idx])
+                                  ? cuda_event_wait_bounded(kernel_complete_[buf_idx])
+                                  : cuda_stream_wait_bounded(stream_);
+    if (!check_gpu_wait(wait_status, stream_, "UCI readback")) {
+      publish_erased_resident_uci();
+      return;
     }
   }
 
@@ -3242,8 +3320,19 @@ float pusch_demodulator_gpu_impl::report_deferred_sinr(pusch_demodulator_notifie
   // If the SINR readback was routed to the side D2H stream (OCUDU_PUSCH_SINR_SIDE_STREAM),
   // the decoder's compute-stream sync does not order it; wait on the recorded completion
   // event (the tiny copies finish during decode, so this is effectively a no-op query).
-  if (last_sinr_on_side_stream_ && (last_buf_ >= 0) && d2h_complete_[last_buf_]) {
-    cudaEventSynchronizeYielding(d2h_complete_[last_buf_]);
+  //
+  // Either way, the readback must be known to be complete. When the decoder's wait timed out, it is not: report no
+  // measurements rather than the previous ones.
+  cudaEvent_t readback_done = nullptr;
+  if (last_buf_ >= 0) {
+    readback_done = last_sinr_on_side_stream_ ? d2h_complete_[last_buf_] : kernel_complete_[last_buf_];
+  }
+  cudaStream_t readback_stream = last_sinr_on_side_stream_ ? d2h_stream_ : stream_;
+  cudaError_t  readback_status =
+      (readback_done != nullptr) ? cuda_event_wait_bounded(readback_done) : cuda_stream_wait_bounded(readback_stream);
+  if (!check_gpu_wait(readback_status, readback_stream, "deferred measurement readback")) {
+    notifier.on_end_stats({});
+    return 0.0F;
   }
   float gpu_sinr_db      = pusch_e2e_sinr_get_result(e2e_handle_);
   float gpu_dmrs_sinr_db = pusch_e2e_dmrs_sinr_get_result(e2e_handle_);

@@ -5,11 +5,15 @@
 
 #pragma once
 
+#include "../../../phy_acceleration_runtime_options.h"
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <cuda_runtime.h>
+#include <mutex>
 #include <sched.h>
+#include <vector>
 
 namespace ocudu {
 
@@ -195,6 +199,163 @@ inline cudaError_t cudaEventSynchronizeYielding(cudaEvent_t event)
     cuda_sync_poll_pause();
   }
   return err;
+}
+
+/// \brief Waits for all the work queued on \c stream, for at most the GPU wait timeout, while yielding the CPU.
+///
+/// Polls like cudaStreamSynchronizeYielding(), but gives up once phy_acceleration_gpu_wait_timeout() has elapsed: a
+/// healthy wait lasts at most a few slots, so reaching the bound means the GPU work is stuck.
+/// \return The stream status, or cudaErrorTimeout if the work did not finish in time.
+/// \note The experiment knob OCUDU_CUDA_SYNC_BLOCKING=1 waits in cudaStreamSynchronize(), which has no bound.
+inline cudaError_t cuda_stream_wait_bounded(cudaStream_t stream)
+{
+  if (cuda_sync_blocking_enabled()) {
+    return cudaStreamSynchronize(stream);
+  }
+  const auto  deadline = std::chrono::steady_clock::now() + phy_acceleration_gpu_wait_timeout();
+  cudaError_t err;
+  while ((err = cudaStreamQuery(stream)) == cudaErrorNotReady) {
+    if (std::chrono::steady_clock::now() >= deadline) {
+      return cudaErrorTimeout;
+    }
+    cuda_sync_poll_pause();
+  }
+  return err;
+}
+
+/// \brief Waits for \c event, for at most the GPU wait timeout, while yielding the CPU.
+/// \return The event status, or cudaErrorTimeout if the event did not complete in time.
+/// \note The experiment knob OCUDU_CUDA_SYNC_BLOCKING=1 waits in cudaEventSynchronize(), which has no bound.
+inline cudaError_t cuda_event_wait_bounded(cudaEvent_t event)
+{
+  if (cuda_sync_blocking_enabled()) {
+    return cudaEventSynchronize(event);
+  }
+  const auto  deadline = std::chrono::steady_clock::now() + phy_acceleration_gpu_wait_timeout();
+  cudaError_t err;
+  while ((err = cudaEventQuery(event)) == cudaErrorNotReady) {
+    if (std::chrono::steady_clock::now() >= deadline) {
+      return cudaErrorTimeout;
+    }
+    cuda_sync_poll_pause();
+  }
+  return err;
+}
+
+/// \brief Keeps a GPU component off the GPU after one of its waits timed out, until the work queued at that time has
+/// finished.
+///
+/// A timed-out wait leaves its GPU work queued, and that work may still write buffers that newer requests use. The
+/// component reports each timeout with the stream it waited on; an event recorded there completes only after everything
+/// queued on that stream before it. Before using the GPU, the component polls without waiting. If the CUDA context has
+/// failed, or the event cannot be recorded, the work is never known to have finished and the component stays off the
+/// GPU.
+class cuda_gpu_wait_quarantine
+{
+public:
+  /// Result of a poll.
+  enum class state {
+    /// No timed-out work is pending: the component may use the GPU.
+    on_gpu,
+    /// Timed-out work is still pending: the component must not use the GPU.
+    off_gpu,
+    /// The last pending timed-out work has just finished: the component may use the GPU again.
+    back_on_gpu
+  };
+
+  cuda_gpu_wait_quarantine() = default;
+
+  ~cuda_gpu_wait_quarantine()
+  {
+    for (const pending_work& work : pending) {
+      cudaEventDestroy(work.event);
+    }
+  }
+
+  cuda_gpu_wait_quarantine(const cuda_gpu_wait_quarantine&)            = delete;
+  cuda_gpu_wait_quarantine& operator=(const cuda_gpu_wait_quarantine&) = delete;
+
+  /// \brief Takes the component off the GPU after a wait on \c stream timed out.
+  /// \return The number of timeouts reported so far, including this one.
+  unsigned on_wait_timeout(cudaStream_t stream)
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    ++nof_timeouts;
+    off_gpu = true;
+
+    // Reuse the event of the same stream, so that repeated timeouts on one stream take a single entry.
+    unsigned index = 0;
+    while ((index != pending.size()) && (pending[index].stream != stream)) {
+      ++index;
+    }
+    if (index == pending.size()) {
+      cudaEvent_t event = nullptr;
+      if (cudaEventCreateWithFlags(&event, cudaEventDisableTiming) != cudaSuccess) {
+        static_cast<void>(cudaGetLastError());
+        never_drains = true;
+        return nof_timeouts;
+      }
+      pending.push_back({stream, event});
+    }
+    if (cudaEventRecord(pending[index].event, stream) != cudaSuccess) {
+      static_cast<void>(cudaGetLastError());
+      never_drains = true;
+    }
+    return nof_timeouts;
+  }
+
+  /// Tells, without waiting, whether the component may use the GPU.
+  state poll()
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (!off_gpu) {
+      return state::on_gpu;
+    }
+    if (never_drains) {
+      return state::off_gpu;
+    }
+    for (const pending_work& work : pending) {
+      cudaError_t status = cudaEventQuery(work.event);
+      if (status == cudaErrorNotReady) {
+        return state::off_gpu;
+      }
+      if (status != cudaSuccess) {
+        // The context has failed: the queued work will never be known to have finished.
+        static_cast<void>(cudaGetLastError());
+        never_drains = true;
+        return state::off_gpu;
+      }
+    }
+    // The events stay allocated for later timeouts on the same streams.
+    off_gpu = false;
+    return state::back_on_gpu;
+  }
+
+  /// Gets the number of timeouts reported so far.
+  unsigned get_nof_timeouts() const
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    return nof_timeouts;
+  }
+
+private:
+  /// Timed-out work queued on a stream, marked by an event recorded behind it.
+  struct pending_work {
+    cudaStream_t stream;
+    cudaEvent_t  event;
+  };
+
+  mutable std::mutex        mutex;
+  std::vector<pending_work> pending;
+  unsigned                  nof_timeouts = 0;
+  bool                      off_gpu      = false;
+  bool                      never_drains = false;
+};
+
+/// Tells whether a timeout or drop count is worth logging: the first occurrence and whenever the count doubles.
+inline bool is_gpu_failure_count_logged(unsigned count)
+{
+  return (count != 0) && ((count & (count - 1)) == 0);
 }
 
 } // namespace ocudu

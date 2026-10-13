@@ -56,6 +56,9 @@ add_test(pusch_sinr_comparison_test pusch_sinr_comparison_test)
 # The test drives the GPU on CUDA builds. Serialise it with the other GPU tests, see
 # tests/unittests/phy/upper/channel_coding/ldpc/CMakeLists.txt.
 if (CUDA_ACCEL_FOUND)
+    # The GPU wait timeout case holds the demodulator stream behind a gate written through the CUDA driver API.
+    target_link_libraries(pusch_sinr_comparison_test CUDA::cudart CUDA::cuda_driver)
+    target_compile_definitions(pusch_sinr_comparison_test PRIVATE OCUDU_TEST_CUDA_STREAM_GATE)
     set_tests_properties(pusch_sinr_comparison_test PROPERTIES RESOURCE_LOCK ocudu_cuda_device)
 endif ()
 

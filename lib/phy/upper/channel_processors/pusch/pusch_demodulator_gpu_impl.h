@@ -12,6 +12,7 @@
 
 #pragma once
 
+#include "../../channel_coding/ldpc/cuda/cuda_rt_utils.h"
 #include "cuda/pusch_sch_llr_compactor.h"
 #include "ocudu/phy/generic_functions/transform_precoding/transform_precoder.h"
 #include "ocudu/phy/support/re_buffer.h"
@@ -84,8 +85,11 @@ public:
                   const dmrs_pusch_estimator_results& est_results,
                   const configuration&                config) override;
 
-  // See interface for documentation.
-  bool supports_resident_mode() const override { return gpu_available_; }
+  /// \brief Tells whether the GPU paths can be used.
+  ///
+  /// False when no GPU is available, and while the work of a GPU wait that timed out is still pending. In that case the
+  /// layer selector demodulates on the CPU, and the processor does not request the resident mode.
+  bool supports_resident_mode() const override { return gpu_available_ && is_gpu_usable(); }
 
   // See interface for documentation.
   void enable_resident_mode() override { gpu_resident_mode_ = true; }
@@ -135,6 +139,9 @@ public:
 
   /// \brief Check if GPU is available for demodulation.
   bool is_gpu_available() const { return gpu_available_; }
+
+  /// Gets the number of GPU waits that timed out.
+  unsigned get_nof_gpu_wait_timeouts() const { return gpu_wait_quarantine_.get_nof_timeouts(); }
 
   /// \brief Check if GPU-resident LLRs are valid (from last demodulation).
   bool has_gpu_resident_llrs() const { return gpu_llrs_valid_; }
@@ -424,6 +431,65 @@ private:
   /// Pre-allocated pinned host buffer for D2H LLR transfers (FP16 path).
   uint16_t* h_llrs_half_pinned_     = nullptr;
   size_t    h_llrs_half_pinned_cap_ = 0;
+
+  /// \brief Pinned staging of the CPU-equalized symbols and noise variances uploaded by the batch path.
+  ///
+  /// A copy from pageable memory can block until the stream drains. \c batch_upload_done_ marks the end of the last
+  /// upload, so that the host does not overwrite the staging while a copy still reads it.
+  cf_t*       h_batch_symbols_pinned_    = nullptr;
+  float*      h_batch_noise_vars_pinned_ = nullptr;
+  size_t      h_batch_pinned_capacity_   = 0;
+  cudaEvent_t batch_upload_done_         = nullptr;
+
+  /// Pinned staging of the SCH RE indices uploaded for device compaction, one per triple-buffer slot.
+  int*   h_sch_re_indices_pinned_[NUM_BUFFERS] = {nullptr, nullptr, nullptr};
+  size_t h_sch_re_indices_pinned_capacity_     = 0;
+
+  /// \brief Host grid memory already checked for page locking, by address.
+  ///
+  /// The grid upload copies straight from page-locked grids; a pageable grid goes through the pinned staging instead,
+  /// since a copy from pageable memory can block until the stream drains. Pooled grids are reused across slots, so the
+  /// check is cached.
+  struct pinned_memory_check {
+    const void* address = nullptr;
+    bool        pinned  = false;
+  };
+  std::array<pinned_memory_check, 16> pinned_memory_checks_     = {};
+  unsigned                            next_pinned_memory_check_ = 0;
+
+  /// Keeps the GPU paths unused after a GPU wait timed out, until the work that timed out has finished.
+  mutable cuda_gpu_wait_quarantine gpu_wait_quarantine_;
+
+  /// \brief Tells, without waiting, whether the GPU paths can be used.
+  ///
+  /// Logs once when the work of a timed-out wait has finished and the GPU paths are used again.
+  bool is_gpu_usable() const;
+
+  /// \brief Records a GPU wait on \c stream that timed out and takes the GPU paths out of use.
+  ///
+  /// Logs the first timeout and whenever the count doubles. \c stage names the wait for the log.
+  void on_gpu_wait_timeout(cudaStream_t stream, const char* stage) const;
+
+  /// \brief Handles the status of a GPU wait.
+  /// \return True if the wait completed, false if it timed out or failed. A timeout is recorded with
+  /// on_gpu_wait_timeout().
+  bool check_gpu_wait(cudaError_t status, cudaStream_t stream, const char* stage) const;
+
+  /// \brief Waits until the work that last used a triple-buffer slot has finished, so its host staging can be
+  /// rewritten.
+  /// \return False if the wait timed out or failed.
+  bool wait_for_buffer_slot(int buf_idx) const;
+
+  /// Tells whether \c address lies in page-locked host memory.
+  bool is_host_memory_pinned(const void* address);
+
+  /// Publishes erased soft bits for the resident UCI fields, so that their decoders report a failed decode.
+  void publish_erased_resident_uci();
+
+  /// \brief Writes \c nof_softbits erased soft bits to the codeword buffer.
+  ///
+  /// Used when the GPU did not produce the soft bits in time: the decoder then fails the CRC of every codeblock.
+  void write_erased_codeword(pusch_codeword_buffer& codeword_buffer, size_t nof_softbits);
 
   /// D2H copy tracking (single event for non-buffered path)
   cudaEvent_t d2h_event_ = nullptr;
