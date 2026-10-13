@@ -1,5 +1,6 @@
 #pragma once
 
+#include "apps/services/worker_manager/os_sched_affinity_manager.h"
 #include <chrono>
 #include <string>
 
@@ -24,6 +25,9 @@ struct aurora_appconfig {
   std::string thread_metrics_whitelist;
   /// Anomaly-injection TCP control server on 127.0.0.1:(47010 + ran_type).
   bool anomaly_enabled = true;
+  /// CPUs of the AURORA publisher thread ("aurora_reset"). Empty uses the main thread pool CPUs
+  /// (expert_execution.affinities.main_pool_cpus), so the publisher stays off the dedicated cores.
+  os_sched_affinity_bitmask cpus;
 };
 
 } // namespace app_services

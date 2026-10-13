@@ -1,5 +1,6 @@
 #include "aurora_config_cli11_schema.h"
 #include "aurora_appconfig.h"
+#include "apps/services/worker_manager/cli11_cpu_affinities_parser_helper.h"
 #include "ocudu/support/cli11_utils.h"
 
 using namespace ocudu;
@@ -41,4 +42,9 @@ void ocudu::app_services::configure_cli11_with_aurora_config_schema(CLI::App& ap
           "<512 chars"));
   add_option(*sub, "--anomaly_enabled", config.anomaly_enabled, "Enable the anomaly-injection TCP control server")
       ->capture_default_str();
+  add_option_function<std::string>(
+      *sub,
+      "--cpus",
+      [&config](const std::string& value) { parse_affinity_mask(config.cpus, value, "cpus"); },
+      "CPUs of the AURORA publisher thread. Default: the main thread pool CPUs");
 }

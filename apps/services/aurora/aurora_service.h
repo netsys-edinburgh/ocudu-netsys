@@ -12,7 +12,10 @@ class aurora_service
 public:
   /// \param cfg          Application "aurora" section.
   /// \param default_type RAN type of the application, used when cfg.ran_type is "auto".
-  aurora_service(const aurora_appconfig& cfg, aurora::ran_type default_type);
+  /// \param default_cpus CPUs of the publisher thread when cfg.cpus is empty, normally the main thread pool CPUs.
+  aurora_service(const aurora_appconfig&          cfg,
+                 aurora::ran_type                 default_type,
+                 const os_sched_affinity_bitmask& default_cpus = {});
   ~aurora_service();
   aurora_service(const aurora_service&)            = delete;
   aurora_service& operator=(const aurora_service&) = delete;
@@ -22,7 +25,9 @@ private:
 };
 
 /// Translates the application configuration into the AURORA library configuration.
-aurora::config to_aurora_config(const aurora_appconfig& cfg, aurora::ran_type default_type);
+aurora::config to_aurora_config(const aurora_appconfig&          cfg,
+                                aurora::ran_type                 default_type,
+                                const os_sched_affinity_bitmask& default_cpus = {});
 
 } // namespace app_services
 } // namespace ocudu

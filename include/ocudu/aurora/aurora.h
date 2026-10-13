@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace ocudu {
 namespace aurora {
@@ -45,6 +46,8 @@ struct config {
   std::string thread_metrics_whitelist;
   /// Anomaly-injection TCP control server (port defaults per role: 47010 + ran_type).
   bool anomaly_enabled = true;
+  /// CPUs the publisher thread ("aurora_reset") is pinned to. Empty leaves it unpinned.
+  std::vector<unsigned> cpus;
 };
 
 /// Default OCUDU thread whitelist (OS thread names created by worker_manager / io_broker / remote server).

@@ -321,7 +321,8 @@ int main(int argc, char** argv)
 
   // AURORA shared-memory metrics framework (+ anomaly injection). Started before the RAN units so that UE and
   // bearer creation hooks are observed.
-  app_services::aurora_service aurora_svc(cu_up_cfg.aurora_cfg, aurora::ran_type::cu_up);
+  app_services::aurora_service aurora_svc(
+      cu_up_cfg.aurora_cfg, aurora::ran_type::cu_up, worker_manager_cfg.main_pool_affinity_cfg.mask);
 
   // Create IO broker.
   const auto&                main_pool_cpu_mask = cu_up_cfg.expert_execution_cfg.affinities.main_pool_cpu_cfg.mask;

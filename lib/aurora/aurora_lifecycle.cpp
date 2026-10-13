@@ -32,9 +32,29 @@ std::condition_variable               stop_cv;
 bool                                  stop_requested = false;
 bool                                  thread_metrics_started = false;
 
-void publisher_loop(std::chrono::milliseconds period)
+/// Pins the calling thread to \p cpus. Not fatal: an invalid set only leaves the thread unpinned.
+void pin_current_thread(const std::vector<unsigned>& cpus)
+{
+  if (cpus.empty()) {
+    return;
+  }
+  ::cpu_set_t set;
+  CPU_ZERO(&set);
+  for (unsigned cpu : cpus) {
+    if (cpu < CPU_SETSIZE) {
+      CPU_SET(cpu, &set);
+    }
+  }
+  if (::pthread_setaffinity_np(::pthread_self(), sizeof(set), &set) != 0) {
+    std::fprintf(stderr, "AURORA: could not pin aurora_reset to its configured CPUs\n");
+  }
+}
+
+void publisher_loop(std::chrono::milliseconds period, std::vector<unsigned> cpus)
 {
   ::pthread_setname_np(::pthread_self(), "aurora_reset");
+  // OCUDU: keep the publisher off the cores of the latency-critical threads (e.g. dedicated layer workers).
+  pin_current_thread(cpus);
   auto next = std::chrono::steady_clock::now() + period;
   std::unique_lock<std::mutex> lock(stop_mutex);
   while (!stop_cv.wait_until(lock, next, [] { return stop_requested; })) {
@@ -162,7 +182,7 @@ int aurora::start(const config& cfg)
     stop_requested = false;
   }
   detail::active.store(true, std::memory_order_release);
-  publisher = std::thread(publisher_loop, cfg.collection_interval);
+  publisher = std::thread(publisher_loop, cfg.collection_interval, cfg.cpus);
 
   if (cfg.anomaly_enabled) {
     anomaly_module_config_t acfg{};

@@ -36,7 +36,9 @@ static aurora::thread_backend parse_backend(const std::string& s)
   return aurora::thread_backend::automatic;
 }
 
-aurora::config app_services::to_aurora_config(const aurora_appconfig& cfg, aurora::ran_type default_type)
+aurora::config app_services::to_aurora_config(const aurora_appconfig&          cfg,
+                                               aurora::ran_type                 default_type,
+                                               const os_sched_affinity_bitmask& default_cpus)
 {
   aurora::config out;
   out.enabled                  = cfg.enabled;
@@ -47,16 +49,21 @@ aurora::config app_services::to_aurora_config(const aurora_appconfig& cfg, auror
   out.thread_metrics_backend   = parse_backend(cfg.thread_metrics_backend);
   out.thread_metrics_whitelist = cfg.thread_metrics_whitelist;
   out.anomaly_enabled          = cfg.anomaly_enabled;
+  for (size_t cpu : (cfg.cpus.any() ? cfg.cpus : default_cpus).get_cpu_ids()) {
+    out.cpus.push_back(static_cast<unsigned>(cpu));
+  }
   return out;
 }
 
-aurora_service::aurora_service(const aurora_appconfig& cfg, aurora::ran_type default_type)
+aurora_service::aurora_service(const aurora_appconfig&          cfg,
+                               aurora::ran_type                 default_type,
+                               const os_sched_affinity_bitmask& default_cpus)
 {
   if (!cfg.enabled) {
     return;
   }
   ocudulog::basic_logger& logger = ocudulog::fetch_basic_logger("ALL");
-  if (aurora::start(to_aurora_config(cfg, default_type)) != 0) {
+  if (aurora::start(to_aurora_config(cfg, default_type, default_cpus)) != 0) {
     logger.error("AURORA: failed to start (shm_key={})", cfg.shm_key);
     return;
   }
