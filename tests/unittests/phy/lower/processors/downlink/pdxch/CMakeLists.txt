@@ -12,11 +12,15 @@ add_test(pdxch_processor_test pdxch_processor_test)
 if(CUDA_ACCEL_FOUND)
     add_executable(pdxch_baseband_modulator_cuda_test pdxch_baseband_modulator_cuda_test.cpp)
     target_include_directories(pdxch_baseband_modulator_cuda_test PRIVATE
-            ${PROJECT_SOURCE_DIR}/lib/phy/lower/processors/downlink/pdxch)
+            ${PROJECT_SOURCE_DIR}/lib/phy/lower/processors/downlink/pdxch
+            ${PROJECT_SOURCE_DIR}/lib/phy/upper)
     target_link_libraries(pdxch_baseband_modulator_cuda_test
             ocudu_lower_phy_pdxch_processor
-            ocudu_dft
+            ocudu_lower_phy_modulation
+            ocudu_upper_phy
+            ocudu_ran
             ocudulog
+            CUDA::cudart
             GTest::gtest
             GTest::gtest_main)
     add_test(pdxch_baseband_modulator_cuda_test pdxch_baseband_modulator_cuda_test)

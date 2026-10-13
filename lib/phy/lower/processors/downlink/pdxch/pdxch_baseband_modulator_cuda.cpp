@@ -6,6 +6,7 @@
 #include "lib/phy/lower/modulation/phase_compensation_lut.h"
 #include "low_phy_tx.h"
 #include "pdxch_baseband_modulator_accelerator.h"
+#include "ocudu/adt/static_vector.h"
 #include "ocudu/ocudulog/ocudulog.h"
 #include "ocudu/ran/resource_block.h"
 #include <algorithm>
@@ -15,12 +16,16 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <optional>
+#include <vector>
 
 using namespace ocudu;
 
 namespace {
 
 static_assert(sizeof(cbf16_t) == sizeof(uint32_t), "CUDA low-PHY TX expects packed complex BF16 resource elements.");
+static_assert(pdxch_cuda_max_nof_beams_per_slot == OCUDU_LOWPHY_TX_MAX_BEAMS,
+              "The documented beam limit must match the CUDA low-PHY TX one.");
 
 std::atomic<bool> logged_lowphy_tx_device_grid_path{false};
 std::atomic<bool> logged_lowphy_tx_host_grid_path{false};
@@ -82,9 +87,15 @@ public:
       return false;
     }
 
+    // Without a supported beam selection the slot is left to the software modulator.
+    std::optional<beam_selection> beams = select_beams(grid);
+    if (!beams.has_value()) {
+      return false;
+    }
+
     update_phase_table_if_needed();
 
-    ocudu_lowphy_tx_config_t cfg = make_config(i_symbol_sf_begin, symbol_sizes_sf);
+    ocudu_lowphy_tx_config_t cfg = make_config(i_symbol_sf_begin, symbol_sizes_sf, *beams);
 
     if (!ensure_handle(cfg)) {
       return false;
@@ -124,18 +135,21 @@ public:
       return false;
     }
 
-    const void* host_grid = get_contiguous_host_grid(grid);
-    if (host_grid == nullptr) {
-      if (!logged_lowphy_tx_unavailable_path.exchange(true)) {
-        ocudulog::fetch_basic_logger("PHY").warning(
-            "Lower-PHY TX GPU path unavailable: downlink resource grid is not contiguous for host-grid staging.");
+    std::array<const void*, OCUDU_LOWPHY_TX_MAX_BEAMS> beam_grids = {};
+    for (unsigned i_beam = 0, i_beam_end = beams->grid_ports.size(); i_beam != i_beam_end; ++i_beam) {
+      beam_grids[i_beam] = get_contiguous_host_port(grid, beams->grid_ports[i_beam]);
+      if (beam_grids[i_beam] == nullptr) {
+        if (!logged_lowphy_tx_unavailable_path.exchange(true)) {
+          ocudulog::fetch_basic_logger("PHY").warning(
+              "Lower-PHY TX GPU path unavailable: downlink resource grid is not contiguous for host-grid staging.");
+        }
+        return false;
       }
-      return false;
     }
     if (!logged_lowphy_tx_host_grid_path.exchange(true)) {
       ocudulog::fetch_basic_logger("PHY").info("Lower-PHY TX GPU path selected: host resource-grid staging fallback.");
     }
-    return ocudu_lowphy_tx_process_host_grid(handle, host_grid, output_ports.data(), stream) != 0;
+    return ocudu_lowphy_tx_process_host_beams(handle, beam_grids.data(), output_ports.data(), stream) != 0;
   }
 
   bool wait() override { return (handle != nullptr) && (ocudu_lowphy_tx_synchronize(handle) != 0); }
@@ -167,8 +181,103 @@ public:
     next_center_freq_Hz.store(center_freq_Hz_, std::memory_order_relaxed);
   }
 
+  bool set_beam_weights(const beam_weights_codebook& codebook) override
+  {
+    if ((codebook.get_nof_antennas() != nof_ports) || (nof_ports > OCUDU_LOWPHY_TX_MAX_PORTS) ||
+        (codebook.get_nof_beams() == 0)) {
+      return false;
+    }
+
+    nof_codebook_beams = codebook.get_nof_beams();
+    codebook_weights.resize(static_cast<size_t>(nof_ports) * nof_codebook_beams);
+    for (unsigned i_antenna = 0; i_antenna != nof_ports; ++i_antenna) {
+      span<const cf_t> antenna_weights = codebook.get_antenna_coefficients(i_antenna);
+      std::copy(
+          antenna_weights.begin(), antenna_weights.end(), codebook_weights.begin() + i_antenna * nof_codebook_beams);
+    }
+
+    // Beams that do not reach any antenna port never need to be read.
+    beam_is_used.assign(nof_codebook_beams, false);
+    for (unsigned i_beam = 0; i_beam != nof_codebook_beams; ++i_beam) {
+      for (unsigned i_antenna = 0; i_antenna != nof_ports; ++i_antenna) {
+        beam_is_used[i_beam] = beam_is_used[i_beam] || (get_weight(i_antenna, i_beam) != cf_t());
+      }
+    }
+
+    // The identity codebook maps grid port i to antenna port i, which the kernel does without weighting.
+    direct_mapping = (nof_codebook_beams == nof_ports);
+    for (unsigned i_antenna = 0; direct_mapping && (i_antenna != nof_ports); ++i_antenna) {
+      for (unsigned i_beam = 0; i_beam != nof_codebook_beams; ++i_beam) {
+        direct_mapping = direct_mapping && (get_weight(i_antenna, i_beam) == cf_t((i_beam == i_antenna) ? 1.0F : 0.0F));
+      }
+    }
+    return true;
+  }
+
 private:
-  ocudu_lowphy_tx_config_t make_config(unsigned i_symbol_sf_begin, span<const unsigned> symbol_sizes_sf)
+  /// Resource grid ports, i.e. beams, that the GPU reads for a slot.
+  struct beam_selection {
+    /// True if grid port i feeds antenna port i without weighting.
+    bool direct = true;
+    /// Grid ports read for the slot, in beam order.
+    static_vector<unsigned, OCUDU_LOWPHY_TX_MAX_BEAMS> grid_ports;
+  };
+
+  /// Gets the codebook weight of a beam on an antenna port.
+  cf_t get_weight(unsigned i_antenna, unsigned i_beam) const
+  {
+    return codebook_weights[i_antenna * nof_codebook_beams + i_beam];
+  }
+
+  /// \brief Selects the beams the GPU reads for the slot held by \c grid.
+  ///
+  /// A codebook with no more beams than the GPU combines is mapped whole, so the configuration does not change from
+  /// slot to slot. A larger one is reduced to the beams that carry data in the slot and reach an antenna port.
+  ///
+  /// \return The selected beams, or nothing if the slot uses more beams than the GPU combines.
+  std::optional<beam_selection> select_beams(const resource_grid_reader& grid) const
+  {
+    beam_selection selection;
+    if (codebook_weights.empty() || direct_mapping) {
+      for (unsigned i_port = 0; i_port != nof_ports; ++i_port) {
+        selection.grid_ports.push_back(i_port);
+      }
+      return selection;
+    }
+
+    selection.direct = false;
+    if (nof_codebook_beams <= OCUDU_LOWPHY_TX_MAX_BEAMS) {
+      for (unsigned i_beam = 0; i_beam != nof_codebook_beams; ++i_beam) {
+        selection.grid_ports.push_back(i_beam);
+      }
+      return selection;
+    }
+
+    for (unsigned i_beam = 0; i_beam != nof_codebook_beams; ++i_beam) {
+      if (!beam_is_used[i_beam] || !has_allocation(grid, i_beam)) {
+        continue;
+      }
+      if (selection.grid_ports.full()) {
+        return std::nullopt;
+      }
+      selection.grid_ports.push_back(i_beam);
+    }
+    return selection;
+  }
+
+  /// Determines whether any symbol of the slot carries data in the given grid port.
+  bool has_allocation(const resource_grid_reader& grid, unsigned port) const
+  {
+    for (unsigned i_symbol = 0; i_symbol != nof_symbols_per_slot; ++i_symbol) {
+      if (!grid.get_allocation_range(port, i_symbol).empty()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  ocudu_lowphy_tx_config_t
+  make_config(unsigned i_symbol_sf_begin, span<const unsigned> symbol_sizes_sf, const beam_selection& beams)
   {
     ocudu_lowphy_tx_config_t cfg = {};
     cfg.dft_size                 = dft_size;
@@ -181,6 +290,19 @@ private:
     cfg.amplitude_gain   = dB_to_amplitude(modulator_gain_dB);
     cfg.clipping_enabled = 0;
     cfg.clipping_ceiling = 0.0F;
+    if (!beams.direct) {
+      unsigned nof_beams = beams.grid_ports.size();
+      cfg.nof_beams      = nof_beams;
+      for (unsigned i_beam = 0; i_beam != nof_beams; ++i_beam) {
+        unsigned grid_port          = beams.grid_ports[i_beam];
+        cfg.beam_grid_ports[i_beam] = grid_port;
+        for (unsigned i_antenna = 0; i_antenna != nof_ports; ++i_antenna) {
+          cf_t weight                                         = get_weight(i_antenna, grid_port);
+          cfg.beam_weights_re[i_antenna * nof_beams + i_beam] = weight.real();
+          cfg.beam_weights_im[i_antenna * nof_beams + i_beam] = weight.imag();
+        }
+      }
+    }
 
     unsigned sample_offset = 0;
     for (unsigned i_symbol = 0; i_symbol != nof_symbols_per_slot; ++i_symbol) {
@@ -205,7 +327,8 @@ private:
       initial_symbol_sizes[i_symbol] = dft_size + cp_len;
     }
     span<const unsigned>     symbol_sizes(initial_symbol_sizes.data(), nof_symbols_per_slot);
-    ocudu_lowphy_tx_config_t cfg = make_config(0, symbol_sizes);
+    // Until the codebook is set, the grid ports map onto the antenna ports.
+    ocudu_lowphy_tx_config_t cfg = make_config(0, symbol_sizes, beam_selection{});
     if (handle == nullptr) {
       (void)ocudu_lowphy_tx_create(&cfg, &handle);
     }
@@ -228,32 +351,37 @@ private:
     return ocudu_lowphy_tx_update_config(handle, &cfg) != 0;
   }
 
-  const void* get_contiguous_host_grid(const resource_grid_reader& grid) const
+  /// Gets the symbols of a grid port if they are contiguous in host memory, otherwise \c nullptr.
+  const void* get_contiguous_host_port(const resource_grid_reader& grid, unsigned port) const
   {
-    span<const cbf16_t> base = grid.get_view(0, 0);
+    span<const cbf16_t> base = grid.get_view(port, 0);
     if ((base.data() == nullptr) || (base.size() != rg_size)) {
       return nullptr;
     }
 
-    const cbf16_t* base_ptr = base.data();
-    for (unsigned port = 0; port != nof_ports; ++port) {
-      for (unsigned symbol = 0; symbol != nof_symbols_per_slot; ++symbol) {
-        span<const cbf16_t> view     = grid.get_view(port, symbol);
-        const cbf16_t*      expected = base_ptr + (static_cast<size_t>(port) * nof_symbols_per_slot + symbol) * rg_size;
-        if ((view.data() != expected) || (view.size() != rg_size)) {
-          return nullptr;
-        }
+    for (unsigned symbol = 1; symbol != nof_symbols_per_slot; ++symbol) {
+      span<const cbf16_t> view = grid.get_view(port, symbol);
+      if ((view.data() != base.data() + static_cast<size_t>(symbol) * rg_size) || (view.size() != rg_size)) {
+        return nullptr;
       }
     }
-    return base_ptr;
+    return base.data();
   }
 
-  subcarrier_spacing        scs;
-  cyclic_prefix             cp;
-  sampling_rate             srate;
-  unsigned                  bandwidth_rb;
-  double                    center_freq_Hz;
-  unsigned                  nof_ports;
+  subcarrier_spacing scs;
+  cyclic_prefix      cp;
+  sampling_rate      srate;
+  unsigned           bandwidth_rb;
+  double             center_freq_Hz;
+  unsigned           nof_ports;
+  /// Number of beams in the codebook, i.e. resource grid ports.
+  unsigned nof_codebook_beams = 0;
+  /// Codebook weights, antenna major. Empty until the codebook is set, which maps grid port i to antenna port i.
+  std::vector<cf_t> codebook_weights;
+  /// Flags, for each beam, whether the codebook maps it onto any antenna port.
+  std::vector<bool> beam_is_used;
+  /// True if the codebook is the identity.
+  bool                      direct_mapping = true;
   unsigned                  nof_symbols_per_slot;
   unsigned                  dft_size;
   unsigned                  rg_size;

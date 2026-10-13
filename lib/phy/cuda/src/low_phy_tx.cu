@@ -7,6 +7,7 @@
 #include "low_phy_tx.h"
 
 #include <algorithm>
+#include <array>
 #include <cuda_runtime.h>
 #include <cuComplex.h>
 #include <cuda.h>
@@ -40,6 +41,45 @@ struct tx_postprocess_config {
     float  clipping_ceiling;
     int    clipping_enabled;
 };
+
+// Beam combining applied when the IFFT input is built. Antenna port a takes the sum over the beams b of
+// weights[a * nof_beams + b] times the resource grid port grid_ports[b].
+struct tx_beam_map {
+    float2 weights[OCUDU_LOWPHY_TX_MAX_PORTS * OCUDU_LOWPHY_TX_MAX_BEAMS];
+    int    grid_ports[OCUDU_LOWPHY_TX_MAX_BEAMS];
+    int    nof_beams;
+    // Antenna port a takes grid port a unchanged; the other fields are not used.
+    int    direct;
+};
+
+// Number of resource grid ports the handle reads per slot: one per beam, or one per antenna port without beamforming.
+static int get_nof_grid_beams(const ocudu_lowphy_tx_config_t& cfg)
+{
+    return (cfg.nof_beams > 0) ? cfg.nof_beams : cfg.nof_ports;
+}
+
+// Builds the beam map of a configuration. A staged grid holds the beams contiguously in beam order, so beam b reads
+// grid port b instead of the configured one.
+static tx_beam_map make_beam_map(const ocudu_lowphy_tx_config_t& cfg, bool staged_grid)
+{
+    tx_beam_map out = {};
+    out.direct      = (cfg.nof_beams == 0) ? 1 : 0;
+    out.nof_beams   = get_nof_grid_beams(cfg);
+    if (out.direct) {
+        return out;
+    }
+
+    for (int beam = 0; beam != cfg.nof_beams; ++beam) {
+        out.grid_ports[beam] = staged_grid ? beam : cfg.beam_grid_ports[beam];
+    }
+    for (int antenna = 0; antenna != cfg.nof_ports; ++antenna) {
+        for (int beam = 0; beam != cfg.nof_beams; ++beam) {
+            int i_weight          = antenna * cfg.nof_beams + beam;
+            out.weights[i_weight] = make_float2(cfg.beam_weights_re[i_weight], cfg.beam_weights_im[i_weight]);
+        }
+    }
+    return out;
+}
 
 static bool check_cuda (cudaError_t err) {
     return err == cudaSuccess;
@@ -116,7 +156,8 @@ __global__ void prepare_ifft_input_kernel(cuFloatComplex* __restrict__ d_freq,
                                           int                         rg_size,
                                           int                         nof_symbols,
                                           int                         nof_subc,
-                                          int                         nof_batches)
+                                          int                         nof_batches,
+                                          tx_beam_map                 beams)
 {
     int idx       = blockIdx.x * blockDim.x + threadIdx.x;
     int total_res = nof_batches * dft_size;
@@ -139,8 +180,21 @@ __global__ void prepare_ifft_input_kernel(cuFloatComplex* __restrict__ d_freq,
 
     cuFloatComplex value = make_cuFloatComplex(0.0F, 0.0F);
     if (grid_k >= 0) {
-        int grid_idx = (port * nof_symbols + sym) * nof_subc + grid_k;
-        value        = cbf16_to_cu(d_grid[grid_idx]);
+        if (beams.direct) {
+            int grid_idx = (port * nof_symbols + sym) * nof_subc + grid_k;
+            value        = cbf16_to_cu(d_grid[grid_idx]);
+        } else {
+            // Here port is the antenna port; combine the beams the same way as the software modulator.
+            for (int beam = 0; beam != beams.nof_beams; ++beam) {
+                float2 weight = beams.weights[port * beams.nof_beams + beam];
+                if ((weight.x == 0.0F) && (weight.y == 0.0F)) {
+                    continue;
+                }
+                int            grid_idx = (beams.grid_ports[beam] * nof_symbols + sym) * nof_subc + grid_k;
+                cuFloatComplex re       = cbf16_to_cu(d_grid[grid_idx]);
+                value = cuCfmaf(make_cuFloatComplex(weight.x, weight.y), re, value);
+            }
+        }
     }
     d_freq[batch * dft_size + freq_k] = value;
 }
@@ -454,6 +508,14 @@ static bool validate_config(const ocudu_lowphy_tx_config_t& cfg)
         (cfg.nof_symbols <= 0) || (cfg.nof_samples <= 0)) {
         return false;
     }
+    if ((cfg.nof_beams < 0) || (cfg.nof_beams > OCUDU_LOWPHY_TX_MAX_BEAMS)) {
+        return false;
+    }
+    for (int beam = 0; beam != cfg.nof_beams; ++beam) {
+        if (cfg.beam_grid_ports[beam] < 0) {
+            return false;
+        }
+    }
     if ((cfg.nof_ports > OCUDU_LOWPHY_TX_MAX_PORTS) ||
         (cfg.nof_symbols > OCUDU_LOWPHY_TX_MAX_SYMBOLS) ||
         (cfg.rg_size > cfg.dft_size) || ((cfg.rg_size % 2) != 0)) {
@@ -521,7 +583,8 @@ static bool ensure_buffers(ocudu_lowphy_tx_handle* h)
 {
     size_t batches      = static_cast<size_t>(h->cfg.nof_ports) * h->cfg.nof_symbols;
     size_t freq_count   = batches * h->cfg.dft_size;
-    size_t grid_count   = batches * h->cfg.rg_size;
+    // The grid holds one port per beam, which may differ from the number of antenna ports.
+    size_t grid_count   = static_cast<size_t>(get_nof_grid_beams(h->cfg)) * h->cfg.nof_symbols * h->cfg.rg_size;
     size_t output_i16   = static_cast<size_t>(h->cfg.nof_ports) * h->cfg.nof_samples * 2U;
 
     if ((h->d_freq_count == freq_count) && (h->d_grid_count == grid_count) && (h->d_output_i16 == output_i16) &&
@@ -621,7 +684,8 @@ static bool enqueue_device_path_uncaptured(ocudu_lowphy_tx_handle* h, const void
                                                                       h->cfg.rg_size,
                                                                       h->cfg.nof_symbols,
                                                                       h->cfg.rg_size,
-                                                                      batches);
+                                                                      batches,
+                                                                      make_beam_map(h->cfg, d_grid_cbf16 == h->d_grid_stage));
     if (!check_cuda(cudaGetLastError())) {
         return false;
     }
@@ -978,28 +1042,60 @@ int ocudu_lowphy_tx_process_host_grid(ocudu_lowphy_tx_handle_t* handle,
         return 0;
     }
 
+    // A contiguous grid can be copied straight from registered host memory.
     size_t grid_bytes = handle->d_grid_count * sizeof(uint32_t);
     if (runtime_host_registration_enabled() && register_host_range(handle, h_grid_cbf16, grid_bytes)) {
         if (!check_cuda(cudaMemcpyAsync(
                 handle->d_grid_stage, h_grid_cbf16, grid_bytes, cudaMemcpyHostToDevice, handle->stream))) {
             return 0;
         }
-    } else {
-        int grid_slot = -1;
-        uint32_t* h_grid_staging = acquire_grid_staging_slot(handle, &grid_slot);
-        if ((h_grid_staging == nullptr) || (grid_slot < 0)) {
-            return 0;
-        }
-        std::memcpy(h_grid_staging, h_grid_cbf16, grid_bytes);
-        if (!check_cuda(cudaMemcpyAsync(
-                handle->d_grid_stage, h_grid_staging, grid_bytes, cudaMemcpyHostToDevice, handle->stream))) {
-            return 0;
-        }
-        if (!check_cuda(cudaEventRecord(handle->h_grid_ready_events[grid_slot], handle->stream))) {
-            return 0;
-        }
-        handle->h_grid_event_recorded[grid_slot] = true;
+        return process_device_grid(handle, handle->d_grid_stage, h_output_ports) ? 1 : 0;
     }
+
+    std::array<const void*, OCUDU_LOWPHY_TX_MAX_BEAMS> beam_grids = {};
+    size_t beam_bytes = static_cast<size_t>(handle->cfg.nof_symbols) * handle->cfg.rg_size * sizeof(uint32_t);
+    for (int beam = 0, nof_beams = get_nof_grid_beams(handle->cfg); beam != nof_beams; ++beam) {
+        beam_grids[beam] = static_cast<const uint8_t*>(h_grid_cbf16) + beam * beam_bytes;
+    }
+    return ocudu_lowphy_tx_process_host_beams(handle, beam_grids.data(), h_output_ports, external_stream);
+}
+
+int ocudu_lowphy_tx_process_host_beams(ocudu_lowphy_tx_handle_t* handle,
+                                       const void* const*        h_beam_grids,
+                                       void* const*              h_output_ports,
+                                       void*                     external_stream)
+{
+    if ((handle == nullptr) || (h_beam_grids == nullptr)) {
+        return 0;
+    }
+    handle->stream = (external_stream != nullptr) ? static_cast<cudaStream_t>(external_stream) : handle->owned_stream;
+    if (!flush_pending_output(handle, true) || !ensure_buffers(handle)) {
+        return 0;
+    }
+
+    // Gather the beams into a pinned staging slot, in beam order, and upload them in a single copy.
+    int       grid_slot      = -1;
+    uint32_t* h_grid_staging = acquire_grid_staging_slot(handle, &grid_slot);
+    if ((h_grid_staging == nullptr) || (grid_slot < 0)) {
+        return 0;
+    }
+    size_t beam_count = static_cast<size_t>(handle->cfg.nof_symbols) * handle->cfg.rg_size;
+    for (int beam = 0, nof_beams = get_nof_grid_beams(handle->cfg); beam != nof_beams; ++beam) {
+        if (h_beam_grids[beam] == nullptr) {
+            return 0;
+        }
+        std::memcpy(h_grid_staging + beam * beam_count, h_beam_grids[beam], beam_count * sizeof(uint32_t));
+    }
+
+    size_t grid_bytes = handle->d_grid_count * sizeof(uint32_t);
+    if (!check_cuda(cudaMemcpyAsync(
+            handle->d_grid_stage, h_grid_staging, grid_bytes, cudaMemcpyHostToDevice, handle->stream))) {
+        return 0;
+    }
+    if (!check_cuda(cudaEventRecord(handle->h_grid_ready_events[grid_slot], handle->stream))) {
+        return 0;
+    }
+    handle->h_grid_event_recorded[grid_slot] = true;
     return process_device_grid(handle, handle->d_grid_stage, h_output_ports) ? 1 : 0;
 }
 

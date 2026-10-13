@@ -9,6 +9,7 @@
 #include "ocudu/gateways/baseband/buffer/baseband_gateway_buffer_dynamic.h"
 #include "ocudu/phy/lower/sampling_rate.h"
 #include "ocudu/phy/support/resource_grid_reader.h"
+#include "ocudu/ran/beamforming/beam_weights_codebook.h"
 #include "ocudu/ran/cyclic_prefix.h"
 #include "ocudu/ran/subcarrier_spacing.h"
 #include <memory>
@@ -45,7 +46,21 @@ public:
 
   /// Updates the carrier center frequency used by phase compensation.
   virtual void set_center_frequency(double) {}
+
+  /// \brief Sets the beamforming weights that map the resource grid ports, i.e. the beams, onto the antenna ports.
+  ///
+  /// It must be called before the first submission. Antenna port \f$a\f$ transmits the sum over the beams \f$b\f$ of
+  /// the codebook coefficient for \f$(b, a)\f$ times the grid port \f$b\f$, as the software modulator does.
+  ///
+  /// \return True if the accelerator supports the codebook, otherwise false.
+  virtual bool set_beam_weights(const beam_weights_codebook& codebook) = 0;
 };
+
+/// \brief Maximum number of beams the CUDA accelerator combines in a slot.
+///
+/// A codebook with more beams is supported as long as each slot carries data in at most this many of them; other
+/// slots are declined and left to the software modulator.
+inline constexpr unsigned pdxch_cuda_max_nof_beams_per_slot = 16;
 
 /// Creates a CUDA-backed PDxCH baseband modulator accelerator.
 std::unique_ptr<pdxch_baseband_modulator_accelerator>

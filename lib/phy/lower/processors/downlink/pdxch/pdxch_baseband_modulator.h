@@ -48,10 +48,9 @@ public:
   /// \param[in] beamforming_codebook_  Beamfoming coefficient codebook. It determines the number of antenna ports and
   ///                                   beams.
   /// \param[in] notifier_              Reference to the interface for notifying the completion of the processing.
-  /// \param[in] accelerator_           Optional full-slot accelerator. It is only used when the beamforming codebook
-  ///                                   maps each beam to the antenna port of the same index with unit weight, the
-  ///                                   only mapping it implements; otherwise the slots are modulated per symbol and
-  ///                                   port.
+  /// \param[in] accelerator_           Optional full-slot accelerator. It is used if it supports the beamforming
+  ///                                   codebook (see pdxch_baseband_modulator_accelerator::set_beam_weights()); the
+  ///                                   slots it declines are modulated per symbol and port.
   pdxch_baseband_modulator(subcarrier_spacing                                    scs,
                            cyclic_prefix                                         cp,
                            sampling_rate                                         srate,
@@ -70,8 +69,11 @@ public:
     notifier(notifier_),
     accelerator(std::move(accelerator_))
   {
-    if (accelerator && !is_identity_codebook(beamforming_codebook)) {
-      logger.info("Accelerated PDxCH modulation disabled: the beamforming codebook is not the identity.");
+    if (accelerator && !accelerator->set_beam_weights(beamforming_codebook)) {
+      logger.info("Accelerated PDxCH modulation disabled: the accelerator does not support the beamforming codebook of "
+                  "{} beams and {} antennas.",
+                  nof_beams,
+                  nof_ports);
       accelerator.reset();
     }
 
@@ -289,24 +291,6 @@ private:
 
     // Notify completion of the OFDM modulation.
     notifier.on_modulation_completion(std::move(this_buffer), this_context);
-  }
-
-  /// Returns true if the codebook maps each beam to the antenna port of the same index with unit weight.
-  static bool is_identity_codebook(const beam_weights_codebook& codebook)
-  {
-    unsigned nof_antennas = codebook.get_nof_antennas();
-    if (codebook.get_nof_beams() != nof_antennas) {
-      return false;
-    }
-    for (unsigned i_antenna = 0; i_antenna != nof_antennas; ++i_antenna) {
-      span<const cf_t> weights = codebook.get_antenna_coefficients(i_antenna);
-      for (unsigned i_beam = 0; i_beam != weights.size(); ++i_beam) {
-        if (weights[i_beam] != ((i_beam == i_antenna) ? cf_t(1.0F, 0.0F) : cf_t())) {
-          return false;
-        }
-      }
-    }
-    return true;
   }
 
   /// State value for when the modulator is not processing any transmisson request.
