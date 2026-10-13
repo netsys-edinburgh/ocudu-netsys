@@ -1,0 +1,34 @@
+# Dedicated layer workers configuration section.
+
+# This is a supplementary configuration file that runs the MAC scheduler, PDCP and CU-CP on dedicated, named threads
+# instead of on strands of the main thread pool. Combine it with a base configuration, e.g.:
+#   sudo ./gnb -c gnb_rf_b200_tdd_n78_20mhz.yml -c dedicated_layer_workers.yml
+#
+# Each application only accepts the options of the layers it runs:
+#   gnb:   mac_sched, pdcp, cu_cp
+#   du:    mac_sched
+#   cu:    pdcp, cu_cp
+#   cu_up: pdcp
+#   cu_cp: cu_cp
+#
+# Thread names and OS priorities (SCHED_FIFO):
+#   mac_sched#<cell>  max - 1  Replaces the per-cell strand of the real-time queue (slot indications, MAC, lower RLC).
+#   pdcp              max - 2  Replaces the CU-UP strand (CU-UP control, UE UL and UE DL). Ciphering stays on the pool.
+#   cu_cp             max - 2  Replaces the CU-CP strand (SRB PDCP included).
+#
+# Without a CPU affinity a worker uses the main thread pool CPUs. Give each worker CPUs outside main_pool_cpus, as a
+# worker sharing CPUs with the main thread pool competes with the pool workers for them.
+
+expert_execution:
+  affinities:
+    main_pool_cpus: 2-7
+    mac_sched_cpus: [8]   # One entry per cell.
+    pdcp_cpus: 9
+    cu_cp_cpus: 10
+  threads:
+    mac_sched:
+      enable: true
+    pdcp:
+      enable: true
+    cu_cp:
+      enable: true
