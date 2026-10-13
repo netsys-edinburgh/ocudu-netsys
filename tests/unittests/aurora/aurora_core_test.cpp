@@ -251,7 +251,10 @@ TEST_F(aurora_core_test, cross_ue_aggregates_kpm_and_rc_cell)
   EXPECT_EQ(r.kpm_metrics[5].value, 50U);
   EXPECT_DOUBLE_EQ(r.kpm_metrics[7].value_real, 10.0);
   EXPECT_DOUBLE_EQ(r.kpm_metrics[11].value_real, -80.0);
-  EXPECT_EQ(r.kpm_metrics[13].value, 50U);
+  // RRU.PrbTotDl is the DL PRB usage in percent (3GPP TS 28.552), CARR.PRBUsageDl the PRB count.
+  EXPECT_STREQ(r.kpm_metrics[13].name, "RRU.PrbTotDl");
+  EXPECT_EQ(r.kpm_metrics[13].value_type, 1U);
+  EXPECT_DOUBLE_EQ(r.kpm_metrics[13].value_real, 50.0);
   EXPECT_STREQ(r.kpm_metrics[15].name, "L1M.UL-dtxRatio");
 
   EXPECT_EQ(r.rc_cell_count, 1U);
@@ -260,6 +263,27 @@ TEST_F(aurora_core_test, cross_ue_aggregates_kpm_and_rc_cell)
   EXPECT_DOUBLE_EQ(r.rc_metrics[0].sinr_avg, 20.0);
   EXPECT_EQ(r.rc_metrics[0].interference_level, 0U);
   EXPECT_EQ(r.rc_metrics[0].cell_load_percent, 50U);
+}
+
+TEST_F(aurora_core_test, rc_cell_load_is_rounded_and_interference_unknown_without_ues)
+{
+  // No active UE: no SINR to derive the interference level from.
+  on_scheduler_slot(1, std::chrono::microseconds{10}, 50, true, false);
+  const aurora_metrics& idle = publish();
+  EXPECT_EQ(idle.rc_metrics[0].interference_level, 3U);
+  EXPECT_EQ(idle.rc_metrics[0].cell_load_percent, 0U);
+
+  // 3 PRBs used out of 50 PRBs x 10 DL slots = 0.6 %, which rounds to 1 %.
+  on_ue_created(0, 0x4600);
+  on_ul_crc(0, 0x4600, true, 25.0F);
+  on_pdsch_grant(make_grant(0, 0x4600, 10, 3, 100));
+  for (unsigned i = 0; i != 10; ++i) {
+    on_scheduler_slot(1, std::chrono::microseconds{10}, 50, true, false);
+  }
+  const aurora_metrics& light = publish();
+  EXPECT_FLOAT_EQ(light.dl_prb_utilization_pct, 0.6F);
+  EXPECT_EQ(light.rc_metrics[0].cell_load_percent, 1U);
+  EXPECT_EQ(light.rc_metrics[0].interference_level, 0U);
 }
 
 TEST_F(aurora_core_test, ue_removal_frees_slot)

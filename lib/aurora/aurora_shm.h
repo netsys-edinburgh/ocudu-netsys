@@ -99,8 +99,8 @@ typedef struct {
     uint32_t handover_attempts;
     uint32_t handover_success;
     double   handover_success_rate;// 0.0–1.0
-    uint32_t cell_load_percent;    // total DL PRBs / max PRBs × 100
-    uint32_t interference_level;   // 0=low 1=medium 2=high (derived from SINR)
+    uint32_t cell_load_percent;    // total DL PRBs / max PRBs × 100, rounded
+    uint32_t interference_level;   // 0=low 1=medium 2=high (derived from SINR), 3=unknown (no active UE)
 } aurora_rc_stats_t;
 
 typedef enum {

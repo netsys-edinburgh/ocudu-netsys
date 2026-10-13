@@ -12,6 +12,7 @@
 #include "aurora_state.h"
 #include <cstring>
 #include <algorithm>
+#include <cmath>
 #include <ctime>
 #include <sys/resource.h>
 
@@ -515,8 +516,10 @@ void publish_aggregates(aurora_metrics& m,
   set_kpm(k[10], 11, "L1M.UL-sinrAvg", true, 0, sinr_avg);
   set_kpm(k[11], 12, "L1M.DL-rsrpAvg", true, 0, rsrp_avg);
   set_kpm(k[12], 13, "DRB.RlcPacketDropRateDl", true, 0, rlc_tx != 0 ? double(rlc_dd) / double(rlc_tx) : 0);
-  set_kpm(k[13], 14, "RRU.PrbTotDl", false, t.dl_prbs, 0);
-  set_kpm(k[14], 15, "RRU.PrbTotUl", false, t.ul_prbs, 0);
+  // 3GPP TS 28.552 defines RRU.PrbTotDl/Ul as the total PRB usage in percent; the PRB counts stay available as
+  // CARR.PRBUsageDl/Ul.
+  set_kpm(k[13], 14, "RRU.PrbTotDl", true, 0, m.dl_prb_utilization_pct);
+  set_kpm(k[14], 15, "RRU.PrbTotUl", true, 0, m.ul_prb_utilization_pct);
   set_kpm(k[15], 16, "L1M.UL-dtxRatio", true, 0, t.ul_harq != 0 ? double(t.ul_dtx) / double(t.ul_harq) : 0);
   m.kpm_metric_count = 16;
 
@@ -542,8 +545,10 @@ void publish_aggregates(aurora_metrics& m,
   rc.rsrp_avg              = rsrp_avg;
   rc.rsrq_avg              = rsrq_n != 0 ? double(rsrq_sum) / rsrq_n : 0.0;
   rc.sinr_avg              = sinr_avg;
-  rc.cell_load_percent     = uint32_t(std::min(100.0F, m.dl_prb_utilization_pct));
-  rc.interference_level    = sinr_avg >= 20.0 ? 0 : (sinr_avg >= 5.0 ? 1 : 2);
+  // Rounded, so that a light load does not read as 0 %.
+  rc.cell_load_percent = uint32_t(std::lround(std::min(100.0F, m.dl_prb_utilization_pct)));
+  // Without active UEs there is no SINR to derive the interference level from.
+  rc.interference_level = n == 0 ? 3 : (sinr_avg >= 20.0 ? 0 : (sinr_avg >= 5.0 ? 1 : 2));
 }
 
 void publish_handover_ext(aurora_metrics_ext& x, global_state& st)
