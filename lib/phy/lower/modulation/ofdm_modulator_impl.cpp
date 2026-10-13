@@ -114,19 +114,21 @@ void ofdm_symbol_modulator_impl::modulate(span<ci16_t>                output,
 
     // Accumulate lower subcarrier allocation if available.
     if (!lower_subc_allocation.empty()) {
+      unsigned offset   = lower_subc_allocation.start();
       unsigned nof_subc = lower_subc_allocation.length();
-      ocuduvec::sc_prod_and_add(lower_dft_input.first(nof_subc),
-                                ofdm_symbol.first(rg_size / 2).first(nof_subc),
-                                lower_dft_input.first(nof_subc),
+      ocuduvec::sc_prod_and_add(lower_dft_input.subspan(offset, nof_subc),
+                                ofdm_symbol.first(rg_size / 2).subspan(offset, nof_subc),
+                                lower_dft_input.subspan(offset, nof_subc),
                                 port_weight);
     }
 
     // Accumulate upper subcarrier allocation if available.
     if (!upper_subc_allocation.empty()) {
+      unsigned offset   = upper_subc_allocation.start() - rg_size / 2;
       unsigned nof_subc = upper_subc_allocation.length();
-      ocuduvec::sc_prod_and_add(upper_dft_input.last(nof_subc),
-                                ofdm_symbol.last(rg_size / 2).last(nof_subc),
-                                upper_dft_input.last(nof_subc),
+      ocuduvec::sc_prod_and_add(upper_dft_input.subspan(offset, nof_subc),
+                                ofdm_symbol.last(rg_size / 2).subspan(offset, nof_subc),
+                                upper_dft_input.subspan(offset, nof_subc),
                                 port_weight);
     }
   }

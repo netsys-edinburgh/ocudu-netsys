@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <gtest/gtest.h>
 #include <limits>
+#include <optional>
 #include <random>
 
 using namespace ocudu;
@@ -41,6 +42,10 @@ struct ofdm_mod_params {
   port_weight_list port_weights;
   /// Indicates the ports that shall be filled with data.
   port_allocation_list allocated_ports;
+  /// \brief Common resource blocks filled in the allocated ports other than the first one.
+  ///
+  /// The whole band is filled if it is not present.
+  std::optional<crb_interval> partial_allocation;
   /// Center frequency in hertz.
   double center_freq_Hz;
 };
@@ -49,12 +54,13 @@ struct ofdm_mod_params {
 static std::ostream& operator<<(std::ostream& os, const ofdm_mod_params& p)
 {
   fmt::print(os,
-             "scs={} dft_size={} cp={} weights=[{}] ports=[{}] center_freq={:.3f}GHz",
+             "scs={} dft_size={} cp={} weights=[{}] ports=[{}] partial_crbs={} center_freq={:.3f}GHz",
              to_string(p.scs),
              p.dft_size,
              p.cp.to_string(),
              span<const cf_t>(p.port_weights),
              p.allocated_ports,
+             p.partial_allocation.has_value() ? fmt::format("{}", *p.partial_allocation) : std::string("none"),
              p.center_freq_Hz / 1e9);
   return os;
 }
@@ -120,13 +126,22 @@ protected:
     ASSERT_TRUE(dft->get_entries().empty());
   }
 
-  /// Generate resource grid for the given allocated ports.
-  resource_grid_reader_spy generate_resource_grid(const port_allocation_list& port_allocations)
+  /// \brief Generate resource grid for the given allocated ports.
+  ///
+  /// The first allocated port is filled over the whole band. The others are filled over \c partial_allocation if it is
+  /// present, and the resource elements they leave unwritten read as NaN.
+  resource_grid_reader_spy generate_resource_grid(const port_allocation_list&        port_allocations,
+                                                  const std::optional<crb_interval>& partial_allocation)
   {
     resource_grid_reader_spy rg(nof_ports, nof_symbols_per_slot, nsubc / NOF_SUBCARRIERS_PER_RB);
     for (unsigned i_port : port_allocations) {
+      interval<unsigned> subc_range = {0, nsubc};
+      if (partial_allocation.has_value() && (i_port != port_allocations.front())) {
+        subc_range = {partial_allocation->start() * NOF_SUBCARRIERS_PER_RB,
+                      partial_allocation->stop() * NOF_SUBCARRIERS_PER_RB};
+      }
       for (unsigned symbol_idx = 0; symbol_idx != nof_symbols_per_slot; ++symbol_idx) {
-        for (unsigned subc_idx = 0; subc_idx != nsubc; ++subc_idx) {
+        for (unsigned subc_idx = subc_range.start(); subc_idx != subc_range.stop(); ++subc_idx) {
           resource_grid_reader_spy::expected_entry_t entry = {};
           entry.port                                       = static_cast<uint8_t>(i_port);
           entry.symbol                                     = static_cast<uint8_t>(symbol_idx);
@@ -150,8 +165,8 @@ protected:
     std::vector<cf_t> rg_data_symbol(nsubc);
     std::vector<cf_t> combined_rg_data_symbol(nsubc);
     for (unsigned i_port : port_allocations) {
-      // Get the resource elements for the OFDM symbol.
-      rg.get(rg_data_symbol, i_port, i_symbol, 0);
+      // Get the resource elements for the OFDM symbol, including the ones that were not written.
+      ocuduvec::convert(rg_data_symbol, rg.get_view(i_port, i_symbol));
 
       // Apply port weight and accumulate.
       std::transform(rg_data_symbol.begin(),
@@ -159,6 +174,10 @@ protected:
                      combined_rg_data_symbol.begin(),
                      combined_rg_data_symbol.begin(),
                      [port_weight = port_weights[i_port]](cf_t rg_data, cf_t combined_rg_data) {
+                       // Resource elements that were not written do not contribute.
+                       if (std::isnan(rg_data.real()) || std::isnan(rg_data.imag())) {
+                         return combined_rg_data;
+                       }
                        return rg_data * port_weight + combined_rg_data;
                      });
     }
@@ -207,7 +226,7 @@ TEST_P(OfdmModulatorFixture, ModulatesCorrectly)
     dft->clear_entries();
 
     // Generate random data in the resource grid for the allocated ports.
-    resource_grid_reader_spy rg = generate_resource_grid(params.allocated_ports);
+    resource_grid_reader_spy rg = generate_resource_grid(params.allocated_ports, params.partial_allocation);
 
     // Modulate signal.
     std::vector<ci16_t> output(ofdm->get_slot_size(i_slot));
@@ -301,25 +320,30 @@ TEST_P(OfdmModulatorFixture, ModulatesCorrectly)
 /// Meaningful port weight combinations for a complete OFDM modulator line coverage.
 static constexpr auto port_weight_combinations      = to_array<port_weight_list>({{0, 1, 0, 0}, {0.5, 0.1j, 0, 0}});
 static const auto     port_allocations_combinations = to_array<static_vector<unsigned, nof_ports>>({{0}, {0, 1}});
+/// Allocations of the second port that lie within the lower half of the band, within the upper half, and across the
+/// center of the band. The band is 11 resource blocks wide.
+static const auto partial_allocation_combinations =
+    to_array<std::optional<crb_interval>>({std::nullopt, crb_interval{1, 3}, crb_interval{7, 9}, crb_interval{4, 7}});
 
 /// Pre-compute all valid parameter combinations.
 static std::vector<ofdm_mod_params> generate_params()
 {
   std::vector<ofdm_mod_params> params;
 
-  auto add_if_valid = [&](subcarrier_spacing          scs,
-                          unsigned                    dft_size,
-                          cyclic_prefix               cp,
-                          const port_weight_list&     port_weights,
-                          const port_allocation_list& port_allocations,
-                          double                      center_freq_Hz) {
+  auto add_if_valid = [&](subcarrier_spacing                 scs,
+                          unsigned                           dft_size,
+                          cyclic_prefix                      cp,
+                          const port_weight_list&            port_weights,
+                          const port_allocation_list&        port_allocations,
+                          const std::optional<crb_interval>& partial_allocation,
+                          double                             center_freq_Hz) {
     // Extended cyclic prefix is only supported with 60kHz.
     if ((cp == cyclic_prefix::EXTENDED) && (scs != subcarrier_spacing::kHz60)) {
       return;
     }
 
     if (cp.is_valid(scs, dft_size)) {
-      params.push_back({scs, dft_size, cp, port_weights, port_allocations, center_freq_Hz});
+      params.push_back({scs, dft_size, cp, port_weights, port_allocations, partial_allocation, center_freq_Hz});
     }
   };
 
@@ -332,8 +356,17 @@ static std::vector<ofdm_mod_params> generate_params()
       for (cyclic_prefix cp : {cyclic_prefix::NORMAL, cyclic_prefix::EXTENDED}) {
         for (const auto& port_weights : port_weight_combinations) {
           for (const auto& port_allocations : port_allocations_combinations) {
-            for (double center_freq_Hz : {1.0e9, 3.5e9}) {
-              add_if_valid(scs, dft_size, cp, port_weights, port_allocations, center_freq_Hz);
+            for (const auto& partial_allocation : partial_allocation_combinations) {
+              // A partial allocation only matters for the ports accumulated after the first weighted one. The modulator
+              // takes the whole symbol of the first weighted port, where a resource grid holds zeros outside the
+              // written range but the spy holds NaN, so that port must be the fully written one.
+              if (partial_allocation.has_value() &&
+                  ((port_allocations.size() < 2) || (port_weights[port_allocations.front()] == cf_t()))) {
+                continue;
+              }
+              for (double center_freq_Hz : {1.0e9, 3.5e9}) {
+                add_if_valid(scs, dft_size, cp, port_weights, port_allocations, partial_allocation, center_freq_Hz);
+              }
             }
           }
         }
