@@ -258,7 +258,8 @@ typedef struct {
 
     /* Group 4 — SINR / CSI / BSR aggregates */
     float    sinr_min, sinr_max, sinr_avg;
-    uint8_t  csi_min,  csi_max;
+    uint8_t  cqi_min,  cqi_max;
+    float    cqi_avg;
     uint32_t bsr_min,  bsr_max;
     float    bsr_avg;
 
@@ -474,8 +475,9 @@ static void fill_snapshot(snapshot_t *s, const struct aurora_metrics *m)
     s->sinr_min = m->sinr_min;
     s->sinr_max = m->sinr_max;
     s->sinr_avg = m->sinr_avg;
-    s->csi_min  = m->csi_min;
-    s->csi_max  = m->csi_max;
+    s->cqi_min  = m->csi_min;
+    s->cqi_max  = m->csi_max;
+    s->cqi_avg  = m->csi_avg;
     s->bsr_min  = m->bsr_min;
     s->bsr_max  = m->bsr_max;
     s->bsr_avg  = m->bsr_avg;
@@ -916,8 +918,8 @@ static void write_csv_header(FILE *fp, const struct aurora_metrics *m)
             ",ul_crc_loss,ul_crc_total,ul_crc_loss_rate"
             /* Group 4 — SINR/CSI/BSR */
             ",sinr_min,sinr_max,sinr_avg"
-            /* csi_avg is published as kpm_CARR.AverageCQI */
-            ",csi_min,csi_max"
+            /* Wideband CQI over the active UEs, named "cqi" like OCUDU's own metrics (OAI: csi_min/max/avg). */
+            ",cqi_min,cqi_max,cqi_avg"
             ",bsr_min,bsr_max,bsr_avg"
             /* Group 5 — FAPI DL */
             /* The averages are exact (sum / count), so no separate *_hist_avg columns; the TBS average is
@@ -942,8 +944,9 @@ static void write_csv_header(FILE *fp, const struct aurora_metrics *m)
             /* Group 8 — KPM items 1-8 (MAC-aggregator-derived) */
             ",kpm_RRC.ConnNumber,kpm_DRB.UEThpDl,kpm_DRB.UEThpUl"
             ",kpm_CARR.PDSCHMCSSched,kpm_CARR.PUSCHMCSSched"
-            ",kpm_CARR.PRBUsageDl,kpm_CARR.PRBUsageUl"
-            ",kpm_CARR.AverageCQI");
+            /* KPM 6/7: 3GPP TS 28.552 RRU.PrbUsedDl/Ul (mean PRBs used per slot). KPM 8 (CARR.AverageCQI) is
+             * written as cqi_avg in Group 4: no standard name exists and OCUDU's own metrics call it "cqi". */
+            ",kpm_RRU.PrbUsedDl,kpm_RRU.PrbUsedUl");
     }
     /* KPM items 9/10 -- see kpm_pdcp_bitrate comment on compute_csv_gates() */
     if (g.kpm_pdcp_bitrate) {
@@ -1163,7 +1166,7 @@ static void write_csv_row(FILE *fp, const snapshot_t *s)
             ",%lu,%lu,%.6f"
             /* Group 4 */
             ",%.2f,%.2f,%.2f"
-            ",%u,%u"
+            ",%u,%u,%.2f"
             ",%u,%u,%.2f"
             /* Group 5 */
             ",%u,%.2f"
@@ -1183,8 +1186,8 @@ static void write_csv_row(FILE *fp, const snapshot_t *s)
             ",%.2f,%.2f,%.2f"
             ",%.2f,%.2f,%.2f"
             ",%.2f,%.2f,%.2f"
-            /* Group 8 — KPM items 1-8 */
-            ",%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f",
+            /* Group 8 — KPM items 1-7 */
+            ",%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f",
 
             /* Group 2 */
             s->dl_harq_ack, s->dl_harq_nack, s->dl_harq_total,
@@ -1195,7 +1198,7 @@ static void write_csv_row(FILE *fp, const snapshot_t *s)
 
             /* Group 4 */
             (double)s->sinr_min, (double)s->sinr_max, (double)s->sinr_avg,
-            (unsigned)s->csi_min, (unsigned)s->csi_max,
+            (unsigned)s->cqi_min, (unsigned)s->cqi_max, (double)s->cqi_avg,
             s->bsr_min, s->bsr_max, (double)s->bsr_avg,
 
             /* Group 5 */
@@ -1219,9 +1222,9 @@ static void write_csv_row(FILE *fp, const snapshot_t *s)
             s->fapi_ue_ul_prb_min, s->fapi_ue_ul_prb_max, s->fapi_ue_ul_prb_avg,
             s->fapi_ue_ul_tbs_min, s->fapi_ue_ul_tbs_max, s->fapi_ue_ul_tbs_avg,
 
-            /* Group 8 — KPM items 1-8 */
+            /* Group 8 — KPM items 1-7 */
             s->kpm[0], s->kpm[1], s->kpm[2], s->kpm[3],
-            s->kpm[4], s->kpm[5], s->kpm[6], s->kpm[7]);
+            s->kpm[4], s->kpm[5], s->kpm[6]);
     }
 
     /* KPM items 9/10 -- see kpm_pdcp_bitrate comment on compute_csv_gates() */
@@ -1741,8 +1744,8 @@ int main(int argc, char **argv)
             printf("  F1-U DL loss rate: %.3f%%\n", metrics->f1u_dl_loss_rate * 100.0f);
         printf("  SINR  min=%.2f  max=%.2f  avg=%.2f dB\n",
                s.sinr_min, s.sinr_max, s.sinr_avg);
-        printf("  CSI   min=%u    max=%u    avg=%.2f\n",
-               s.csi_min, s.csi_max, (double)metrics->csi_avg);
+        printf("  CQI   min=%u    max=%u    avg=%.2f\n",
+               s.cqi_min, s.cqi_max, (double)s.cqi_avg);
         printf("  BSR   min=%u  max=%u  avg=%.0f bytes\n",
                s.bsr_min, s.bsr_max, s.bsr_avg);
 
