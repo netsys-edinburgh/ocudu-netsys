@@ -277,6 +277,39 @@ int aurora_ebpf_start(aurora_thread_stats_t *ts, uint32_t interval_ms)
     g_skel->rodata->aurora_target_ns_dev = ns_dev;
     g_skel->rodata->aurora_target_ns_ino = ns_ino;
 
+    /* OCUDU: the irq_vectors tracepoints only exist on x86. Attach them
+     * separately after the mandatory programs, so that a kernel without
+     * them still gets the eBPF backend (minus system-interrupt counts). */
+    struct bpf_program *optional_progs[] = {
+        g_skel->progs.handle_local_timer_entry,
+        g_skel->progs.handle_reschedule_entry,
+        g_skel->progs.handle_call_function_entry,
+        g_skel->progs.handle_call_function_single_entry,
+        g_skel->progs.handle_irq_work_entry,
+        g_skel->progs.handle_x86_platform_ipi_entry,
+        g_skel->progs.handle_thermal_apic_entry,
+        g_skel->progs.handle_threshold_apic_entry,
+        g_skel->progs.handle_deferred_error_apic_entry,
+        g_skel->progs.handle_error_apic_entry,
+        g_skel->progs.handle_spurious_apic_entry,
+    };
+    struct bpf_link **optional_links[] = {
+        &g_skel->links.handle_local_timer_entry,
+        &g_skel->links.handle_reschedule_entry,
+        &g_skel->links.handle_call_function_entry,
+        &g_skel->links.handle_call_function_single_entry,
+        &g_skel->links.handle_irq_work_entry,
+        &g_skel->links.handle_x86_platform_ipi_entry,
+        &g_skel->links.handle_thermal_apic_entry,
+        &g_skel->links.handle_threshold_apic_entry,
+        &g_skel->links.handle_deferred_error_apic_entry,
+        &g_skel->links.handle_error_apic_entry,
+        &g_skel->links.handle_spurious_apic_entry,
+    };
+    const size_t nof_optional = sizeof(optional_progs) / sizeof(optional_progs[0]);
+    for (size_t i = 0; i != nof_optional; i++)
+        bpf_program__set_autoattach(optional_progs[i], false);
+
     if (aurora_thread_ebpf_bpf__load(g_skel) != 0) {
         fprintf(stderr, "AURORA: eBPF load failed (errno=%d), falling back to procfs\n", errno);
         aurora_thread_ebpf_bpf__destroy(g_skel);
@@ -292,6 +325,20 @@ int aurora_ebpf_start(aurora_thread_stats_t *ts, uint32_t interval_ms)
         g_skel = NULL;
         return -1;
     }
+
+    /* Optional programs: a missing tracepoint only loses its counts. The
+     * links are stored in the skeleton so that destroy() detaches them. */
+    unsigned nof_vectors = 0;
+    for (size_t i = 0; i != nof_optional; i++) {
+        struct bpf_link *link = bpf_program__attach(optional_progs[i]);
+        if (link) {
+            *optional_links[i] = link;
+            nof_vectors++;
+        }
+    }
+    if (nof_vectors != nof_optional)
+        fprintf(stderr, "AURORA: eBPF attached %u of %zu system interrupt vector tracepoints\n",
+                nof_vectors, nof_optional);
 
     /* Populate initial TID filter and interval number */
     ebpf_update_tid_filter();

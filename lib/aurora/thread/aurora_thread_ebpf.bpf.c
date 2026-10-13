@@ -314,15 +314,22 @@ int handle_sched_migrate(struct trace_event_raw_sched_migrate_task *ctx)
 }
 
 /* ---------------------------------------------------------------
- * Tracepoint: irq/irq_handler_entry
- * Count IRQs that interrupt a monitored thread.
+ * Interrupt accounting
+ *
+ * OCUDU: irq_count counts every interrupt that preempts a monitored thread:
+ * device IRQs (irq/irq_handler_entry), the x86 system interrupt vectors
+ * (irq_vectors/<vector>_entry: local APIC timer, rescheduling and
+ * function-call IPIs, IRQ work, ...) and softirqs run in its context
+ * (irq/softirq_entry). OAI only hooked irq_handler_entry, which never fires
+ * for the local timer, so the ~1k-per-CPU-per-second timer interrupts were
+ * missing. The irq_vectors tracepoints only exist on x86; user space
+ * attaches them when available (aurora_thread_ebpf.c).
+ *
+ * In every one of these hooks "current" is the interrupted task, so it
+ * translates directly via the namespace helper.
  * --------------------------------------------------------------- */
-SEC("tp/irq/irq_handler_entry")
-int handle_irq_entry(struct trace_event_raw_irq_handler_entry *ctx)
+static __always_inline int aurora_bpf_count_interrupt(void)
 {
-    /* "current" here is the task that was interrupted — precisely the task
-     * this IRQ should be attributed to — so, unlike handle_sched_migrate,
-     * it translates directly via the namespace helper. */
     struct bpf_pidns_info ns = {};
     if (bpf_get_ns_current_pid_tgid(aurora_target_ns_dev, aurora_target_ns_ino,
                                      &ns, sizeof(ns)) != 0)
@@ -338,5 +345,37 @@ int handle_irq_entry(struct trace_event_raw_irq_handler_entry *ctx)
 
     return 0;
 }
+
+SEC("tp/irq/irq_handler_entry")
+int handle_irq_entry(void *ctx)
+{
+    return aurora_bpf_count_interrupt();
+}
+
+SEC("tp/irq/softirq_entry")
+int handle_softirq_entry(void *ctx)
+{
+    return aurora_bpf_count_interrupt();
+}
+
+/* x86 system interrupt vectors (optional, see above). */
+#define AURORA_IRQ_VECTOR(vec)                                  \
+    SEC("tp/irq_vectors/" #vec "_entry")                        \
+    int handle_##vec##_entry(void *ctx)                         \
+    {                                                           \
+        return aurora_bpf_count_interrupt();                    \
+    }
+
+AURORA_IRQ_VECTOR(local_timer)
+AURORA_IRQ_VECTOR(reschedule)
+AURORA_IRQ_VECTOR(call_function)
+AURORA_IRQ_VECTOR(call_function_single)
+AURORA_IRQ_VECTOR(irq_work)
+AURORA_IRQ_VECTOR(x86_platform_ipi)
+AURORA_IRQ_VECTOR(thermal_apic)
+AURORA_IRQ_VECTOR(threshold_apic)
+AURORA_IRQ_VECTOR(deferred_error_apic)
+AURORA_IRQ_VECTOR(error_apic)
+AURORA_IRQ_VECTOR(spurious_apic)
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";

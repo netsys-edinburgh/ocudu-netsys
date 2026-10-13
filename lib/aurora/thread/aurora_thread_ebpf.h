@@ -58,7 +58,7 @@ struct aurora_bpf_thread_stats {
     __u64 overflow;       /* Quanta with runtime > 2^31 ns */
     __u64 total_events;   /* Total scheduling quanta recorded */
     __u64 max_runtime_ns; /* Maximum quantum runtime observed since the thread was first seen */
-    __u64 irq_count;      /* IRQs/softirqs that interrupted this thread */
+    __u64 irq_count;      /* Device IRQs, x86 system interrupts and softirqs that interrupted this thread */
     __u64 voluntary_ctxsw;   /* Off-CPU switches where prev_state != TASK_RUNNING */
     __u64 involuntary_ctxsw; /* Off-CPU switches while prev_state == TASK_RUNNING (preemption) */
     __u64 cpu_migrations;    /* sched_migrate_task events for this TID */
