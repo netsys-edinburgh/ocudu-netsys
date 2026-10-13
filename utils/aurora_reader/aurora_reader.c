@@ -317,9 +317,9 @@ typedef struct {
 
     /* Group 12 — Per-UE MAC (aggregated across active UEs) */
     int    mac_active_ues;
-    double mac_dl_tbs_min,    mac_dl_tbs_max,    mac_dl_tbs_avg;
-    double mac_ul_tbs_min,    mac_ul_tbs_max,    mac_ul_tbs_avg;
-    /* PRBs summed over all of a UE's grants in the interval, then min/max/avg across UEs. */
+    /* TBS bytes and PRBs summed over all of a UE's grants in the interval, then min/max/avg across UEs. */
+    double mac_dl_tbs_sums_min, mac_dl_tbs_sums_max, mac_dl_tbs_sums_avg;
+    double mac_ul_tbs_sums_min, mac_ul_tbs_sums_max, mac_ul_tbs_sums_avg;
     double mac_dl_prb_sums_min, mac_dl_prb_sums_max, mac_dl_prb_sums_avg;
     double mac_ul_prb_sums_min, mac_ul_prb_sums_max, mac_ul_prb_sums_avg;
     double mac_dl_mcs_min,    mac_dl_mcs_max,    mac_dl_mcs_avg;
@@ -612,8 +612,8 @@ static void fill_snapshot(snapshot_t *s, const struct aurora_metrics *m)
         s->prefix##_max = (a).n > 0 ? (a).max : 0.0; \
         s->prefix##_avg = agg_avg(&(a))
 
-        EXPAND_AGG3(mac_dl_tbs,    dl_tbs);
-        EXPAND_AGG3(mac_ul_tbs,    ul_tbs);
+        EXPAND_AGG3(mac_dl_tbs_sums, dl_tbs);
+        EXPAND_AGG3(mac_ul_tbs_sums, ul_tbs);
         EXPAND_AGG3(mac_dl_prb_sums, dl_prb);
         EXPAND_AGG3(mac_ul_prb_sums, ul_prb);
         EXPAND_AGG3(mac_dl_mcs,    dl_mcs);
@@ -1035,8 +1035,8 @@ static void write_csv_header(FILE *fp, const struct aurora_metrics *m)
             ",kpm_RRU.PrbTotUl,kpm_L1M.UL-dtxRatio"
             /* Group 12 — per-UE MAC aggregates */
             ",mac_active_ues"
-            ",mac_dl_tbs_min,mac_dl_tbs_max,mac_dl_tbs_avg"
-            ",mac_ul_tbs_min,mac_ul_tbs_max,mac_ul_tbs_avg"
+            ",mac_dl_tbs_sums_min,mac_dl_tbs_sums_max,mac_dl_tbs_sums_avg"
+            ",mac_ul_tbs_sums_min,mac_ul_tbs_sums_max,mac_ul_tbs_sums_avg"
             ",mac_dl_prb_sums_min,mac_dl_prb_sums_max,mac_dl_prb_sums_avg"
             ",mac_ul_prb_sums_min,mac_ul_prb_sums_max,mac_ul_prb_sums_avg"
             ",mac_dl_mcs_min,mac_dl_mcs_max,mac_dl_mcs_avg"
@@ -1342,8 +1342,8 @@ static void write_csv_row(FILE *fp, const snapshot_t *s)
 
             /* Group 12 — MAC */
             s->mac_active_ues,
-            s->mac_dl_tbs_min,    s->mac_dl_tbs_max,    s->mac_dl_tbs_avg,
-            s->mac_ul_tbs_min,    s->mac_ul_tbs_max,    s->mac_ul_tbs_avg,
+            s->mac_dl_tbs_sums_min, s->mac_dl_tbs_sums_max, s->mac_dl_tbs_sums_avg,
+            s->mac_ul_tbs_sums_min, s->mac_ul_tbs_sums_max, s->mac_ul_tbs_sums_avg,
             s->mac_dl_prb_sums_min, s->mac_dl_prb_sums_max, s->mac_dl_prb_sums_avg,
             s->mac_ul_prb_sums_min, s->mac_ul_prb_sums_max, s->mac_ul_prb_sums_avg,
             s->mac_dl_mcs_min,    s->mac_dl_mcs_max,    s->mac_dl_mcs_avg,
@@ -1825,10 +1825,10 @@ int main(int argc, char **argv)
                s.bsr_min, s.bsr_max, s.bsr_avg);
 
         printf("\n--- Per-UE MAC aggregates (active UEs: %d) ---\n", s.mac_active_ues);
-        printf("  DL TBS (bytes) min=%.0f  max=%.0f  avg=%.0f\n",
-               s.mac_dl_tbs_min, s.mac_dl_tbs_max, s.mac_dl_tbs_avg);
-        printf("  UL TBS (bytes) min=%.0f  max=%.0f  avg=%.0f\n",
-               s.mac_ul_tbs_min, s.mac_ul_tbs_max, s.mac_ul_tbs_avg);
+        printf("  DL TBS sum (B) min=%.0f  max=%.0f  avg=%.0f\n",
+               s.mac_dl_tbs_sums_min, s.mac_dl_tbs_sums_max, s.mac_dl_tbs_sums_avg);
+        printf("  UL TBS sum (B) min=%.0f  max=%.0f  avg=%.0f\n",
+               s.mac_ul_tbs_sums_min, s.mac_ul_tbs_sums_max, s.mac_ul_tbs_sums_avg);
         printf("  DL PRB sum     min=%.0f  max=%.0f  avg=%.1f\n",
                s.mac_dl_prb_sums_min, s.mac_dl_prb_sums_max, s.mac_dl_prb_sums_avg);
         printf("  PUSCH SNR (dB) min=%.1f  max=%.1f  avg=%.1f\n",
