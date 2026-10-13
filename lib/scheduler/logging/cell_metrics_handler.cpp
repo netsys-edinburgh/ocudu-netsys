@@ -12,6 +12,7 @@
 #include "ocudu/ran/slot_point.h"
 #include "ocudu/scheduler/result/sched_result.h"
 #include "ocudu/scheduler/scheduler_rach_handler.h"
+#include <cmath>
 
 using namespace ocudu;
 
@@ -369,9 +370,10 @@ void cell_metrics_handler::handle_ul_phr_indication(const ul_phr_indication_mess
 
     // Store last PHR.
     if (not phr_ind.phr.get_phr().empty()) {
-      // Log the floor of the average of the PH interval.
-      interval<int> rg = phr_ind.phr.get_phr().front().ph;
-      u.last_phr       = (rg.start() + rg.stop()) / 2;
+      // Log the floor of the average of the PH interval. Integer division would round the negative averages up
+      // instead, so that [-1, 0) dB would read 0 like [0, 1) dB.
+      const interval<int> rg = phr_ind.phr.get_phr().front().ph;
+      u.last_phr             = static_cast<int>(std::floor(0.5F * static_cast<float>(rg.start() + rg.stop())));
       auto diff        = last_slot_tx.without_hyper_sfn() - phr_ind.slot_rx;
       u.data.sum_ul_ce_delay_slots += diff;
       u.data.max_ul_ce_delay_slots = std::max(static_cast<unsigned>(diff), u.data.max_ul_ce_delay_slots);

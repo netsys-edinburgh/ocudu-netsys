@@ -161,6 +161,45 @@ TEST_F(scheduler_metrics_handler_tester, when_no_events_took_place_then_metrics_
   ASSERT_EQ(ue_metrics.ul_ri_stats.get_nof_observations(), 0);
 }
 
+// The reported PH is the floor of the average of the last reported PH interval, for negative and positive intervals
+// alike: [-1, 0) dB is -1, not 0.
+TEST_F(scheduler_metrics_handler_tester, last_phr_is_the_floor_of_the_interval_average)
+{
+  get_next_metric();
+  const auto send_phr = [this](interval<int> ph) {
+    ul_phr_indication_message phr_ind{};
+    phr_ind.ue_index = test_ue_index;
+    phr_ind.rnti     = to_rnti(0x4601);
+    phr_ind.slot_rx  = next_sl_tx.without_hyper_sfn() - 1;
+    phr_ind.phr.set_se_phr({.serv_cell_id = SERVING_PCELL_IDX,
+                            .ph_type      = ph_field_type_t::type1,
+                            .ph           = ph,
+                            .p_cmax       = p_cmax_dbm_range{20, 21}});
+    metrics.handle_ul_phr_indication(phr_ind);
+  };
+
+  struct test_case {
+    interval<int> ph;
+    int           expected_last_phr;
+  };
+  const test_case test_cases[] = {{{4, 5}, 4},
+                                  {{0, 1}, 0},
+                                  {{-1, 0}, -1},
+                                  {{-6, -5}, -6},
+                                  {{-32, -31}, -32},
+                                  {{-32, -32}, -32},
+                                  {{22, 24}, 23},
+                                  {{36, 38}, 37},
+                                  {{38, 38}, 38}};
+  for (const test_case& tc : test_cases) {
+    send_phr(tc.ph);
+    get_next_metric();
+    const auto& result = metrics_notif.last_report.ue_metrics[0];
+    ASSERT_TRUE(result.last_phr.has_value());
+    EXPECT_EQ(*result.last_phr, tc.expected_last_phr) << "PH interval " << tc.ph.start() << " to " << tc.ph.stop();
+  }
+}
+
 TEST_F(scheduler_metrics_handler_tester, compute_nof_dl_oks_and_noks)
 {
   unsigned nof_acks  = test_rng::uniform_int<unsigned>(1, 100);
