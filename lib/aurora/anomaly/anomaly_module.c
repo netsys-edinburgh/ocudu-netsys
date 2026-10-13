@@ -73,7 +73,7 @@ typedef struct {
 } anomaly_runtime_t;
 
 static anomaly_runtime_t g_runtime = {
-    .running = ATOMIC_VAR_INIT(false),
+    .running = false,
     .listen_fd = -1,
     .listen_port = 0,
     .ran_type = 0,
@@ -81,19 +81,19 @@ static anomaly_runtime_t g_runtime = {
     .bind_address = "127.0.0.1",
     .listener_thread = 0,
     .leak_thread = 0,
-    .listener_thread_started = ATOMIC_VAR_INIT(false),
-    .leak_thread_started = ATOMIC_VAR_INIT(false),
+    .listener_thread_started = false,
+    .leak_thread_started = false,
     .state = {
-      .l1_until_ms = ATOMIC_VAR_INIT(0),
-      .mac_until_ms = ATOMIC_VAR_INIT(0),
-      .pdcp_until_ms = ATOMIC_VAR_INIT(0),
-      .queue_until_ms = ATOMIC_VAR_INIT(0),
-      .memory_until_ms = ATOMIC_VAR_INIT(0),
-      .l1_delay_us = ATOMIC_VAR_INIT(0),
-      .mac_delay_us = ATOMIC_VAR_INIT(0),
-      .pdcp_delay_us = ATOMIC_VAR_INIT(0),
-      .queue_jitter_us = ATOMIC_VAR_INIT(0),
-      .leak_bytes_per_sec = ATOMIC_VAR_INIT(0),
+      .l1_until_ms = 0,
+      .mac_until_ms = 0,
+      .pdcp_until_ms = 0,
+      .queue_until_ms = 0,
+      .memory_until_ms = 0,
+      .l1_delay_us = 0,
+      .mac_delay_us = 0,
+      .pdcp_delay_us = 0,
+      .queue_jitter_us = 0,
+      .leak_bytes_per_sec = 0,
     },
     .leak_lock = PTHREAD_MUTEX_INITIALIZER,
     .leak_head = NULL,
@@ -103,7 +103,7 @@ static anomaly_runtime_t g_runtime = {
 /* OCUDU: the hooks run on the scheduler slot / RLC / PDCP data paths. This flag lets them return after a single
  * relaxed load while no anomaly is armed (no clock read). Set by SET, cleared by CLEAR type=ALL / stop. Both run on
  * the listener thread, so arming and disarming never race each other. */
-static atomic_bool g_armed = ATOMIC_VAR_INIT(false);
+static atomic_bool g_armed = false;
 
 static const uint64_t MAX_ANOMALY_DURATION_MS = 3600000ULL;
 static const size_t MAX_LEAK_TOTAL_BYTES = (size_t)512 * 1024 * 1024;
