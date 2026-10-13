@@ -2199,7 +2199,16 @@ int main(int argc, char **argv)
     int      flush_count  = 0;
     uint64_t last_ts      = 0;
 
-    unsigned int poll_us = aurora_cfg.collection_interval_ms * 1000u;
+    /* OCUDU: poll at a quarter of the producer's publication interval and keep only new publications (timestamp_us
+     * changed). Sleeping one full interval after each read made every loop slightly longer than the publisher's
+     * fixed schedule, so the reader drifted and skipped one publication about every 500. The interval is the one the
+     * producer published, which may differ from the reader's configuration. */
+    const uint32_t interval_ms = metrics->collection_interval_ms != 0 ? metrics->collection_interval_ms
+                                                                      : aurora_cfg.collection_interval_ms;
+    unsigned int   poll_us     = interval_ms * 1000u / 4u;
+    if (poll_us < 1000u)
+        poll_us = 1000u;
+    uint64_t missed_intervals = 0;
 
     while (g_running) {
         usleep(poll_us);
@@ -2207,6 +2216,12 @@ int main(int argc, char **argv)
         /* Skip if shared memory hasn't been updated since last read */
         if (metrics->timestamp_us == last_ts)
             continue;
+        /* A step of more than 1.5 intervals means publications were missed (reader stalled, e.g. on disk I/O). */
+        if (last_ts != 0 && interval_ms != 0 && metrics->timestamp_us > last_ts) {
+            const uint64_t step_us = metrics->timestamp_us - last_ts;
+            if (step_us * 2u > 3u * (uint64_t)interval_ms * 1000u)
+                missed_intervals += (step_us + (uint64_t)interval_ms * 500u) / ((uint64_t)interval_ms * 1000u) - 1u;
+        }
         last_ts = metrics->timestamp_us;
 
         fill_snapshot(&batch[batch_count], metrics);
@@ -2233,6 +2248,8 @@ int main(int argc, char **argv)
         flush_count++;
         fprintf(stderr, "  [final flush #%d]  %d rows\n", flush_count, batch_count);
     }
+    if (missed_intervals != 0)
+        fprintf(stderr, "aurora_reader: %lu publication interval(s) missed\n", (unsigned long)missed_intervals);
 
     fclose(fp);
     free(batch);
