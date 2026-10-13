@@ -11,3 +11,4 @@ aurora:
   thread_metrics_backend: auto    # auto (eBPF, fallback procfs) | ebpf | procfs
   thread_metrics_whitelist: ""    # Empty selects the OCUDU default thread list.
   anomaly_enabled: true           # Anomaly-injection TCP server on 127.0.0.1:(47010 + ran_type).
+  # cpus: 15                      # CPUs of the aurora_reset publisher thread. Default: main_pool_cpus.

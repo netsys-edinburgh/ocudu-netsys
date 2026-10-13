@@ -21,6 +21,7 @@ aurora:
   thread_metrics_backend: auto     # auto (eBPF, fallback procfs) | ebpf | procfs
   thread_metrics_whitelist: ""     # empty = OCUDU default list (see below)
   anomaly_enabled: true            # TCP control server on 127.0.0.1:(47010 + ran_type)
+  # cpus: 15                       # aurora_reset publisher CPUs (default: expert_execution main_pool_cpus)
 ```
 
 The same options are available on the command line, for example `gnb ... aurora --enable true --shm_key 0x1234`.
