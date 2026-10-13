@@ -36,6 +36,12 @@ struct dlsch_configuration {
   unsigned nof_layers;
   /// Set to true if the transmission overlaps with the Direct Current (DC).
   bool contains_dc;
+  /// \brief Number of resource elements of the transmission reserved for CSI-RS.
+  ///
+  /// The PDSCH is rate-matched around these resource elements (TS 38.214, clause 5.1.4.1). Each resource element is
+  /// counted once over all the resource blocks and OFDM symbols of the transmission, regardless of the number of
+  /// layers.
+  unsigned nof_csi_rs_re = 0;
 };
 
 /// Collects Downlink Shared Channel (DL-SCH) derived parameters.

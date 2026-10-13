@@ -4,6 +4,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "ue_cell_grid_allocator.h"
+#include "../support/csi_rs_helpers.h"
 #include "../support/dci_builder.h"
 #include "../support/repetition_helpers.h"
 #include "../ue_context/ue_drx_controller.h"
@@ -71,8 +72,12 @@ ue_cell_grid_allocator::calculate_dl_mcs_tbs(const cell_slot_resource_allocator&
     contains_dc = dc_offset_helper::is_contained(tx_dc.value(), crbs.first) ||
                   dc_offset_helper::is_contained(tx_dc.value(), crbs.second);
   }
-  auto mcs_tbs_info =
-      compute_dl_mcs_tbs(pdsch_cfg, adjusted_mcs, crbs.first.length() + crbs.second.length(), contains_dc);
+  // The PDSCH is rate-matched around the CSI-RS of the slot, which the TBS does not account for.
+  const unsigned nof_csi_rs_re =
+      csi_helper::get_nof_csi_rs_re(pdsch_alloc.result.dl.csi_rs, pdsch_cfg.symbols, crbs.first) +
+      csi_helper::get_nof_csi_rs_re(pdsch_alloc.result.dl.csi_rs, pdsch_cfg.symbols, crbs.second);
+  auto mcs_tbs_info = compute_dl_mcs_tbs(
+      pdsch_cfg, adjusted_mcs, crbs.first.length() + crbs.second.length(), contains_dc, nof_csi_rs_re);
 
   return mcs_tbs_info;
 }
