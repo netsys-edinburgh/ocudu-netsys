@@ -2140,11 +2140,19 @@ int main(int argc, char **argv)
     }
 
     /* Prefix the CSV basename with the RAN type (e.g. "du_aurora_metrics_...csv")
-     * unless the basename already begins with "<rp>_" to avoid duplication. */
+     * unless the basename already begins with "<rp>_" to avoid duplication.
+     * OCUDU: the RAN type is the one the producer published in shared memory, which also selects the CSV columns, so
+     * the file name always matches its content. The configured one (--ran-type / aurora.ran_type) only applies when
+     * the producer's value is not a valid RAN type. */
     {
         static const char *ran_prefixes[] = {"gnb", "du", "cu", "cu-cp", "cu-up"};
-        const char *rp = (aurora_cfg.ran_type <= RAN_CU_UP)
-                         ? ran_prefixes[aurora_cfg.ran_type] : "gnb";
+        const int shm_rt = (int)metrics->ran_type;
+        const int rt     = (shm_rt >= (int)RAN_GNB && shm_rt <= (int)RAN_CU_UP) ? shm_rt : (int)aurora_cfg.ran_type;
+        if (ran_type_from_cli && rt != (int)aurora_cfg.ran_type)
+            fprintf(stderr, "aurora_reader: --ran-type %s differs from the producer's RAN type %s; using %s\n",
+                    (aurora_cfg.ran_type <= RAN_CU_UP) ? ran_prefixes[aurora_cfg.ran_type] : "?",
+                    ran_prefixes[rt], ran_prefixes[rt]);
+        const char *rp = (rt >= (int)RAN_GNB && rt <= (int)RAN_CU_UP) ? ran_prefixes[rt] : "gnb";
         const char *slash = strrchr(csv_path, '/');
         const char *base  = slash ? slash + 1 : csv_path;
         size_t rplen = strlen(rp);
