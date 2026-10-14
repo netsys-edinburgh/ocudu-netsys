@@ -121,7 +121,8 @@ public:
                                                        create_direction_estimator(),
                                                        max_nof_prb,
                                                        resolved_acceleration_mode == "enabled",
-                                                       nvcuda_device_id);
+                                                       nvcuda_device_id,
+                                                       gpu_wait_quarantine);
     }
 #else
     if (resolved_acceleration_mode == "enabled") {
@@ -157,6 +158,11 @@ private:
   std::string                                          acceleration_mode;
 #ifdef ENABLE_CUDA
   int nvcuda_device_id;
+  /// \brief Quarantine shared by the estimators this factory creates.
+  ///
+  /// A GPU that stops making progress usually stalls every estimator stream, so the first timeout takes them all off
+  /// the GPU instead of costing one timeout per estimator.
+  std::shared_ptr<cuda_gpu_wait_quarantine> gpu_wait_quarantine = std::make_shared<cuda_gpu_wait_quarantine>();
 #endif
 };
 

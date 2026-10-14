@@ -5,7 +5,9 @@
 
 #pragma once
 
+#include "cuda_rt_utils.h"
 #include "ocudu/phy/support/resource_grid_reader.h"
+#include <array>
 #include <cstddef>
 
 namespace ocudu {
@@ -111,6 +113,22 @@ public:
   bool prepare_device_grid_reading(void* stream) const override;
 
 private:
+  /// Tells whether \c address lies in page-locked host memory; the answer is cached per address.
+  bool is_host_memory_pinned(const void* address);
+
+  /// \brief Pinned staging of a pageable host grid.
+  ///
+  /// A copy from pageable memory can block until the stream drains, which defeats the bounded waits.
+  cuda_pinned_host_buffer<cbf16_t> h_grid_staging;
+
+  /// Host grid memory already checked for page locking, by address.
+  struct pinned_memory_check {
+    const void* address = nullptr;
+    bool        pinned  = false;
+  };
+  std::array<pinned_memory_check, 16> pinned_memory_checks     = {};
+  unsigned                            next_pinned_memory_check = 0;
+
   const resource_grid_reader* host_reader;
   grid_allocation_mode        allocation_mode         = grid_allocation_mode::device;
   void*                       d_grid_bf16             = nullptr;

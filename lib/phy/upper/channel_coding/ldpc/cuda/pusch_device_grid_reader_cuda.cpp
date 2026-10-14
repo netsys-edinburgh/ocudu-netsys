@@ -75,6 +75,22 @@ void pusch_device_grid_reader_cuda::rebind(const resource_grid_reader& host_read
   grid_ready_recorded = false;
 }
 
+bool pusch_device_grid_reader_cuda::is_host_memory_pinned(const void* address)
+{
+  for (const pinned_memory_check& check : pinned_memory_checks) {
+    if ((check.address == address) && (address != nullptr)) {
+      return check.pinned;
+    }
+  }
+  cudaPointerAttributes attributes = {};
+  bool                  pinned     = (cudaPointerGetAttributes(&attributes, address) == cudaSuccess) &&
+                ((attributes.type == cudaMemoryTypeHost) || (attributes.type == cudaMemoryTypeManaged));
+  static_cast<void>(cudaGetLastError());
+  pinned_memory_checks[next_pinned_memory_check] = {address, pinned};
+  next_pinned_memory_check                       = (next_pinned_memory_check + 1) % pinned_memory_checks.size();
+  return pinned;
+}
+
 bool pusch_device_grid_reader_cuda::stage_host_grid_async(void* stream)
 {
   if (!supports_device_grid_reading() ||
@@ -86,6 +102,16 @@ bool pusch_device_grid_reader_cuda::stage_host_grid_async(void* stream)
   size_t       grid_stride  = static_cast<size_t>(device_grid_nof_symbols) * device_grid_nof_subc;
   char*        device_bytes = static_cast<char*>(d_grid_bf16);
 
+  // The grid is copied straight from host memory only if every port is page-locked.
+  auto is_host_grid_pinned = [this]() {
+    for (unsigned port = 0; port != device_grid_nof_ports; ++port) {
+      if (!is_host_memory_pinned(host_reader->get_view(port, 0).data())) {
+        return false;
+      }
+    }
+    return true;
+  };
+
   if (allocation_mode == grid_allocation_mode::managed) {
     for (unsigned port = 0; port != device_grid_nof_ports; ++port) {
       for (unsigned symbol = 0; symbol != device_grid_nof_symbols; ++symbol) {
@@ -96,6 +122,27 @@ bool pusch_device_grid_reader_cuda::stage_host_grid_async(void* stream)
       }
     }
 
+  } else if (!is_host_grid_pinned()) {
+    // A pageable grid goes up through the pinned staging. The previous upload from the staging is complete before it
+    // is rewritten.
+    if (grid_ready_recorded && (cuda_event_wait_bounded(static_cast<cudaEvent_t>(grid_ready_event)) != cudaSuccess)) {
+      static_cast<void>(cudaGetLastError());
+      grid_ready_recorded = false;
+      return false;
+    }
+    if (!h_grid_staging.reserve(static_cast<size_t>(device_grid_nof_ports) * grid_stride)) {
+      return false;
+    }
+    for (unsigned port = 0; port != device_grid_nof_ports; ++port) {
+      for (unsigned symbol = 0; symbol != device_grid_nof_symbols; ++symbol) {
+        span<const cbf16_t> src    = host_reader->get_view(port, symbol);
+        unsigned            nof_re = std::min<unsigned>(device_grid_nof_subc, src.size());
+        std::memcpy(h_grid_staging.data() + port * grid_stride + symbol * device_grid_nof_subc,
+                    src.data(),
+                    nof_re * sizeof(cbf16_t));
+      }
+    }
+    cudaMemcpyAsync(d_grid_bf16, h_grid_staging.data(), device_grid_bytes, cudaMemcpyHostToDevice, cuda_stream);
   } else {
     for (unsigned port = 0; port != device_grid_nof_ports; ++port) {
       span<const cbf16_t> first_view    = host_reader->get_view(port, 0);

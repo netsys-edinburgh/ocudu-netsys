@@ -26,14 +26,18 @@
 #include "ocudu/support/math/math_utils.h"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdlib>
+#include <cuda.h>
+#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <numeric>
 #include <optional>
 #include <random>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace ocudu;
@@ -743,4 +747,149 @@ TEST(srs_estimator_cuda_test, forced_gpu_direction_of_arrival_follows_the_reques
 
   srs_estimator_result reference = estimate_with_doa(make_doa_profile({0, 1, 2, 3}), grid_mode::host, "disabled");
   assert_doa_results_match(reference, estimate_with_doa(make_doa_profile({3, 1, 0, 2}), grid_mode::host, "enabled"));
+}
+
+namespace {
+
+/// \brief Holds the work queued on a stream behind a gate until the test releases it, as a stuck GPU would.
+///
+/// The gate word lives in mapped host memory and the host releases it with a plain store, so the release does not
+/// depend on any GPU queue.
+class srs_stream_gate
+{
+public:
+  explicit srs_stream_gate(void* stream_) : stream(static_cast<cudaStream_t>(stream_))
+  {
+    void* host_word   = nullptr;
+    void* device_word = nullptr;
+    supported         = (stream != nullptr) &&
+                (cudaHostAlloc(&host_word, sizeof(uint32_t), cudaHostAllocMapped) == cudaSuccess) &&
+                (cudaHostGetDevicePointer(&device_word, host_word, 0) == cudaSuccess);
+    if (supported) {
+      gate_word  = static_cast<volatile uint32_t*>(host_word);
+      *gate_word = 0;
+      supported  = cuStreamWaitValue32(reinterpret_cast<CUstream>(stream),
+                                      reinterpret_cast<CUdeviceptr>(device_word),
+                                      1U,
+                                      CU_STREAM_WAIT_VALUE_EQ) == CUDA_SUCCESS;
+    }
+  }
+
+  /// \note Freeing the gate word synchronizes the device, so every gate must be released before any is destroyed.
+  ~srs_stream_gate()
+  {
+    release();
+    if (stream != nullptr) {
+      (void)cudaStreamSynchronize(stream);
+    }
+    if (gate_word != nullptr) {
+      (void)cudaFreeHost(const_cast<uint32_t*>(gate_word));
+    }
+  }
+
+  srs_stream_gate(const srs_stream_gate&)            = delete;
+  srs_stream_gate& operator=(const srs_stream_gate&) = delete;
+
+  void release()
+  {
+    if (gate_word != nullptr) {
+      *gate_word = 1;
+    }
+  }
+
+  bool supported = false;
+
+private:
+  cudaStream_t       stream    = nullptr;
+  volatile uint32_t* gate_word = nullptr;
+};
+
+} // namespace
+
+// A stuck GPU must not hold the SRS worker for ever. The estimate whose wait times out comes from the host estimator in
+// the auto mode and is dropped in the forced mode; until the stuck work has finished, the next estimates skip the GPU
+// without waiting; afterwards, the GPU is used again.
+TEST(srs_estimator_cuda_test, gpu_wait_timeout_leaves_the_gpu_until_the_stuck_work_finishes)
+{
+  if (!is_srs_estimator_acceleration_available()) {
+    GTEST_SKIP() << "CUDA SRS estimator is not available.";
+  }
+
+  srs_test_profile               profile = make_multi_port_profile();
+  srs_estimator_configuration    config  = make_srs_config(profile);
+  std::unique_ptr<resource_grid> grid    = create_test_grid(config, grid_mode::host);
+  ASSERT_NE(grid, nullptr);
+  populate_srs_grid(*grid, config, 30.0F, 0x5eed2468U);
+
+  std::unique_ptr<srs_estimator>           cpu_estimator    = create_test_srs_factory("disabled")->create();
+  std::unique_ptr<srs_estimator_cuda_impl> auto_estimator   = create_cuda_estimator(/*force_gpu_path=*/false);
+  std::unique_ptr<srs_estimator_cuda_impl> forced_estimator = create_cuda_estimator(/*force_gpu_path=*/true);
+  ASSERT_TRUE(auto_estimator->is_gpu_available());
+  ASSERT_TRUE(forced_estimator->is_gpu_available());
+  const srs_estimator_result reference = cpu_estimator->estimate(grid->get_reader(), config);
+
+  // Healthy GPU estimates.
+  {
+    scoped_env_var force_var("OCUDU_SRS_ACCELERATION_FORCE");
+    ASSERT_TRUE(force_var.set("1"));
+    assert_srs_results_match(reference,
+                             auto_estimator->estimate(grid->get_reader(), config),
+                             make_expected_channel_matrix(profile.nof_rx_ports, profile.nof_tx_ports));
+  }
+  assert_srs_results_match(reference,
+                           forced_estimator->estimate(grid->get_reader(), config),
+                           make_expected_channel_matrix(profile.nof_rx_ports, profile.nof_tx_ports));
+  const unsigned initial_fallbacks = auto_estimator->get_nof_host_fallbacks();
+
+  scoped_env_var force_var("OCUDU_SRS_ACCELERATION_FORCE");
+  ASSERT_TRUE(force_var.set("1"));
+  {
+    srs_stream_gate auto_gate(auto_estimator->get_cuda_stream());
+    srs_stream_gate forced_gate(forced_estimator->get_cuda_stream());
+    if (!auto_gate.supported || !forced_gate.supported) {
+      GTEST_SKIP() << "CUDA stream memory operations on mapped host memory are not supported by this device.";
+    }
+
+    // The estimate in flight comes from the host estimator once the wait has timed out.
+    auto                 start = std::chrono::steady_clock::now();
+    srs_estimator_result stuck = auto_estimator->estimate(grid->get_reader(), config);
+    EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(2));
+    assert_srs_results_match(
+        reference, stuck, make_expected_channel_matrix(profile.nof_rx_ports, profile.nof_tx_ports));
+    EXPECT_EQ(auto_estimator->get_nof_gpu_wait_timeouts(), 1U);
+    EXPECT_EQ(auto_estimator->get_nof_host_fallbacks(), initial_fallbacks + 1);
+
+    // While the stuck work is pending, the host estimator takes the next estimate without waiting.
+    start = std::chrono::steady_clock::now();
+    assert_srs_results_match(reference,
+                             auto_estimator->estimate(grid->get_reader(), config),
+                             make_expected_channel_matrix(profile.nof_rx_ports, profile.nof_tx_ports));
+    EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::milliseconds(50));
+    EXPECT_EQ(auto_estimator->get_nof_host_fallbacks(), initial_fallbacks + 2);
+    EXPECT_EQ(auto_estimator->get_nof_gpu_wait_timeouts(), 1U);
+
+    // The forced mode drops the estimate in flight, then drops the next one at once.
+    EXPECT_EQ(forced_estimator->estimate(grid->get_reader(), config).channel_matrix.get_nof_rx_ports(), 0U);
+    start = std::chrono::steady_clock::now();
+    EXPECT_EQ(forced_estimator->estimate(grid->get_reader(), config).channel_matrix.get_nof_rx_ports(), 0U);
+    EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::milliseconds(50));
+    EXPECT_EQ(forced_estimator->get_nof_dropped_estimates(), 2U);
+
+    // Release both gates before either is destroyed: freeing a gate synchronizes the device.
+    auto_gate.release();
+    forced_gate.release();
+  }
+
+  // Once the stuck work has finished, the GPU is used again.
+  auto     deadline  = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  unsigned fallbacks = 0;
+  do {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    fallbacks = auto_estimator->get_nof_host_fallbacks();
+    auto_estimator->estimate(grid->get_reader(), config);
+  } while ((auto_estimator->get_nof_host_fallbacks() != fallbacks) && (std::chrono::steady_clock::now() < deadline));
+  EXPECT_EQ(auto_estimator->get_nof_host_fallbacks(), fallbacks) << "the GPU was not used again";
+  assert_srs_results_match(reference,
+                           forced_estimator->estimate(grid->get_reader(), config),
+                           make_expected_channel_matrix(profile.nof_rx_ports, profile.nof_tx_ports));
 }

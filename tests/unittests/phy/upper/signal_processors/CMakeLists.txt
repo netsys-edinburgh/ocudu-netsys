@@ -46,6 +46,8 @@ if(CUDA_ACCEL_FOUND)
             ocudu_sequence_generators
             ocudu_dft
             ocudulog
+            CUDA::cudart
+            CUDA::cuda_driver
             GTest::gtest
             GTest::gtest_main)
     # Serialise GPU tests: the CUDA runtime rejects allocations with cudaErrorDevicesUnavailable while several

@@ -10,7 +10,9 @@
  */
 
 #include "srs_estimator.h"
+#include "../include/cuda_gpu_wait_timeout.h"
 #include <algorithm>
+#include <chrono>
 #include <cfloat>
 #include <cmath>
 #include <cuComplex.h>
@@ -271,16 +273,23 @@ std::mutex& graph_capture_mutex()
     return mutex;
 }
 
+/// Waits for the stream for at most the GPU wait timeout; returns cudaErrorTimeout when the work did not finish in time.
 cudaError_t stream_synchronize_yielding(cudaStream_t stream)
 {
+    const auto  deadline = ocudu_cuda_gpu_wait_deadline();
     cudaError_t err;
     int         query_count = 0;
     while ((err = cudaStreamQuery(stream)) == cudaErrorNotReady) {
         // SRS estimation is normally a short low-latency operation. Yielding too early can hand the CPU thread back
         // to the OS scheduler and turn a tens-of-microseconds GPU completion into a hundreds-of-microseconds outlier.
-        if (++query_count >= 1048576) {
-            sched_yield();
-            query_count = 0;
+        if ((++query_count % 1024) == 0) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                return cudaErrorTimeout;
+            }
+            if (query_count >= 1048576) {
+                sched_yield();
+                query_count = 0;
+            }
         }
     }
     return err;
@@ -1197,7 +1206,12 @@ nr_ldpc_status_t estimate_auto_ta(srs_estimator_handle_t          handle,
     if (cudaPeekAtLastError() != cudaSuccess) {
         return NR_LDPC_ERROR_CUDA_FAILED;
     }
-    if (stream_synchronize_yielding(stream) != cudaSuccess) {
+    cudaError_t wait_status = stream_synchronize_yielding(stream);
+    if (wait_status == cudaErrorTimeout) {
+        // The estimation stays queued; the caller takes the GPU out of use until it finishes.
+        return NR_LDPC_ERROR_TIMEOUT;
+    }
+    if (wait_status != cudaSuccess) {
         return NR_LDPC_ERROR_CUDA_FAILED;
     }
 

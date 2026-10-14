@@ -152,13 +152,16 @@ srs_estimator_cuda_impl::srs_estimator_cuda_impl(std::unique_ptr<low_papr_sequen
                                                  std::unique_ptr<doa_estimator>               direction_estimator_,
                                                  unsigned                                     max_nof_prb_,
                                                  bool                                         force_gpu_path_,
-                                                 int                                          cuda_device_id_) :
+                                                 int                                          cuda_device_id_,
+                                                 std::shared_ptr<cuda_gpu_wait_quarantine>    gpu_wait_quarantine_) :
   sequence_generator(std::move(sequence_generator_)),
   fallback(std::move(fallback_)),
   direction_estimator(std::move(direction_estimator_)),
   max_nof_prb(max_nof_prb_),
   force_gpu_path(force_gpu_path_),
-  device_id(cuda_device_id_)
+  device_id(cuda_device_id_),
+  gpu_wait_quarantine(gpu_wait_quarantine_ ? std::move(gpu_wait_quarantine_)
+                                           : std::make_shared<cuda_gpu_wait_quarantine>())
 {
   ocudu_assert(sequence_generator, "Invalid sequence generator.");
   ocudu_assert(fallback, "Invalid fallback SRS estimator.");
@@ -239,6 +242,10 @@ srs_estimator_result srs_estimator_cuda_impl::estimate(const resource_grid_reade
   if (cudaSetDevice(device_id) != cudaSuccess) {
     static_cast<void>(cudaGetLastError());
     return estimate_without_gpu(grid, config, "the CUDA device could not be selected");
+  }
+  // While the work of a timed-out GPU wait is pending, the GPU stays unused.
+  if (!is_gpu_usable()) {
+    return estimate_without_gpu(grid, config, "the GPU is out of use after a GPU wait timed out");
   }
 
   unsigned nof_rx_ports         = config.ports.size();
@@ -396,7 +403,8 @@ srs_estimator_result srs_estimator_cuda_impl::estimate(const resource_grid_reade
     }
     staged_grid_source = &grid;
     if (!staged_grid_reader->stage_host_grid_async(stream)) {
-      staged_grid_reader.reset();
+      // The reader is kept: destroying it would free its device grid, which synchronizes the device on the real-time
+      // thread. The next call rebinds it and retries.
       staged_grid_source = nullptr;
       static_cast<void>(cudaGetLastError());
       return estimate_without_gpu(grid, config, "the host grid could not be staged to the device");
@@ -406,23 +414,33 @@ srs_estimator_result srs_estimator_cuda_impl::estimate(const resource_grid_reade
 
   srs_estimator_metrics_t        metrics            = {};
   srs_estimator_time_alignment_t gpu_time_alignment = {};
-  bool                           estimated          = false;
+  nr_ldpc_status_t               estimate_status    = NR_LDPC_ERROR_INVALID_CONFIG;
   if (d_grid_cbf16 != nullptr) {
     if (direction_estimator) {
       received_port0.resize(nof_rx_ports * nof_symbols * sequence_length);
-      estimated = is_success(srs_estimator_estimate_auto_ta_with_received_port0(handle,
-                                                                                d_grid_cbf16,
-                                                                                static_cast<float>(max_ta),
-                                                                                &gpu_time_alignment,
-                                                                                &metrics,
-                                                                                received_port0.data(),
-                                                                                stream));
+      estimate_status = srs_estimator_estimate_auto_ta_with_received_port0(handle,
+                                                                           d_grid_cbf16,
+                                                                           static_cast<float>(max_ta),
+                                                                           &gpu_time_alignment,
+                                                                           &metrics,
+                                                                           received_port0.data(),
+                                                                           stream);
     } else {
-      estimated = is_success(srs_estimator_estimate_auto_ta(
-          handle, d_grid_cbf16, static_cast<float>(max_ta), &gpu_time_alignment, &metrics, stream));
+      estimate_status = srs_estimator_estimate_auto_ta(
+          handle, d_grid_cbf16, static_cast<float>(max_ta), &gpu_time_alignment, &metrics, stream);
     }
   }
-  if (!estimated) {
+  if (estimate_status == NR_LDPC_ERROR_TIMEOUT) {
+    // The estimation stays queued and may still write the result buffers: the GPU stays unused until it finishes.
+    unsigned count = gpu_wait_quarantine->on_wait_timeout(static_cast<cudaStream_t>(stream));
+    if (is_gpu_failure_count_logged(count)) {
+      ocudulog::fetch_basic_logger("PHY").error("Accelerated SRS estimation: GPU wait timed out; the GPU stays unused "
+                                                "until the GPU work finishes ({} timeouts so far)",
+                                                count);
+    }
+    return estimate_without_gpu(grid, config, "the GPU wait timed out");
+  }
+  if (!is_success(estimate_status)) {
     static_cast<void>(cudaGetLastError());
     return estimate_without_gpu(grid, config, "the CUDA SRS estimation failed");
   }
@@ -455,6 +473,16 @@ srs_estimator_result srs_estimator_cuda_impl::estimate(const resource_grid_reade
   }
 
   return result;
+}
+
+bool srs_estimator_cuda_impl::is_gpu_usable()
+{
+  cuda_gpu_wait_quarantine::state state = gpu_wait_quarantine->poll();
+  if (state == cuda_gpu_wait_quarantine::state::back_on_gpu) {
+    ocudulog::fetch_basic_logger("PHY").warning(
+        "Accelerated SRS estimation: the GPU work of the timed-out waits has finished; using the GPU again");
+  }
+  return state != cuda_gpu_wait_quarantine::state::off_gpu;
 }
 
 srs_estimator_result srs_estimator_cuda_impl::estimate_without_gpu(const resource_grid_reader&        grid,

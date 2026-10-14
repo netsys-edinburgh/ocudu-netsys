@@ -6,6 +6,7 @@
 #pragma once
 
 #include "ocudu/adt/tensor.h"
+#include "../../channel_coding/ldpc/cuda/cuda_rt_utils.h"
 #include "ocudu/phy/upper/sequence_generators/low_papr_sequence_generator.h"
 #include "ocudu/phy/upper/signal_processors/srs/doa_estimator.h"
 #include "ocudu/phy/upper/signal_processors/srs/srs_estimator.h"
@@ -35,8 +36,9 @@ public:
                           std::unique_ptr<srs_estimator>               fallback_,
                           std::unique_ptr<doa_estimator>               direction_estimator_,
                           unsigned                                     max_nof_prb_,
-                          bool                                         force_gpu_path_ = false,
-                          int                                          cuda_device_id_ = 0);
+                          bool                                         force_gpu_path_      = false,
+                          int                                          cuda_device_id_      = 0,
+                          std::shared_ptr<cuda_gpu_wait_quarantine>    gpu_wait_quarantine_ = nullptr);
 
   ~srs_estimator_cuda_impl() override;
 
@@ -54,6 +56,12 @@ public:
 
   /// Gets the number of estimates the forced GPU path dropped because the GPU could not produce them.
   unsigned get_nof_dropped_estimates() const { return nof_dropped_estimates; }
+
+  /// Gets the number of GPU waits that timed out, in this estimator and the estimators sharing its quarantine.
+  unsigned get_nof_gpu_wait_timeouts() const { return gpu_wait_quarantine->get_nof_timeouts(); }
+
+  /// Gets the CUDA stream of the estimator.
+  void* get_cuda_stream() const { return stream; }
 
 private:
   /// \brief Produces the estimate when the GPU does not.
@@ -90,6 +98,12 @@ private:
 
   unsigned nof_host_fallbacks    = 0;
   unsigned nof_dropped_estimates = 0;
+
+  /// Keeps the estimator off the GPU after a GPU wait timed out, until the work that timed out has finished.
+  std::shared_ptr<cuda_gpu_wait_quarantine> gpu_wait_quarantine;
+
+  /// Tells, without waiting, whether the GPU can be used. Logs once when it can be used again.
+  bool is_gpu_usable();
 };
 
 /// Returns true when the CUDA SRS estimator backend can be instantiated.
