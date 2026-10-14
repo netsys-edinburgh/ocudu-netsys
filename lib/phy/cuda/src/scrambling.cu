@@ -22,12 +22,17 @@
  */
 
 #include "scrambling.h"
+#include "../include/cuda_gpu_wait_timeout.h"
 #include <cuda_fp16.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <mutex>
 #include <new>
+#include <thread>
 #include <vector>
 
 // ============================================================================
@@ -519,36 +524,79 @@ uint64_t                                                 g_gold_seq_cache_use_co
 // kernel enqueued by another thread may still be reading. The buffer is handed to
 // callers as a borrow and consumed asynchronously on their stream, so freeing or
 // overwriting it inline would be a device-side use-after-free / data corruption.
-// Detached buffers are parked here and reclaimed in bulk only once the device is known
+// Detached buffers are parked and reclaimed in bulk only once the device is known
 // idle. Steady-state working sets that fit in the cache never detach a buffer, so this
 // stays empty; it only grows under sustained churn of >GOLD_SEQ_CACHE_ENTRIES keys.
-std::vector<uint32_t*> g_gold_seq_retired;
+//
+// The reclamation runs on a background thread: it synchronizes the whole device and
+// frees, and a stuck GPU would otherwise hold the caller, under the cache mutex that
+// every PUSCH and PDSCH scrambler takes, for ever. A stuck GPU only holds that thread,
+// and the parked buffers wait for it.
 constexpr size_t GOLD_SEQ_RETIRE_RECLAIM_THRESHOLD = 64;
 
-// Park a buffer that has been detached from its slot but may still be in flight.
-// Caller must hold g_gold_seq_cache_mutex.
+struct gold_seq_reclaimer {
+    std::mutex              mutex;
+    std::condition_variable wake;
+    std::vector<uint32_t*>  parked;
+    bool                    running = false;
+    std::atomic<unsigned>   nof_reclaimed{0};
+};
+
+// Never destroyed: the detached thread may outlive static destruction.
+gold_seq_reclaimer& get_gold_seq_reclaimer()
+{
+    static gold_seq_reclaimer* reclaimer = new gold_seq_reclaimer();
+    return *reclaimer;
+}
+
+void gold_seq_reclaim_loop(gold_seq_reclaimer* reclaimer, int device)
+{
+    (void)cudaSetDevice(device);
+    for (;;) {
+        std::vector<uint32_t*> batch;
+        {
+            std::unique_lock<std::mutex> lock(reclaimer->mutex);
+            reclaimer->wake.wait(lock, [reclaimer]() {
+                return reclaimer->parked.size() >= GOLD_SEQ_RETIRE_RECLAIM_THRESHOLD;
+            });
+            batch.swap(reclaimer->parked);
+        }
+
+        // A device-wide sync guarantees every previously enqueued consumer kernel has
+        // completed, so no retired buffer can still be read.
+        if (cudaDeviceSynchronize() != cudaSuccess) {
+            (void)cudaGetLastError();
+            // Leave the buffers parked and retry later rather than spinning.
+            std::lock_guard<std::mutex> lock(reclaimer->mutex);
+            reclaimer->parked.insert(reclaimer->parked.end(), batch.begin(), batch.end());
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
+        for (uint32_t* retired : batch) {
+            cudaFree(retired);
+        }
+        reclaimer->nof_reclaimed += static_cast<unsigned>(batch.size());
+    }
+}
+
+// Park a buffer that has been detached from its slot but may still be in flight. Never waits for the GPU.
 void retire_gold_seq_buffer(uint32_t* buf)
 {
     if (buf == nullptr)
         return;
 
-    g_gold_seq_retired.push_back (buf);
-    if (g_gold_seq_retired.size() < GOLD_SEQ_RETIRE_RECLAIM_THRESHOLD)
-        return;
-
-    // A device-wide sync guarantees every previously enqueued consumer kernel has
-    // completed, so no retired buffer can still be read. This only runs on the rare
-    // churn path (never in steady state), so the sync cost is amortized to nothing.
-    if (cudaDeviceSynchronize() != cudaSuccess)
-    {
-        (void)cudaGetLastError();
-        return; // leave buffers parked; retry reclaim on a later retirement
+    gold_seq_reclaimer&         reclaimer = get_gold_seq_reclaimer();
+    std::lock_guard<std::mutex> lock(reclaimer.mutex);
+    reclaimer.parked.push_back(buf);
+    if (!reclaimer.running) {
+        int device = 0;
+        (void)cudaGetDevice(&device);
+        std::thread(gold_seq_reclaim_loop, &reclaimer, device).detach();
+        reclaimer.running = true;
     }
-
-    for (uint32_t* retired : g_gold_seq_retired)
-        cudaFree (retired);
-
-    g_gold_seq_retired.clear();
+    if (reclaimer.parked.size() >= GOLD_SEQ_RETIRE_RECLAIM_THRESHOLD) {
+        reclaimer.wake.notify_one();
+    }
 }
 
 // Ensure a cache entry has a device buffer of at least `num_words` words (grow-only).
@@ -560,7 +608,8 @@ bool ensure_cache_entry_capacity(gold_seq_cache_entry& entry, int num_words)
     if (entry.alloc_words >= static_cast<size_t>(num_words) && entry.d_sequence != nullptr) {
         return true;
     }
-    // Grow: allocate a new buffer, copy any existing content, free old. Only on miss path.
+    // Grow: allocate a new buffer and park the old one. Only on the miss path, where the
+    // generation that follows writes every word, so the old content is not copied.
     uint32_t* new_buf = nullptr;
     const size_t alloc_words =
         std::max(static_cast<size_t>(num_words),
@@ -568,17 +617,9 @@ bool ensure_cache_entry_capacity(gold_seq_cache_entry& entry, int num_words)
     if (cudaMalloc(&new_buf, alloc_words * sizeof(uint32_t)) != cudaSuccess) {
         return false;
     }
-    if (entry.d_sequence != nullptr && entry.num_words > 0) {
-        (void)cudaMemcpy(new_buf,
-                         entry.d_sequence,
-                         static_cast<size_t>(entry.num_words) * sizeof(uint32_t),
-                         cudaMemcpyDeviceToDevice);
-        // The old buffer may still be borrowed by an in-flight consumer; park it
-        // instead of freeing it now (see retire_gold_seq_buffer).
-        retire_gold_seq_buffer(entry.d_sequence);
-    } else if (entry.d_sequence != nullptr) {
-        retire_gold_seq_buffer(entry.d_sequence);
-    }
+    // The old buffer may still be borrowed by an in-flight consumer; park it
+    // instead of freeing it now (see retire_gold_seq_buffer).
+    retire_gold_seq_buffer(entry.d_sequence);
     entry.d_sequence  = new_buf;
     entry.alloc_words = alloc_words;
     return true;
@@ -725,7 +766,11 @@ nr_ldpc_status_t gold_seq_get_or_generate(scrambler_ctx* ctx,
             return NR_LDPC_ERROR_CUDA_FAILED;
         }
     } else if (ready != nullptr) {
-        if (cudaEventSynchronize(ready) != cudaSuccess) {
+        cudaError_t wait_status = ocudu_cuda_event_wait_bounded(ready);
+        if (wait_status == cudaErrorTimeout) {
+            return NR_LDPC_ERROR_TIMEOUT;
+        }
+        if (wait_status != cudaSuccess) {
             return NR_LDPC_ERROR_CUDA_FAILED;
         }
     }
@@ -746,6 +791,10 @@ nr_ldpc_status_t gold_seq_get_or_generate(scrambler_ctx* ctx,
 // ============================================================================
 
 extern "C" {
+
+unsigned scrambler_get_nof_reclaimed_gold_sequence_buffers(void) {
+    return get_gold_seq_reclaimer().nof_reclaimed.load();
+}
 
 nr_ldpc_status_t scrambler_create(scrambler_handle_t* handle) {
     if (!handle) return NR_LDPC_ERROR_INVALID_CONFIG;

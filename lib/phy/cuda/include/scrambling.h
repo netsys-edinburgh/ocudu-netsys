@@ -247,6 +247,14 @@ nr_ldpc_status_t scrambler_preallocate_sequence(scrambler_handle_t handle, int m
  */
 const unsigned int* scrambler_get_sequence_ptr(scrambler_handle_t handle);
 
+/**
+ * @brief Gets the number of retired Gold-sequence cache buffers freed so far.
+ *
+ * Buffers detached from the process-wide cache are freed by a background thread once the device is idle, so that no
+ * caller waits for the GPU under the cache lock.
+ */
+unsigned scrambler_get_nof_reclaimed_gold_sequence_buffers(void);
+
 #ifdef __cplusplus
 }
 #endif

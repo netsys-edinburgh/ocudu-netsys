@@ -35,6 +35,11 @@ if(CUDA_ACCEL_FOUND)
         gtest_main)
     add_test(ldpc_encoder_gpu_cpu_test ldpc_encoder_gpu_cpu_test)
 
+    add_executable(gold_sequence_cache_cuda_test gold_sequence_cache_cuda_test.cpp)
+    target_link_libraries(gold_sequence_cache_cuda_test ocudu_ldpc_cuda CUDA::cudart CUDA::cuda_driver GTest::gtest
+                          GTest::gtest_main)
+    gtest_discover_tests(gold_sequence_cache_cuda_test PROPERTIES RESOURCE_LOCK ocudu_cuda_device)
+
     add_executable(cuda_gpu_wait_test cuda_gpu_wait_test.cpp)
     target_include_directories(cuda_gpu_wait_test PRIVATE ${CMAKE_SOURCE_DIR}/lib/phy/upper/channel_coding/ldpc/cuda)
     target_link_libraries(cuda_gpu_wait_test CUDA::cudart CUDA::cuda_driver GTest::gtest GTest::gtest_main)
