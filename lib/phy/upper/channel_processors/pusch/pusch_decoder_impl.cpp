@@ -482,8 +482,12 @@ void pusch_decoder_impl::fork_batch_gpu_task()
     trace_point tp = l1_ul_tracer.now();
 
     auto gpu_decoder = acquire_batch_gpu_decoder();
-    if (!gpu_decoder) {
-      logger.warning("No batch GPU PUSCH decoder available. Falling back to per-codeblock CPU decode.");
+    if (!gpu_decoder || !gpu_decoder->is_accelerator_usable()) {
+      // The decoder logs its own timeouts; an unusable accelerator is expected until its stuck work finishes.
+      if (!gpu_decoder) {
+        logger.warning("No batch GPU PUSCH decoder available. Falling back to per-codeblock CPU decode.");
+      }
+      gpu_decoder.reset();
       for (unsigned cb_id = 0; cb_id != nof_codeblocks; ++cb_id) {
         fork_codeblock_task(cb_id);
       }
@@ -826,19 +830,24 @@ bool pusch_decoder_impl::try_decode_resident(const resident_softbit_buffer& code
     cb_specific_vec.push_back(codeblock_llrs[cb_id].second.cb_specific);
   }
 
-  // Use GPU TB reassembly path: GPU does LDPC decode + CB CRC + TB deseg + TB CRC.
-  // This eliminates per-CB D2H transfer and CPU-side TB concatenation.
-  auto tb_result =
-      gpu_decoder->decode_resident_softbits(codeword.data,
-                                            codeword.nof_softbits,
-                                            nullptr, // No scrambling needed - already descrambled by E2E kernel
-                                            tb_common,
-                                            cb_specific_vec,
-                                            transport_block,
-                                            block_crc->get_generator_poly(),
-                                            current_config.nof_ldpc_iterations,
-                                            codeword.execution_context,
-                                            codeword.buffer_index);
+  // The processor planned this resident decode while the accelerator was usable. If a timeout has taken it out of
+  // use since, the soft bits live on the device only, so the transport block fails without touching the accelerator.
+  pusch_resident_codeblock_decoder::tb_decode_result tb_result;
+  tb_result.nof_iterations    = current_config.nof_ldpc_iterations;
+  const bool decoded_resident = gpu_decoder->is_accelerator_usable();
+  if (decoded_resident) {
+    tb_result =
+        gpu_decoder->decode_resident_softbits(codeword.data,
+                                              codeword.nof_softbits,
+                                              nullptr, // No scrambling needed - already descrambled by E2E kernel
+                                              tb_common,
+                                              cb_specific_vec,
+                                              transport_block,
+                                              block_crc->get_generator_poly(),
+                                              current_config.nof_ldpc_iterations,
+                                              codeword.execution_context,
+                                              codeword.buffer_index);
+  }
 
   // Store GPU TB CRC result for join_and_notify() to use.
   gpu_tb_crc_result_              = tb_result.tb_crc_ok;
@@ -854,7 +863,8 @@ bool pusch_decoder_impl::try_decode_resident(const resident_softbit_buffer& code
       const unsigned cb_length = codeblock_llrs[cb_id].second.cb_specific.full_length;
       rm_buffers.push_back(unique_rm_buffer->get_codeblock_soft_bits(cb_id, cb_length));
     }
-    if (!gpu_decoder->export_resident_softbits(rm_buffers)) {
+    // Without a resident decode of this transport block there is nothing of it to export.
+    if (!decoded_resident || !gpu_decoder->export_resident_softbits(rm_buffers)) {
       for (span<log_likelihood_ratio> rm_buffer : rm_buffers) {
         ocuduvec::zero(rm_buffer);
       }
@@ -890,7 +900,9 @@ bool pusch_decoder_impl::try_decode_resident(const resident_softbit_buffer& code
 
 bool pusch_decoder_impl::supports_resident_decode() const
 {
-  return (batch_gpu_decoder != nullptr) || (batch_gpu_decoder_pool_ != nullptr);
+  // While the work of a timed-out accelerator wait is pending, the processor plans a host decode instead.
+  return ((batch_gpu_decoder != nullptr) && batch_gpu_decoder->is_accelerator_usable()) ||
+         ((batch_gpu_decoder_pool_ != nullptr) && batch_gpu_decoder_pool_->is_accelerator_usable());
 }
 
 void pusch_decoder_impl::enable_resident_decode()

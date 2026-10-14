@@ -16,6 +16,7 @@
  */
 
 #include "ldpc_decoder.h"
+#include "../include/cuda_gpu_wait_timeout.h"
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <cooperative_groups.h>
@@ -5585,7 +5586,12 @@ nr_ldpc_status_t ldpc_decoder_configure(
     // never taken on a live system.
     const int next = (cur + 1) % FlexibleLdpcDecoder::NUM_SHIFT_SLOTS;
     if (dec->shift_slot_use_recorded[next] && (dec->shift_slot_last_use[next] != nullptr)) {
-        CHECK_NVFAILURE_LDPC(cudaEventSynchronize(dec->shift_slot_last_use[next]));
+        cudaError_t wait_status = ocudu_cuda_event_wait_bounded(dec->shift_slot_last_use[next]);
+        if (wait_status == cudaErrorTimeout) {
+            // The slot's last consumer is stuck; the slot stays claimed and the caller stops using the GPU.
+            return NR_LDPC_ERROR_TIMEOUT;
+        }
+        CHECK_NVFAILURE_LDPC(wait_status);
         dec->shift_slot_use_recorded[next] = false;
     }
 
@@ -6696,9 +6702,15 @@ float ldpc_decoder_get_avg_iterations(ldpc_decoder_handle_t handle) {
     FlexibleLdpcDecoder* dec = reinterpret_cast<FlexibleLdpcDecoder*>(handle);
     if (!dec) return 0.0f;
 
-    // If deferred stats are pending, wait for D2H and compute average
+    // If deferred stats are pending, wait for D2H and compute average. The callers have already waited for the decode,
+    // so this wait normally returns at once; if it does not finish in time, the statistics of this decode are dropped
+    // and 0 tells the caller they are unknown.
     if (dec->iteration_stats_pending) {
-        cudaEventSynchronize(dec->iteration_stats_event);
+        if (ocudu_cuda_event_wait_bounded(dec->iteration_stats_event) != cudaSuccess) {
+            (void)cudaGetLastError();
+            dec->iteration_stats_pending = false;
+            return 0.0f;
+        }
 
         int total = 0;
         for (int i = 0; i < dec->iteration_stats_count; i++) {

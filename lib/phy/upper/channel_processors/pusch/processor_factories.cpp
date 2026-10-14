@@ -91,6 +91,16 @@ public:
     return decoder_ptr(nullptr, [](pusch_resident_codeblock_decoder*) {});
   }
 
+  bool is_accelerator_usable() override
+  {
+    cuda_gpu_wait_quarantine::state state = gpu_wait_quarantine->poll();
+    if (state == cuda_gpu_wait_quarantine::state::back_on_gpu) {
+      ocudulog::fetch_basic_logger("PHY").warning(
+          "GPU PUSCH decoder: the GPU work of the timed-out waits has finished; decoding on the GPU again");
+    }
+    return state != cuda_gpu_wait_quarantine::state::off_gpu;
+  }
+
   void warmup() override
   {
     std::vector<decoder_ptr> decoders;
@@ -101,6 +111,12 @@ public:
   }
 
 private:
+  /// \brief Quarantine shared by the pooled decoders.
+  ///
+  /// A GPU that stops making progress usually stalls every decoder stream, so the first timeout takes the whole pool
+  /// off the GPU instead of costing one timeout per decoder.
+  std::shared_ptr<cuda_gpu_wait_quarantine> gpu_wait_quarantine = std::make_shared<cuda_gpu_wait_quarantine>();
+
   struct entry {
     std::unique_ptr<pusch_codeblock_decoder_cuda_batch> decoder;
     bool                                                busy = false;
@@ -119,7 +135,12 @@ private:
     batch_crcs.crc24B = crc_factory->create(crc_generator_poly::CRC24B);
 
     auto decoder = std::make_unique<pusch_codeblock_decoder_cuda_batch>(
-        dematcher_factory->create(), std::move(batch_crcs), nvcuda_device_id);
+        dematcher_factory->create(),
+        std::move(batch_crcs),
+        nvcuda_device_id,
+        MAX_NOF_PRBS,
+        pusch_constants::MAX_NOF_LAYERS,
+        gpu_wait_quarantine);
     decoder->set_ldpc_decoder_algorithm(ldpc_decoder_algorithm);
     return decoder;
   }

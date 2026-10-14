@@ -12,6 +12,7 @@
 #pragma once
 
 #include "pusch_decoder_capacity.h"
+#include "cuda_rt_utils.h"
 #include "ocudu/phy/upper/channel_coding/crc_calculator.h"
 #include "ocudu/phy/upper/channel_coding/ldpc/ldpc_decoder.h"
 #include "ocudu/phy/upper/channel_coding/ldpc/ldpc_rate_dematcher.h"
@@ -71,11 +72,21 @@ public:
   /// \param[in] nvcuda_device_id CUDA device for all decoder resources.
   /// \param[in] max_nof_prb Configured carrier capacity, not the current grant width.
   /// \param[in] max_nof_layers Maximum supported PUSCH layers for this decoder instance.
-  pusch_codeblock_decoder_cuda_batch(std::unique_ptr<ldpc_rate_dematcher> rate_dematcher,
-                                     sch_crc                              crcs,
-                                     int                                  nvcuda_device_id = 0,
-                                     unsigned                             max_nof_prb      = MAX_NOF_PRBS,
-                                     unsigned max_nof_layers = pusch_constants::MAX_NOF_LAYERS);
+  /// \param[in] gpu_wait_quarantine_ Quarantine shared with the other decoders of a pool, or nullptr for an own one.
+  pusch_codeblock_decoder_cuda_batch(std::unique_ptr<ldpc_rate_dematcher>      rate_dematcher,
+                                     sch_crc                                   crcs,
+                                     int                                       nvcuda_device_id     = 0,
+                                     unsigned                                  max_nof_prb          = MAX_NOF_PRBS,
+                                     unsigned                                  max_nof_layers       = pusch_constants::MAX_NOF_LAYERS,
+                                     std::shared_ptr<cuda_gpu_wait_quarantine> gpu_wait_quarantine_ = nullptr);
+
+  /// \brief Tells, without waiting, whether the decoder can use the GPU.
+  ///
+  /// False while the work of a GPU wait that timed out is still pending. Logs once when the GPU can be used again.
+  bool is_accelerator_usable() override;
+
+  /// Gets the number of GPU waits that timed out, in this decoder and the decoders sharing its quarantine.
+  unsigned get_nof_gpu_wait_timeouts() const { return gpu_wait_quarantine->get_nof_timeouts(); }
 
   /// \brief Destructor - releases CUDA resources.
   ~pusch_codeblock_decoder_cuda_batch();
@@ -191,7 +202,7 @@ private:
   /// \param[in] nof_filler_bits Number of filler bits in each codeblock.
   /// \param[in] nof_cbs Number of code blocks.
   /// \param[in] crc_poly CRC polynomial used for this transport block.
-  void configure_decoder(ldpc_base_graph_type base_graph,
+  bool configure_decoder(ldpc_base_graph_type base_graph,
                          unsigned             lifting_size,
                          unsigned             nof_ldpc_iterations,
                          unsigned             nof_filler_bits,
@@ -278,19 +289,29 @@ private:
   resident_export_state resident_export_;
 
   /// Host staging for exported fp16 dematched LLRs.
-  std::vector<uint16_t> h_export_half_;
+  cuda_pinned_host_buffer<uint16_t> h_export_half_;
 
   /// Device memory for batched output bits (all CBs contiguous).
   uint32_t* d_output_batch_ = nullptr;
 
-  /// Host memory for received LLRs (rate-matched, before dematching).
-  std::vector<float> h_received_llr_batch_;
+  /// \brief Pinned host memory for received LLRs (rate-matched, before dematching), for batched LLRs, and for batched
+  /// output bits.
+  ///
+  /// A copy to or from pageable memory can block until the stream drains, which defeats the bounded waits.
+  cuda_pinned_host_buffer<float>    h_received_llr_batch_;
+  cuda_pinned_host_buffer<float>    h_llr_batch_;
+  cuda_pinned_host_buffer<uint32_t> h_output_batch_;
 
-  /// Host memory for batched LLRs (pinned for async transfer).
-  std::vector<float> h_llr_batch_;
+  /// Keeps the decoder off the GPU after a GPU wait timed out, until the work that timed out has finished.
+  std::shared_ptr<cuda_gpu_wait_quarantine> gpu_wait_quarantine;
 
-  /// Host memory for batched output bits.
-  std::vector<uint32_t> h_output_batch_;
+  /// Stream of the most recent decode, which configuration waits may depend on.
+  cudaStream_t last_decode_stream_ = nullptr;
+
+  /// \brief Handles the status of a GPU wait on \c stream.
+  /// \return True if the wait completed. A timeout takes the decoder off the GPU and is logged on the first occurrence
+  /// and whenever the count doubles.
+  bool check_gpu_wait(cudaError_t status, cudaStream_t stream, const char* stage);
 
   /// Device scratch for fail-closed CRC status fallback (kernel convention: 0=pass, non-zero=fail).
   int* d_crc_results_ = nullptr;
@@ -329,6 +350,17 @@ private:
 
   /// Maximum output words per codeblock (BG1: 22*384/32 = 264).
   static constexpr unsigned MAX_CB_OUTPUT_WORDS = (22 * 384 + 31) / 32;
+
+  /// Maximum TB bytes (max TB size is ~1.3M bits = ~165KB).
+  static constexpr unsigned MAX_TB_BYTES = 200000;
+
+  /// \brief Initial pinned capacity of the received and exported LLR staging: the soft bits of a full slot.
+  ///
+  /// 14 symbols, 273 PRB, 4 layers of 256-QAM. Larger requests grow the staging.
+  static constexpr unsigned INITIAL_RECEIVED_LLRS = 14 * 273 * 12 * 4 * 8;
+
+  /// Initial pinned capacity of the dematched LLR staging used by retransmissions; larger requests grow it.
+  static constexpr unsigned INITIAL_CB_LLR_BATCH = 1U << 20;
 
   /// Cached decoder configuration.
   ldpc_base_graph_type cached_base_graph_   = ldpc_base_graph_type::BG1;
@@ -376,11 +408,6 @@ private:
   /// Last timing statistics from decode operation.
   mutable pipeline_timing_stats last_timing_stats_;
 
-  /// Cached classification of the last caller payload pointer for opportunistic direct D2H.
-  const void* cached_payload_output_ptr_        = nullptr;
-  size_t      cached_payload_output_bytes_      = 0;
-  bool        cached_payload_output_async_safe_ = false;
-
   /// CUDA events for timing (created on demand when timing is enabled).
   cudaEvent_t timing_events_[8] = {nullptr};
 
@@ -392,9 +419,6 @@ private:
 
   /// Destroy timing events.
   void destroy_timing_events();
-
-  /// Returns true when the caller payload buffer can be used directly as an async D2H target.
-  bool can_copy_payload_output_direct(span<uint8_t> payload_output);
 
   /// LDPC decoder algorithm from YAML config: "auto", "boxplus", or "min_sum".
   std::string ldpc_decoder_algorithm_ = "auto";

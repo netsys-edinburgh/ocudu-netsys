@@ -60,6 +60,7 @@ if(CUDA_ACCEL_FOUND)
         ocudu_channel_coding
         ocudu_ldpc_cuda
         ocudulog
+        CUDA::cuda_driver
         gtest
         gtest_main)
     add_test(pusch_codeblock_decoder_cuda_batch_test pusch_codeblock_decoder_cuda_batch_test)

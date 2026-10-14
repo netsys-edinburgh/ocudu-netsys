@@ -97,6 +97,12 @@ public:
 
   virtual ~pusch_resident_codeblock_decoder() = default;
 
+  /// \brief Tells, without waiting, whether the decoder can use its accelerator.
+  ///
+  /// False while the work of an accelerator wait that timed out is still pending; the caller then decodes on the CPU,
+  /// or fails the transport block if it already committed to a resident decode.
+  virtual bool is_accelerator_usable() { return true; }
+
   /// Decode a batch of host-resident codeblocks.
   virtual std::vector<codeblock_result> decode_batch(span<const described_rx_codeblock> codeblock_llrs,
                                                      span<bit_buffer>                   cb_data_buffers,

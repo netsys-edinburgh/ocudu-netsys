@@ -137,13 +137,16 @@ static crc_type_t to_crc_type(crc_generator_poly poly)
 }
 
 pusch_codeblock_decoder_cuda_batch::pusch_codeblock_decoder_cuda_batch(
-    std::unique_ptr<ldpc_rate_dematcher> rate_dematcher,
-    sch_crc                              crcs,
-    int                                  nvcuda_device_id,
-    unsigned                             max_nof_prb,
-    unsigned                             max_nof_layers) :
+    std::unique_ptr<ldpc_rate_dematcher>      rate_dematcher,
+    sch_crc                                   crcs,
+    int                                       nvcuda_device_id,
+    unsigned                                  max_nof_prb,
+    unsigned                                  max_nof_layers,
+    std::shared_ptr<cuda_gpu_wait_quarantine> gpu_wait_quarantine_) :
   dematcher_(std::move(rate_dematcher)),
-  crc_set_({std::move(crcs.crc16), std::move(crcs.crc24A), std::move(crcs.crc24B)})
+  crc_set_({std::move(crcs.crc16), std::move(crcs.crc24A), std::move(crcs.crc24B)}),
+  gpu_wait_quarantine(gpu_wait_quarantine_ ? std::move(gpu_wait_quarantine_)
+                                           : std::make_shared<cuda_gpu_wait_quarantine>())
 {
   ocudu_assert(dematcher_, "Invalid rate dematcher.");
   ocudu_assert(crc_set_.crc16, "Invalid CRC16 calculator.");
@@ -251,9 +254,13 @@ pusch_codeblock_decoder_cuda_batch::pusch_codeblock_decoder_cuda_batch(
       cuda_status == cudaSuccess, "Failed to allocate pinned gather offsets: {}", cudaGetErrorString(cuda_status));
 
   // Allocate host memory.
-  h_received_llr_batch_.resize(capacity_.codeword_llrs);
-  h_llr_batch_.resize(capacity_.codeblocks * MAX_CB_LLRS);
-  h_output_batch_.resize(capacity_.codeblocks * MAX_CB_OUTPUT_WORDS);
+  // Pinned staging sized for the configured carrier capacity, so that no copy goes to or from pageable memory. The LLR
+  // staging grows for larger requests.
+  bool pinned_ok = h_received_llr_batch_.reserve(capacity_.codeword_llrs) &&
+                   h_llr_batch_.reserve(capacity_.codeblocks * MAX_CB_LLRS) &&
+                   h_output_batch_.reserve(capacity_.codeblocks * MAX_CB_OUTPUT_WORDS) &&
+                   h_export_half_.reserve(capacity_.codeword_llrs);
+  report_fatal_error_if_not(pinned_ok, "Failed to allocate the pinned LLR staging of the GPU PUSCH decoder.");
   h_bits_per_cb_.resize(capacity_.codeblocks);
 
   // Create CUDA event for async completion tracking (no timing for minimum overhead).
@@ -499,36 +506,6 @@ pusch_codeblock_decoder_cuda_batch::~pusch_codeblock_decoder_cuda_batch()
   }
 }
 
-bool pusch_codeblock_decoder_cuda_batch::can_copy_payload_output_direct(span<uint8_t> payload_output)
-{
-  if (payload_output.empty() || payload_output.data() == nullptr) {
-    return false;
-  }
-
-  if (cached_payload_output_ptr_ == payload_output.data() && cached_payload_output_bytes_ >= payload_output.size()) {
-    return cached_payload_output_async_safe_;
-  }
-
-  cached_payload_output_ptr_        = payload_output.data();
-  cached_payload_output_bytes_      = payload_output.size();
-  cached_payload_output_async_safe_ = false;
-
-  cudaPointerAttributes attrs  = {};
-  cudaError_t           status = cudaPointerGetAttributes(&attrs, payload_output.data());
-  if (status != cudaSuccess) {
-    // Pageable host memory is reported as an invalid CUDA pointer. Clear the sticky error and use pinned staging.
-    cudaGetLastError();
-    return false;
-  }
-
-#if CUDART_VERSION >= 10000
-  cached_payload_output_async_safe_ = (attrs.type == cudaMemoryTypeHost) || (attrs.type == cudaMemoryTypeManaged);
-#else
-  cached_payload_output_async_safe_ = (attrs.memoryType == cudaMemoryTypeHost) || (attrs.isManaged != 0);
-#endif
-  return cached_payload_output_async_safe_;
-}
-
 crc_calculator* pusch_codeblock_decoder_cuda_batch::select_crc(crc_generator_poly poly)
 {
   switch (poly) {
@@ -543,7 +520,7 @@ crc_calculator* pusch_codeblock_decoder_cuda_batch::select_crc(crc_generator_pol
   }
 }
 
-void pusch_codeblock_decoder_cuda_batch::configure_decoder(ldpc_base_graph_type base_graph,
+bool pusch_codeblock_decoder_cuda_batch::configure_decoder(ldpc_base_graph_type base_graph,
                                                            unsigned             lifting_size,
                                                            unsigned             nof_ldpc_iterations,
                                                            unsigned             nof_filler_bits,
@@ -559,7 +536,7 @@ void pusch_codeblock_decoder_cuda_batch::configure_decoder(ldpc_base_graph_type 
        cached_nof_cbs_ != nof_cbs || cached_crc_poly_ != crc_poly || cached_use_boxplus_ != use_boxplus);
 
   if (!need_reconfig) {
-    return;
+    return true;
   }
 
   // Compute LDPC configuration.
@@ -680,7 +657,16 @@ void pusch_codeblock_decoder_cuda_batch::configure_decoder(ldpc_base_graph_type 
 
   // Configure the CUDA decoder.
   nr_ldpc_status_t status = ldpc_decoder_configure(decoder_handle_, &ldpc_cfg, &dec_params);
-  ocudu_assert(status == NR_LDPC_SUCCESS, "Failed to configure CUDA decoder: {}", nr_ldpc_get_error_string(status));
+  if (status == NR_LDPC_ERROR_TIMEOUT) {
+    // The configuration waits for the last consumer of a shift-table slot, which ran on the most recent decode stream.
+    check_gpu_wait(cudaErrorTimeout, (last_decode_stream_ != nullptr) ? last_decode_stream_ : stream_, "configuration");
+    return false;
+  }
+  if (status != NR_LDPC_SUCCESS) {
+    ocudulog::fetch_basic_logger("PHY").error("GPU PUSCH decoder: failed to configure the LDPC decoder: {}",
+                                              nr_ldpc_get_error_string(status));
+    return false;
+  }
 
   // Cache configuration.
   cached_base_graph_   = base_graph;
@@ -690,6 +676,38 @@ void pusch_codeblock_decoder_cuda_batch::configure_decoder(ldpc_base_graph_type 
   cached_nof_cbs_      = nof_cbs;
   cached_crc_poly_     = crc_poly;
   cached_use_boxplus_  = use_boxplus;
+  return true;
+}
+
+bool pusch_codeblock_decoder_cuda_batch::is_accelerator_usable()
+{
+  cuda_gpu_wait_quarantine::state state = gpu_wait_quarantine->poll();
+  if (state == cuda_gpu_wait_quarantine::state::back_on_gpu) {
+    ocudulog::fetch_basic_logger("PHY").warning(
+        "GPU PUSCH decoder: the GPU work of the timed-out waits has finished; decoding on the GPU again");
+  }
+  return state != cuda_gpu_wait_quarantine::state::off_gpu;
+}
+
+bool pusch_codeblock_decoder_cuda_batch::check_gpu_wait(cudaError_t status, cudaStream_t stream, const char* stage)
+{
+  if (status == cudaSuccess) {
+    return true;
+  }
+  if (status != cudaErrorTimeout) {
+    static_cast<void>(cudaGetLastError());
+    ocudulog::fetch_basic_logger("PHY").error("GPU PUSCH decoder: {} failed: {}", stage, cudaGetErrorString(status));
+    return false;
+  }
+  unsigned count = gpu_wait_quarantine->on_wait_timeout(stream);
+  if (is_gpu_failure_count_logged(count)) {
+    ocudulog::fetch_basic_logger("PHY").error(
+        "GPU PUSCH decoder: GPU wait timed out ({}); the transport block fails and decoding stays on the CPU until the "
+        "GPU work finishes ({} timeouts so far)",
+        stage,
+        count);
+  }
+  return false;
 }
 
 void pusch_codeblock_decoder_cuda_batch::configure_rate_dematcher(const codeblock_metadata& cfg)
@@ -837,8 +855,8 @@ bool pusch_codeblock_decoder_cuda_batch::export_resident_softbits(span<span<log_
   }
 
   const size_t total = static_cast<size_t>(state.nof_cbs) * state.stride;
-  if (h_export_half_.size() < total) {
-    h_export_half_.resize(total);
+  if (!h_export_half_.reserve(total)) {
+    return false;
   }
   // The resident decode already synchronised this stream, so the dematched LLRs are final; this copy only has to
   // wait for itself.
@@ -851,9 +869,7 @@ bool pusch_codeblock_decoder_cuda_batch::export_resident_softbits(span<span<log_
     static_cast<void>(cudaGetLastError());
     return false;
   }
-  cuda_status = cudaStreamSynchronizeYielding(state.stream);
-  if (cuda_status != cudaSuccess) {
-    static_cast<void>(cudaGetLastError());
+  if (!check_gpu_wait(cuda_stream_wait_bounded(state.stream), state.stream, "soft-bit export")) {
     return false;
   }
 
@@ -968,8 +984,20 @@ pusch_codeblock_decoder_cuda_batch::decode_batch(span<const described_rx_codeblo
   unsigned    common_E          = first_cb_specific.rm_length;
   unsigned    common_F          = first_cb_specific.nof_filler_bits;
 
+  // A batch the GPU cannot decode fails every codeblock CRC, like a lost transmission.
+  auto fail_all = [&]() {
+    for (codeblock_result& result : results) {
+      result.crc_ok         = false;
+      result.nof_iterations = nof_ldpc_iterations;
+    }
+    return results;
+  };
+  last_decode_stream_ = stream_;
+
   // Configure decoder for this batch (need filler bits for correct LDPC config).
-  configure_decoder(tb_common.base_graph, lifting_size, nof_ldpc_iterations, common_F, nof_cbs, crc_poly);
+  if (!configure_decoder(tb_common.base_graph, lifting_size, nof_ldpc_iterations, common_F, nof_cbs, crc_poly)) {
+    return fail_all();
+  }
 
   // GPU rate dematching is enabled for new transmissions with uniform CB configs.
   // HARQ retransmissions require LLR combining with previous soft buffers,
@@ -989,6 +1017,9 @@ pusch_codeblock_decoder_cuda_batch::decode_batch(span<const described_rx_codeblo
   if (can_use_gpu_dematch) {
     // GPU E2E path: Deinterleave + Rate dematch + LDPC decode all on GPU.
     configure_rate_dematcher(codeblock_llrs[0].second);
+    if (!h_received_llr_batch_.reserve(static_cast<size_t>(nof_cbs) * rm_stride_)) {
+      return fail_all();
+    }
 
     if (timing_enabled_) {
       ensure_timing_events();
@@ -1078,7 +1109,9 @@ pusch_codeblock_decoder_cuda_batch::decode_batch(span<const described_rx_codeblo
     }
 
     // Phase 7: Synchronize.
-    cudaStreamSynchronizeYielding(stream_);
+    if (!check_gpu_wait(cuda_stream_wait_bounded(stream_), stream_, "batch decode")) {
+      return fail_all();
+    }
 
     if (timing_enabled_) {
       float ms;
@@ -1101,7 +1134,10 @@ pusch_codeblock_decoder_cuda_batch::decode_batch(span<const described_rx_codeblo
   } else {
     // CPU fallback path: Rate dematch on CPU, LDPC decode on GPU.
     // Used for HARQ retransmissions or when CBs have different E/F.
-    std::fill(h_llr_batch_.begin(), h_llr_batch_.begin() + nof_cbs * llr_stride_, 0.0f);
+    if (!h_llr_batch_.reserve(static_cast<size_t>(nof_cbs) * llr_stride_)) {
+      return fail_all();
+    }
+    std::fill_n(h_llr_batch_.data(), static_cast<size_t>(nof_cbs) * llr_stride_, 0.0f);
 
     for (unsigned cb_idx = 0; cb_idx < nof_cbs; ++cb_idx) {
       const auto& cb_llrs = codeblock_llrs[cb_idx].first;
@@ -1134,7 +1170,9 @@ pusch_codeblock_decoder_cuda_batch::decode_batch(span<const described_rx_codeblo
                                   stream_);
     ocudu_assert(cuda_status == cudaSuccess, "Failed to copy outputs from device: {}", cudaGetErrorString(cuda_status));
 
-    cudaStreamSynchronizeYielding(stream_);
+    if (!check_gpu_wait(cuda_stream_wait_bounded(stream_), stream_, "batch decode")) {
+      return fail_all();
+    }
   }
 
   // Get actual average iterations from the decoder (tracks early termination).
@@ -1266,7 +1304,11 @@ pusch_codeblock_decoder_cuda_batch::tb_decode_result pusch_codeblock_decoder_cud
 
   // Configure decoder for this batch (need filler bits for correct LDPC config).
   auto decoder_cfg_start = timing_enabled_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-  configure_decoder(tb_common.base_graph, lifting_size, nof_ldpc_iterations, common_F, nof_cbs, cb_crc_poly);
+  last_decode_stream_    = stream;
+  if (!configure_decoder(tb_common.base_graph, lifting_size, nof_ldpc_iterations, common_F, nof_cbs, cb_crc_poly)) {
+    resident_export_.valid = false;
+    return result;
+  }
   if (timing_enabled_) {
     last_timing_stats_.decoder_config_us =
         std::chrono::duration<float, std::micro>(std::chrono::steady_clock::now() - decoder_cfg_start).count();
@@ -1627,15 +1669,9 @@ pusch_codeblock_decoder_cuda_batch::tb_decode_result pusch_codeblock_decoder_cud
 
   // Phase 5: D2H transfer of payload bytes, CB CRCs, and TB CRC result (single sync).
   //
-  // ABI boundary: tb_output owns payload bytes only. The device TB buffer also contains appended
-  // TB CRC bytes used by the GPU CRC kernel. Direct D2H may target tb_output only for payload_bytes;
-  // the CRC tail must never be written into the caller span.
-  const bool direct_payload_copy = can_copy_payload_output_direct(tb_output);
-  if (direct_payload_copy) {
-    cudaMemcpyAsync(tb_output.data(), d_tb_output_, payload_bytes, cudaMemcpyDeviceToHost, stream);
-  } else {
-    cudaMemcpyAsync(h_tb_output_pinned_, d_tb_output_, tb_with_crc_bytes, cudaMemcpyDeviceToHost, stream);
-  }
+  // The payload always lands in the decoder's own staging, never straight in the caller span: after a wait that times
+  // out, the copy stays queued and could overwrite the caller's buffer once it holds another transport block.
+  cudaMemcpyAsync(h_tb_output_pinned_, d_tb_output_, tb_with_crc_bytes, cudaMemcpyDeviceToHost, stream);
 
   if (d_decoder_crc_results != nullptr) {
     cudaError_t cuda_status = cudaMemcpyAsync(
@@ -1663,21 +1699,31 @@ pusch_codeblock_decoder_cuda_batch::tb_decode_result pusch_codeblock_decoder_cud
     cudaEventRecord(timing_events_[5], stream); // End D2H
   }
 
+  cudaError_t wait_status = cudaSuccess;
   if (completion_event_) {
     auto wait_start = timing_enabled_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     cudaEventRecord(completion_event_, stream);
-    cudaEventSynchronizeYielding(completion_event_);
+    wait_status = cuda_event_wait_bounded(completion_event_);
     if (timing_enabled_) {
       last_timing_stats_.completion_wait_us =
           std::chrono::duration<float, std::micro>(std::chrono::steady_clock::now() - wait_start).count();
     }
   } else {
     auto wait_start = timing_enabled_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-    cudaStreamSynchronizeYielding(stream);
+    wait_status     = cuda_stream_wait_bounded(stream);
     if (timing_enabled_) {
       last_timing_stats_.completion_wait_us =
           std::chrono::duration<float, std::micro>(std::chrono::steady_clock::now() - wait_start).count();
     }
+  }
+
+  // Nothing in the staging can be trusted after a failed wait: the transport block fails, and nothing is left to export
+  // into the HARQ soft buffers.
+  if (!check_gpu_wait(wait_status, stream, "resident decode")) {
+    resident_export_.valid = false;
+    result.tb_crc_ok       = false;
+    result.all_cb_crcs_ok  = false;
+    return result;
   }
 
   // Collect timing statistics.
@@ -1699,8 +1745,8 @@ pusch_codeblock_decoder_cuda_batch::tb_decode_result pusch_codeblock_decoder_cud
         last_timing_stats_.rate_dematch_us + last_timing_stats_.ldpc_decode_us + last_timing_stats_.crc_check_us;
   }
 
-  // Copy only payload bytes into the caller span when we used pinned staging.
-  if (!direct_payload_copy) {
+  // Copy only payload bytes into the caller span.
+  {
     auto tb_copy_start = timing_enabled_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     std::memcpy(tb_output.data(), h_tb_output_pinned_, payload_bytes);
     if (timing_enabled_) {

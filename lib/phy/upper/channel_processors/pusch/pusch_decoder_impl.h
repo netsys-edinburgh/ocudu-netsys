@@ -89,6 +89,9 @@ public:
 
     /// Pre-creates pooled decoders outside the slot processing path.
     virtual void warmup() {}
+
+    /// Tells, without waiting, whether the pooled decoders can use their accelerator.
+    virtual bool is_accelerator_usable() { return true; }
   };
 
   /// \brief PUSCH decoder constructor with optional batch GPU decoder.

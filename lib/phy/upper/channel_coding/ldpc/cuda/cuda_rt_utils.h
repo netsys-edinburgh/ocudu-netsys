@@ -352,6 +352,56 @@ private:
   bool                      never_drains = false;
 };
 
+/// \brief Page-locked host buffer that grows to the largest size requested.
+///
+/// A copy to or from pageable memory can block until the stream drains, which defeats the bounded waits; a copy through
+/// page-locked memory stays asynchronous. Growing frees the previous allocation with cudaFreeHost(), which synchronizes
+/// the device, so the constructor reserves the usual worst case and growth stays exceptional.
+template <typename T>
+class cuda_pinned_host_buffer
+{
+public:
+  explicit cuda_pinned_host_buffer(size_t initial_capacity = 0) { reserve(initial_capacity); }
+
+  ~cuda_pinned_host_buffer()
+  {
+    if (ptr != nullptr) {
+      cudaFreeHost(ptr);
+    }
+  }
+
+  cuda_pinned_host_buffer(const cuda_pinned_host_buffer&)            = delete;
+  cuda_pinned_host_buffer& operator=(const cuda_pinned_host_buffer&) = delete;
+
+  /// \brief Makes room for \c nof_elements elements, keeping the contents only if no growth is needed.
+  /// \return False if the allocation failed; the buffer then keeps its previous allocation.
+  bool reserve(size_t nof_elements)
+  {
+    if (nof_elements <= capacity) {
+      return true;
+    }
+    T* new_ptr = nullptr;
+    if (cudaHostAlloc(reinterpret_cast<void**>(&new_ptr), nof_elements * sizeof(T), cudaHostAllocDefault) !=
+        cudaSuccess) {
+      static_cast<void>(cudaGetLastError());
+      return false;
+    }
+    if (ptr != nullptr) {
+      cudaFreeHost(ptr);
+    }
+    ptr      = new_ptr;
+    capacity = nof_elements;
+    return true;
+  }
+
+  T*     data() { return ptr; }
+  size_t size() const { return capacity; }
+
+private:
+  T*     ptr      = nullptr;
+  size_t capacity = 0;
+};
+
 /// Tells whether a timeout or drop count is worth logging: the first occurrence and whenever the count doubles.
 inline bool is_gpu_failure_count_logged(unsigned count)
 {

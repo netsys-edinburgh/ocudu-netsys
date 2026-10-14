@@ -17,10 +17,13 @@
 #include "ocudu/phy/upper/channel_coding/ldpc/ldpc.h"
 #include "ocudu/phy/upper/codeblock_metadata.h"
 #include "ocudu/phy/upper/log_likelihood_ratio.h"
+#include <chrono>
+#include <cuda.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <random>
+#include <thread>
 #include <vector>
 
 using namespace ocudu;
@@ -44,7 +47,8 @@ std::ostream& operator<<(std::ostream& os, const export_test_params& p)
 class PuschCodeblockDecoderCudaBatchExportTest : public ::testing::TestWithParam<export_test_params>
 {
 protected:
-  static std::unique_ptr<pusch_codeblock_decoder_cuda_batch> make_decoder(unsigned max_prb = 51)
+  static std::unique_ptr<pusch_codeblock_decoder_cuda_batch>
+  make_decoder(std::shared_ptr<cuda_gpu_wait_quarantine> quarantine = nullptr, unsigned max_prb = 51)
   {
     auto dematcher_factory = create_ldpc_rate_dematcher_factory_sw("auto");
     auto crc_factory       = create_crc_calculator_factory_sw("auto");
@@ -57,7 +61,7 @@ protected:
     crcs.crc24B = crc_factory->create(crc_generator_poly::CRC24B);
     // Every existing export case fits a 51-PRB SISO carrier; preserve all BG/Z/Qm/E cases.
     return std::make_unique<pusch_codeblock_decoder_cuda_batch>(
-        dematcher_factory->create(), std::move(crcs), 0, max_prb, 1);
+        dematcher_factory->create(), std::move(crcs), 0, max_prb, 1, std::move(quarantine));
   }
 
   /// Uploads host int8 LLRs as device fp16 LLRs on the demodulator scale (host = 4 x device).
@@ -78,6 +82,29 @@ protected:
     return device;
   }
 };
+
+std::unique_ptr<pusch_codeblock_decoder_cuda_batch>
+      PuschCodeblockDecoderCudaBatchExportTest_make_decoder(std::shared_ptr<cuda_gpu_wait_quarantine> quarantine);
+void* PuschCodeblockDecoderCudaBatchExportTest_upload_as_half(const std::vector<log_likelihood_ratio>& llrs);
+
+/// Gives the timeout test access to the fixture helpers.
+class PuschCodeblockDecoderCudaBatchHelpers : public PuschCodeblockDecoderCudaBatchExportTest
+{
+public:
+  using PuschCodeblockDecoderCudaBatchExportTest::make_decoder;
+  using PuschCodeblockDecoderCudaBatchExportTest::upload_as_half;
+};
+
+std::unique_ptr<pusch_codeblock_decoder_cuda_batch>
+PuschCodeblockDecoderCudaBatchExportTest_make_decoder(std::shared_ptr<cuda_gpu_wait_quarantine> quarantine)
+{
+  return PuschCodeblockDecoderCudaBatchHelpers::make_decoder(std::move(quarantine));
+}
+
+void* PuschCodeblockDecoderCudaBatchExportTest_upload_as_half(const std::vector<log_likelihood_ratio>& llrs)
+{
+  return PuschCodeblockDecoderCudaBatchHelpers::upload_as_half(llrs);
+}
 
 } // namespace
 
@@ -319,3 +346,161 @@ INSTANTIATE_TEST_SUITE_P(
                       export_test_params{ldpc_base_graph_type::BG2, 384, modulation_scheme::QPSK, 100},
                       export_test_params{ldpc_base_graph_type::BG2, 160, modulation_scheme::QAM256, 50}),
     ::testing::PrintToStringParamName());
+
+namespace {
+
+/// \brief Holds the work queued on a stream behind a gate until the test releases it, as a stuck GPU would.
+///
+/// The gate word lives in mapped host memory and the host releases it with a plain store: a release written by another
+/// stream could share a hardware queue with a gated stream and never run.
+class stream_gate
+{
+public:
+  explicit stream_gate(cudaStream_t stream_) : stream(stream_)
+  {
+    void* host_word   = nullptr;
+    void* device_word = nullptr;
+    supported         = (cudaHostAlloc(&host_word, sizeof(uint32_t), cudaHostAllocMapped) == cudaSuccess) &&
+                (cudaHostGetDevicePointer(&device_word, host_word, 0) == cudaSuccess);
+    if (supported) {
+      gate_word  = static_cast<volatile uint32_t*>(host_word);
+      *gate_word = 0;
+      supported  = cuStreamWaitValue32(reinterpret_cast<CUstream>(stream),
+                                      reinterpret_cast<CUdeviceptr>(device_word),
+                                      1U,
+                                      CU_STREAM_WAIT_VALUE_EQ) == CUDA_SUCCESS;
+    }
+  }
+
+  ~stream_gate()
+  {
+    release();
+    (void)cudaStreamSynchronize(stream);
+    if (gate_word != nullptr) {
+      (void)cudaFreeHost(const_cast<uint32_t*>(gate_word));
+    }
+  }
+
+  stream_gate(const stream_gate&)            = delete;
+  stream_gate& operator=(const stream_gate&) = delete;
+
+  void release()
+  {
+    if (gate_word != nullptr) {
+      *gate_word = 1;
+    }
+  }
+
+  bool supported = false;
+
+private:
+  cudaStream_t       stream    = nullptr;
+  volatile uint32_t* gate_word = nullptr;
+};
+
+} // namespace
+
+// A stuck GPU must not hold the PUSCH worker for ever. A decode whose wait times out fails its transport block and
+// leaves nothing to export into the HARQ soft buffers; every decoder sharing the quarantine stays off the GPU until the
+// stuck work has finished.
+TEST(PuschCodeblockDecoderCudaBatchTimeoutTest, GpuWaitTimeoutFailsTheTransportBlockAndLeavesTheGpuUntilItDrains)
+{
+  auto quarantine = std::make_shared<cuda_gpu_wait_quarantine>();
+  auto decoder    = PuschCodeblockDecoderCudaBatchExportTest_make_decoder(quarantine);
+  auto sibling    = PuschCodeblockDecoderCudaBatchExportTest_make_decoder(quarantine);
+  ASSERT_NE(decoder, nullptr);
+  ASSERT_NE(sibling, nullptr);
+
+  // Single BG2 codeblock of random soft bits.
+  const unsigned     Z           = 160;
+  const unsigned     K           = 10 * Z;
+  const unsigned     N_full      = ldpc::compute_full_codeblock_size(ldpc_base_graph_type::BG2, units::bits(K)).value();
+  const unsigned     E           = N_full - 2 * Z;
+  const unsigned     tb_crc_bits = 16;
+  codeblock_metadata cfg         = {};
+  cfg.tb_common.base_graph       = ldpc_base_graph_type::BG2;
+  cfg.tb_common.lifting_size     = static_cast<ldpc::lifting_size_t>(Z);
+  cfg.tb_common.rv               = 0;
+  cfg.tb_common.mod              = modulation_scheme::QPSK;
+  cfg.tb_common.Nref             = 0;
+  cfg.tb_common.cw_length        = E;
+  cfg.cb_specific.full_length    = N_full;
+  cfg.cb_specific.rm_length      = E;
+  cfg.cb_specific.nof_filler_bits = 0;
+  cfg.cb_specific.cw_offset       = 0;
+  cfg.cb_specific.nof_crc_bits    = tb_crc_bits;
+
+  std::mt19937                       rng(0x5eed);
+  std::uniform_int_distribution<int> dist(-40, 40);
+  std::vector<log_likelihood_ratio>  llrs(E);
+  for (log_likelihood_ratio& llr : llrs) {
+    llr = log_likelihood_ratio(static_cast<int8_t>(dist(rng)));
+  }
+  void* d_llrs = PuschCodeblockDecoderCudaBatchExportTest_upload_as_half(llrs);
+  ASSERT_NE(d_llrs, nullptr);
+  std::vector<uint8_t>                                  tb((K - tb_crc_bits) / 8);
+  std::vector<codeblock_metadata::cb_specific_metadata> cb_specific = {cfg.cb_specific};
+
+  // A healthy resident decode leaves soft bits to export.
+  auto healthy = decoder->decode_resident_softbits(
+      d_llrs, E, nullptr, cfg.tb_common, cb_specific, tb, crc_generator_poly::CRC16, 6, nullptr, -1);
+  EXPECT_FALSE(healthy.tb_crc_ok);
+  ASSERT_TRUE(decoder->is_accelerator_usable());
+
+  // The resident decode runs on the caller's stream; hold it behind a gate.
+  cudaStream_t caller_stream = nullptr;
+  ASSERT_EQ(cudaStreamCreateWithFlags(&caller_stream, cudaStreamNonBlocking), cudaSuccess);
+  {
+    stream_gate caller_gate(caller_stream);
+    if (!caller_gate.supported) {
+      cudaFree(d_llrs);
+      GTEST_SKIP() << "CUDA stream memory operations are not supported by this device.";
+    }
+    auto start = std::chrono::steady_clock::now();
+    auto stuck = decoder->decode_resident_softbits(
+        d_llrs, E, nullptr, cfg.tb_common, cb_specific, tb, crc_generator_poly::CRC16, 6, caller_stream, -1);
+    EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(2));
+    EXPECT_FALSE(stuck.tb_crc_ok);
+    EXPECT_FALSE(stuck.all_cb_crcs_ok);
+
+    // Nothing of the failed decode can be exported, nor anything of the healthy one before it.
+    std::vector<log_likelihood_ratio>       exported(N_full);
+    std::vector<span<log_likelihood_ratio>> buffers = {exported};
+    EXPECT_FALSE(decoder->export_resident_softbits(buffers));
+
+    // Every decoder sharing the quarantine is off the GPU.
+    EXPECT_FALSE(decoder->is_accelerator_usable());
+    EXPECT_FALSE(sibling->is_accelerator_usable());
+    EXPECT_EQ(sibling->get_nof_gpu_wait_timeouts(), 1U);
+
+    // A host-visible batch decode whose wait times out fails every codeblock.
+    stream_gate                             decoder_gate(decoder->get_cuda_stream());
+    std::vector<log_likelihood_ratio>       soft_buffer(N_full, log_likelihood_ratio(0));
+    std::vector<span<log_likelihood_ratio>> rm_buffers = {soft_buffer};
+    dynamic_bit_buffer                      cb_data(K);
+    std::vector<bit_buffer>                 cb_data_buffers = {cb_data};
+    std::vector<described_rx_codeblock>     codeblocks      = {{llrs, cfg}};
+    auto                                    results =
+        decoder->decode_batch(codeblocks, cb_data_buffers, rm_buffers, true, crc_generator_poly::CRC16, true, 6);
+    ASSERT_EQ(results.size(), 1U);
+    EXPECT_FALSE(results.front().crc_ok);
+    EXPECT_EQ(results.front().nof_iterations, 6U);
+    EXPECT_EQ(decoder->get_nof_gpu_wait_timeouts(), 2U);
+
+    // Releasing one stream is not enough.
+    caller_gate.release();
+    ASSERT_EQ(cudaStreamSynchronize(caller_stream), cudaSuccess);
+    EXPECT_FALSE(sibling->is_accelerator_usable());
+  }
+
+  // Once every stuck stream has drained, the decoders use the GPU again.
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!sibling->is_accelerator_usable() && (std::chrono::steady_clock::now() < deadline)) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  EXPECT_TRUE(sibling->is_accelerator_usable());
+  EXPECT_TRUE(decoder->is_accelerator_usable());
+
+  EXPECT_EQ(cudaStreamDestroy(caller_stream), cudaSuccess);
+  cudaFree(d_llrs);
+}
