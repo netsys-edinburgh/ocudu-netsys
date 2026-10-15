@@ -1,0 +1,103 @@
+# OCUDU gNB config for PR1450 (Techphosis) O-RU, using the OFFICIAL
+# docs.ocudu.org Pegatron PR1450 reference ru_ofh block verbatim
+# (100MHz, 4x4 MIMO, band n78 -- the only combination Pegatron/OCUDU
+# has actually verified for this RU model), adapted with our real
+# addressing: VLAN 100 (confirmed mandatory for this physical RU,
+# overriding the doc's generic vlan_tag=5 placeholder), our AMF
+# bridge IP, and PLMN 99970 matching the provisioned SIM.
+
+expert_execution:
+  affinities:
+    main_pool_cpus: 2,4,6,8,10,12,14 # isolated P-cores (GRUB isolcpus), freed now oai-gnb is stopped
+    main_pool_pinning: mask
+
+cu_cp:
+  amf:
+    addrs: 172.21.16.11 # oai-amf, existing core left running
+    port: 38412
+    bind_addrs: 172.21.16.254
+    supported_tracking_areas:
+      - tac: 1
+        plmn_list:
+          - plmn: "99970" # mcc=999 mnc=70, matches oai-amf's mini_nonrf_config_3slices.yaml
+            tai_slice_support_list:
+              - sst: 1
+
+ru_ofh:
+  # Verbatim from docs.ocudu.org Pegatron PR1450 reference
+  t1a_max_cp_dl: 470
+  t1a_min_cp_dl: 285
+  t1a_max_cp_ul: 429
+  t1a_min_cp_ul: 285
+  t1a_max_up: 350
+  t1a_min_up: 125
+  ta4_max: 180
+  ta4_min: 110
+  is_prach_cp_enabled: true
+  compr_method_ul: bfp
+  compr_bitwidth_ul: 9
+  compr_method_dl: bfp
+  compr_bitwidth_dl: 9
+  compr_method_prach: bfp
+  compr_bitwidth_prach: 9
+  enable_ul_static_compr_hdr: false # RU's own 'show running-config' says compression_type_rx/tx=DYNAMIC, not static -- ground truth beats the official doc's static-header claim
+  enable_dl_static_compr_hdr: false
+  ru_reference_level_dBFS: -12
+  subcarrier_rms_backoff_dB: 0
+  cells:
+    - network_interface: enp3s0f1np1 # PF, plain socket -- DPDK+SR-IOV dead end on this NIC: rx-vlan-offload strips VLAN 100 before DPDK/VF sees it, VIRTCHNL_OP_DISABLE_VLAN_STRIPPING mailbox bug prevents disabling it
+      ru_mac_addr: 48:21:0b:4b:93:8f # confirmed via RU 'show interface-info' fm1-mac9
+      du_mac_addr: 00:11:22:33:44:55
+      vlan_tag_cp: 100 # RU rejects untagged/eCpri-vlan 0 -- confirmed mandatory for this RU
+      vlan_tag_up: 100
+      enable_promiscuous: true
+      check_link_status: false
+      prach_port_id: [4, 5, 6, 7] # PR1450 fixed eAxC layout: PRACH on eAxC 4-7
+      dl_port_id: [0, 1, 2, 3]
+      ul_port_id: [0, 1, 2, 3]
+
+cell_cfg:
+  dl_arfcn: 643296 # absoluteFrequencySSB, RU's fixed RF center 3649.44 MHz
+  band: 78
+  channel_bandwidth_MHz: 100
+  common_scs: 30
+  plmn: "99970"
+  tac: 1
+  pci: 21 # matches PhysCellId used throughout this session
+  nof_antennas_dl: 4
+  nof_antennas_ul: 4
+  prach:
+    prach_config_index: 159 # validated at 100MHz/273PRB earlier this session
+    prach_root_sequence_index: 1
+    zero_correlation_zone: 0
+    prach_frequency_start: 0 # was 12 -- matches prod OCUDU template default and OAI's prach_msg1_FrequencyStart=0
+
+metrics:
+  enable_json: true
+  layers:
+    enable_app_usage: true
+    enable_sched: true
+    enable_rlc: true
+    enable_mac: true
+    enable_du_low: true
+    enable_ru: true
+  periodicity:
+    du_report_period: 1000
+
+remote_control:
+  bind_addr: 0.0.0.0
+  port: 8001
+  enabled: true
+
+aurora:
+  enable: true # newer shared-memory AURORA framework in this checkout -- field renamed from 'enabled', no more enable_log_metrics
+  collection_interval_ms: 1000
+  ran_type: gnb
+
+log:
+  filename: /tmp/ocudu_gnb.log
+  all_level: info
+
+pcap:
+  mac_enable: false
+  ngap_enable: false
