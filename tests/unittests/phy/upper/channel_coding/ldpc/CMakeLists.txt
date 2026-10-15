@@ -35,6 +35,11 @@ if(CUDA_ACCEL_FOUND)
         gtest_main)
     add_test(ldpc_encoder_gpu_cpu_test ldpc_encoder_gpu_cpu_test)
 
+    add_executable(rate_matching_cuda_limited_buffer_test rate_matching_cuda_limited_buffer_test.cpp)
+    target_link_libraries(rate_matching_cuda_limited_buffer_test ocudu_channel_coding ocudu_ldpc_cuda CUDA::cudart
+                          GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(rate_matching_cuda_limited_buffer_test PROPERTIES RESOURCE_LOCK ocudu_cuda_device)
+
     add_executable(gold_sequence_cache_cuda_test gold_sequence_cache_cuda_test.cpp)
     target_link_libraries(gold_sequence_cache_cuda_test ocudu_ldpc_cuda CUDA::cudart CUDA::cuda_driver GTest::gtest
                           GTest::gtest_main)

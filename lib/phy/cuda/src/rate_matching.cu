@@ -561,12 +561,22 @@ nr_ldpc_status_t rate_matcher_configure_tx(rate_matcher_handle_t handle,
     handle->Kd = ldpc_cfg->num_info_bits;
     handle->F = ldpc_cfg->num_filler_bits;
 
-    // Use limited buffer if specified
-    int N_cb = rm_cfg->limited_buffer ? rm_cfg->N_cb : handle->N;
-    N_cb = (N_cb < handle->N) ? N_cb : handle->N;
+    // Limited-buffer rate matching (TS 38.212, Section 5.4.2.1): N_cb = min(N, N_ref) sets both the starting position
+    // k0 and the length the bit selection wraps around, so every kernel takes it from handle->N. The output layout
+    // uses N_full and does not change.
+    if (rm_cfg->limited_buffer) {
+        if (rm_cfg->N_cb <= 0) {
+            return NR_LDPC_ERROR_INVALID_CONFIG;
+        }
+        handle->N = (rm_cfg->N_cb < handle->N) ? rm_cfg->N_cb : handle->N;
+    }
+    // The filler bits must lie inside the circular buffer, as in the host rate matcher.
+    if (handle->N <= handle->Kd - handle->puncture_offset + handle->F) {
+        return NR_LDPC_ERROR_INVALID_CONFIG;
+    }
 
     handle->E = rm_cfg->E;
-    handle->k0 = rate_matcher_compute_k0(ldpc_cfg->base_graph, handle->Z, rm_cfg->rv, N_cb);
+    handle->k0 = rate_matcher_compute_k0(ldpc_cfg->base_graph, handle->Z, rm_cfg->rv, handle->N);
 
     return NR_LDPC_SUCCESS;
 }
