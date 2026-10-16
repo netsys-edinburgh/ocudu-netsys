@@ -27,6 +27,9 @@
  *              flush one CSV row per sample to <output_file> every 100 samples.
  *   --once   : read once, print formatted summary, exit (legacy behaviour).
  *
+ * OCUDU: --output-mode csv|influx|both selects the CSV file, InfluxDB line protocol sent to a local Telegraf
+ * (--influx-url, see aurora_reader_influx.h) or both. Both outputs carry the same columns and values.
+ *
  * CSV layout:
  *   - One row per sample (one collection interval).
  *   - timestamp_us is the index column.
@@ -38,6 +41,7 @@
 
 #include "aurora_shm.h"
 #include "aurora_infra.h"
+#include "aurora_reader_influx.h"
 #include <ctype.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -1634,6 +1638,12 @@ int main(int argc, char **argv)
     int  batch_size       = DEFAULT_BATCH_SIZE;
     char *config_file     = NULL;
     bool ran_type_from_cli = false;
+    /* OCUDU: outputs. Environment variables give the defaults (convenient in Kubernetes), CLI options win. */
+    bool        out_csv    = true, out_influx = false;
+    const char *influx_url = getenv("AURORA_INFLUX_URL") ? getenv("AURORA_INFLUX_URL") : "udp://127.0.0.1:8094";
+    const char *output_mode = getenv("AURORA_OUTPUT_MODE");
+    const char *influx_cli_tags[32];
+    int         nof_influx_cli_tags = 0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
@@ -1652,6 +1662,12 @@ int main(int argc, char **argv)
                 "  --output <file>      CSV output file (default: aurora_metrics_<ts>.csv)\n"
                 "  --samples <N>        Rows to buffer before flushing to CSV (default %d)\n"
                 "  --once               Print one formatted snapshot and exit\n"
+                "\nOutputs (OCUDU):\n"
+                "  --output-mode <m>    csv|influx|both (default csv, env AURORA_OUTPUT_MODE)\n"
+                "  --influx-url <url>   Telegraf socket_listener: udp://host:port, tcp://host:port or\n"
+                "                       unix:///path (default udp://127.0.0.1:8094, env AURORA_INFLUX_URL)\n"
+                "  --influx-tag <k=v>   Extra tag on every InfluxDB point, repeatable\n"
+                "                       (also env AURORA_INFLUX_TAGS=k=v,k=v)\n"
                 "\nInfrastructure metrics (sidecar mode):\n"
                 "  --infra-enabled yes|no     Enable infra metrics collection\n"
                 "  --infra-shm-key <hex>      Infra SHM key (default 0xAEF10001)\n"
@@ -1689,6 +1705,14 @@ int main(int argc, char **argv)
             if (batch_size < 1) batch_size = 1;
         } else if (!strcmp(argv[i], "--once")) {
             print_once = true;
+        } else if (!strcmp(argv[i], "--output-mode") && i + 1 < argc) {
+            output_mode = argv[++i];
+        } else if (!strcmp(argv[i], "--influx-url") && i + 1 < argc) {
+            influx_url = argv[++i];
+        } else if (!strcmp(argv[i], "--influx-tag") && i + 1 < argc) {
+            if (nof_influx_cli_tags < (int)(sizeof(influx_cli_tags) / sizeof(influx_cli_tags[0])))
+                influx_cli_tags[nof_influx_cli_tags++] = argv[i + 1];
+            i++;
         } else if (!strncmp(argv[i], "--infra-", 8)) {
             /* Parsed later by aurora_infra_parse_cli(); skip the flag and its value. */
             if (i + 1 < argc) i++;
@@ -1696,6 +1720,16 @@ int main(int argc, char **argv)
             config_file = argv[i];
         } else {
             fprintf(stderr, "aurora_reader: ignoring unknown option '%s'\n", argv[i]);
+        }
+    }
+
+    if (output_mode) {
+        if      (!strcmp(output_mode, "csv"))    { out_csv = true;  out_influx = false; }
+        else if (!strcmp(output_mode, "influx")) { out_csv = false; out_influx = true; }
+        else if (!strcmp(output_mode, "both"))   { out_csv = true;  out_influx = true; }
+        else {
+            fprintf(stderr, "aurora_reader: invalid output mode '%s' (csv, influx or both)\n", output_mode);
+            return 1;
         }
     }
 
@@ -2130,70 +2164,108 @@ int main(int argc, char **argv)
      * Continuous collection mode
      * ----------------------------------------------------------- */
 
-    /* Build default CSV filename from start timestamp if not provided */
-    if (csv_path[0] == '\0') {
-        time_t now = time(NULL);
-        struct tm *t = localtime(&now);
-        snprintf(csv_path, sizeof(csv_path),
-                 "aurora_metrics_%04d%02d%02d_%02d%02d%02d.csv",
-                 t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
-                 t->tm_hour, t->tm_min, t->tm_sec);
-    }
+    /* RAN type of the producer (shared memory), which selects the columns; the configured one only applies when the
+     * published value is not valid. It names the CSV file and tags the InfluxDB points. */
+    static const char *ran_prefixes[] = {"gnb", "du", "cu", "cu-cp", "cu-up"};
+    const int shm_rt = (int)metrics->ran_type;
+    const int rt     = (shm_rt >= (int)RAN_GNB && shm_rt <= (int)RAN_CU_UP) ? shm_rt : (int)aurora_cfg.ran_type;
+    if (ran_type_from_cli && rt != (int)aurora_cfg.ran_type)
+        fprintf(stderr, "aurora_reader: --ran-type %s differs from the producer's RAN type %s; using %s\n",
+                (aurora_cfg.ran_type <= RAN_CU_UP) ? ran_prefixes[aurora_cfg.ran_type] : "?",
+                ran_prefixes[rt], ran_prefixes[rt]);
+    const char *rp = (rt >= (int)RAN_GNB && rt <= (int)RAN_CU_UP) ? ran_prefixes[rt] : "gnb";
 
-    /* Prefix the CSV basename with the RAN type (e.g. "du_aurora_metrics_...csv")
-     * unless the basename already begins with "<rp>_" to avoid duplication.
-     * OCUDU: the RAN type is the one the producer published in shared memory, which also selects the CSV columns, so
-     * the file name always matches its content. The configured one (--ran-type / aurora.ran_type) only applies when
-     * the producer's value is not a valid RAN type. */
+    /* Header rendered once, for both outputs (it also fixes the per-thread column layout). */
+    char  *header     = NULL;
+    size_t header_len = 0;
     {
-        static const char *ran_prefixes[] = {"gnb", "du", "cu", "cu-cp", "cu-up"};
-        const int shm_rt = (int)metrics->ran_type;
-        const int rt     = (shm_rt >= (int)RAN_GNB && shm_rt <= (int)RAN_CU_UP) ? shm_rt : (int)aurora_cfg.ran_type;
-        if (ran_type_from_cli && rt != (int)aurora_cfg.ran_type)
-            fprintf(stderr, "aurora_reader: --ran-type %s differs from the producer's RAN type %s; using %s\n",
-                    (aurora_cfg.ran_type <= RAN_CU_UP) ? ran_prefixes[aurora_cfg.ran_type] : "?",
-                    ran_prefixes[rt], ran_prefixes[rt]);
-        const char *rp = (rt >= (int)RAN_GNB && rt <= (int)RAN_CU_UP) ? ran_prefixes[rt] : "gnb";
-        const char *slash = strrchr(csv_path, '/');
-        const char *base  = slash ? slash + 1 : csv_path;
-        size_t rplen = strlen(rp);
-        int already_prefixed = (strncmp(base, rp, rplen) == 0 && base[rplen] == '_');
-        if (!already_prefixed) {
-            char tmp[sizeof(csv_path)];
-            if (slash)
-                snprintf(tmp, sizeof(tmp), "%.*s%s_%s",
-                         (int)(base - csv_path), csv_path, rp, base);
-            else
-                snprintf(tmp, sizeof(tmp), "%s_%s", rp, csv_path);
-            memcpy(csv_path, tmp, sizeof(csv_path));
-        }
+        FILE *hs = open_memstream(&header, &header_len);
+        if (!hs) { perror("aurora_reader: open_memstream"); return 1; }
+        write_csv_header(hs, metrics);
+        fclose(hs);
     }
 
-    /* Open CSV file — write header immediately */
-    FILE *fp = fopen(csv_path, "w");
-    if (!fp) {
-        perror("aurora_reader: cannot open CSV file");
-        return 1;
+    FILE *fp = NULL;
+    if (out_csv) {
+        /* Build default CSV filename from start timestamp if not provided */
+        if (csv_path[0] == '\0') {
+            time_t now = time(NULL);
+            struct tm *t = localtime(&now);
+            snprintf(csv_path, sizeof(csv_path),
+                     "aurora_metrics_%04d%02d%02d_%02d%02d%02d.csv",
+                     t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
+                     t->tm_hour, t->tm_min, t->tm_sec);
+        }
+
+        /* Prefix the CSV basename with the RAN type (e.g. "du_aurora_metrics_...csv")
+         * unless the basename already begins with "<rp>_" to avoid duplication. */
+        {
+            const char *slash = strrchr(csv_path, '/');
+            const char *base  = slash ? slash + 1 : csv_path;
+            size_t rplen = strlen(rp);
+            int already_prefixed = (strncmp(base, rp, rplen) == 0 && base[rplen] == '_');
+            if (!already_prefixed) {
+                char tmp[sizeof(csv_path)];
+                if (slash)
+                    snprintf(tmp, sizeof(tmp), "%.*s%s_%s",
+                             (int)(base - csv_path), csv_path, rp, base);
+                else
+                    snprintf(tmp, sizeof(tmp), "%s_%s", rp, csv_path);
+                memcpy(csv_path, tmp, sizeof(csv_path));
+            }
+        }
+
+        /* Open CSV file — write header immediately */
+        fp = fopen(csv_path, "w");
+        if (!fp) {
+            perror("aurora_reader: cannot open CSV file");
+            return 1;
+        }
+        fputs(header, fp);
+        fflush(fp);
     }
-    write_csv_header(fp, metrics);
-    fflush(fp);
+
+    if (out_influx) {
+        if (aurora_influx_open(influx_url) != 0) return 1;
+        aurora_influx_add_tag("source", "aurora");
+        aurora_influx_add_tag("ran_component", rp);
+        aurora_influx_add_tags(getenv("AURORA_INFLUX_TAGS"));
+        for (int i = 0; i < nof_influx_cli_tags; i++) aurora_influx_add_tags(influx_cli_tags[i]);
+        /* Thread columns: tag thread=<name>; threads sharing a name keep the CSV's unique "<name>_<tid>". */
+        char        prefixes[AURORA_MAX_MONITORED_THREADS][AURORA_THREAD_NAME_LEN + 32];
+        const char *prefix_ptrs[AURORA_MAX_MONITORED_THREADS];
+        const char *name_ptrs[AURORA_MAX_MONITORED_THREADS];
+        for (int i = 0; i < g_thread_ncols; i++) {
+            snprintf(prefixes[i], sizeof(prefixes[i]), "THREAD_%s_", g_thread_cols[i].safe_name);
+            prefix_ptrs[i] = prefixes[i];
+            int dup = 0;
+            for (int k = 0; k < i; k++) dup |= !strcmp(g_thread_cols[k].name, g_thread_cols[i].name);
+            name_ptrs[i] = dup ? g_thread_cols[i].safe_name : g_thread_cols[i].name;
+        }
+        header[strcspn(header, "\n")] = '\0';
+        aurora_influx_set_header(header, prefix_ptrs, name_ptrs, (size_t)g_thread_ncols);
+        fprintf(stderr, "aurora_reader: sending InfluxDB line protocol to %s\n", influx_url);
+    }
+    free(header);
 
     /* Install signal handler for graceful shutdown */
     signal(SIGINT,  sig_handler);
     signal(SIGTERM, sig_handler);
 
-    /* Batch buffer — allocated once on the heap */
+    /* Batch buffer — allocated once on the heap. Without CSV only one snapshot is kept. */
+    if (!out_csv) batch_size = 1;
     snapshot_t *batch = calloc((size_t)batch_size, sizeof(snapshot_t));
     if (!batch) {
         fprintf(stderr, "aurora_reader: out of memory for batch buffer\n");
-        fclose(fp);
+        if (fp) fclose(fp);
         return 1;
     }
 
-    fprintf(stderr,
-            "aurora_reader: writing to '%s'  interval=%u ms  flush every %d samples\n"
-            "  Press Ctrl-C to stop.\n",
-            csv_path, aurora_cfg.collection_interval_ms, batch_size);
+    if (out_csv)
+        fprintf(stderr,
+                "aurora_reader: writing to '%s'  interval=%u ms  flush every %d samples\n"
+                "  Press Ctrl-C to stop.\n",
+                csv_path, aurora_cfg.collection_interval_ms, batch_size);
 
     int      batch_count  = 0;
     uint64_t total_rows   = 0;
@@ -2226,8 +2298,24 @@ int main(int argc, char **argv)
         last_ts = metrics->timestamp_us;
 
         fill_snapshot(&batch[batch_count], metrics);
-        batch_count++;
         total_rows++;
+
+        /* InfluxDB: every sample at once (Telegraf batches the writes). */
+        if (out_influx) {
+            char  *row     = NULL;
+            size_t row_len = 0;
+            FILE  *rs      = open_memstream(&row, &row_len);
+            if (rs) {
+                write_csv_row(rs, &batch[batch_count]);
+                fclose(rs);
+                row[strcspn(row, "\n")] = '\0';
+                aurora_influx_send_row(row);
+            }
+            free(row);
+        }
+        if (!out_csv)
+            continue;
+        batch_count++;
 
         if (batch_count >= batch_size) {
             /* Flush batch to CSV */
@@ -2251,8 +2339,13 @@ int main(int argc, char **argv)
     }
     if (missed_intervals != 0)
         fprintf(stderr, "aurora_reader: %lu publication interval(s) missed\n", (unsigned long)missed_intervals);
+    if (out_influx) {
+        fprintf(stderr, "aurora_reader: InfluxDB rows sent=%lu dropped=%lu\n", aurora_influx_rows_sent(),
+                aurora_influx_rows_dropped());
+        aurora_influx_close();
+    }
 
-    fclose(fp);
+    if (fp) fclose(fp);
     free(batch);
 
     /* Shut down infrastructure metrics collector if running */
@@ -2260,6 +2353,6 @@ int main(int argc, char **argv)
         aurora_infra_shutdown();
 
     fprintf(stderr, "aurora_reader: done.  Total rows=%lu  Flushes=%d  CSV='%s'\n",
-            total_rows, flush_count, csv_path);
+            total_rows, flush_count, out_csv ? csv_path : "(disabled)");
     return 0;
 }

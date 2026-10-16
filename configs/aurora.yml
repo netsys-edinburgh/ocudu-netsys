@@ -1,6 +1,7 @@
 # Example AURORA section. Combine with any application config, e.g.:
 #   gnb -c gnb_rf_b200_tdd_n78_20mhz.yml -c aurora.yml
 # Read it with: aurora_reader aurora.yml --output metrics.csv
+# or send it to InfluxDB through a local Telegraf: aurora_reader aurora.yml --output-mode influx
 
 aurora:
   enable: true                    # Enable the AURORA shared-memory metrics framework.

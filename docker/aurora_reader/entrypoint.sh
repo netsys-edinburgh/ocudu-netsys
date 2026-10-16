@@ -14,6 +14,11 @@
 #   AURORA_INFRA_INTERVAL  infra poll interval, ms                         (default 1000)
 #   AURORA_HOST_PREFIX     where the host /proc and /sys are mounted       (default /host)
 #   AURORA_WAIT_S          seconds to wait for the RAN segment, 0 = forever (default 0)
+# Read by aurora_reader itself (passed through the environment):
+#   AURORA_OUTPUT_MODE     csv|influx|both                                 (default csv)
+#   AURORA_INFLUX_URL      Telegraf socket_listener, udp://|tcp://host:port or unix:///path
+#                                                                          (default udp://127.0.0.1:8094)
+#   AURORA_INFLUX_TAGS     extra tags on every InfluxDB point, k=v,k=v      (default empty)
 set -eu
 
 if [ "$#" -gt 0 ]; then

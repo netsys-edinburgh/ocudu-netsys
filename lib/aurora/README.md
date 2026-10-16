@@ -85,6 +85,36 @@ The entrypoint (`aurora-sidecar`) builds the `aurora_reader` command line from e
 It waits until the RAN process has created its segment, so the start order does not matter. Arguments given to the
 container are passed to `aurora_reader` unchanged, e.g. `docker run ... ocudu/aurora_reader --once`.
 
+### InfluxDB output
+
+`aurora_reader` can send every sample to InfluxDB instead of, or as well as, the CSV file, through a Telegraf in the
+same pod (`inputs.socket_listener` with `data_format = "influx"`, `outputs.influxdb_v2`). Telegraf batches the writes,
+retries while InfluxDB is unreachable and holds the token.
+
+| Option | Environment | Default |
+|--------|-------------|---------|
+| `--output-mode csv\|influx\|both` | `AURORA_OUTPUT_MODE` | `csv` |
+| `--influx-url udp://host:port\|tcp://host:port\|unix:///path` | `AURORA_INFLUX_URL` | `udp://127.0.0.1:8094` |
+| `--influx-tag k=v` (repeatable) | `AURORA_INFLUX_TAGS=k=v,k=v` | none |
+
+- One point per sample and measurement, timestamped with `timestamp_us` (nanosecond precision in the line protocol).
+  The fields are the CSV columns, with the same values; empty and non-finite values are left out.
+- Every point carries `source=aurora`, `ran_component=<gnb|du|cu|cu-cp|cu-up>` and the extra tags.
+- Measurements, by CSV column prefix:
+
+| Measurement | Columns | Extra tag | Field key |
+|-------------|---------|-----------|-----------|
+| `aurora_flow` | Group 1 flows (`bhtx_in_*` ... `mac_dl_bo*`) | `flow` | column suffix (`bytes`, `pkts`, ...) |
+| `aurora_thread` | `THREAD_<name>_*` | `thread` (name; `<name>_<tid>` for a repeated name) | metric (`total_events`, ...) |
+| `aurora_kpm` | `kpm_*` | | KPM name (`RRU.PrbTotDl`, ...) |
+| `aurora_f1c`, `aurora_f1u`, `aurora_rlc`, `aurora_pdcp`, `aurora_gtp`, `aurora_handover`, `aurora_rc`, `aurora_csi`, `aurora_rusage`, `aurora_infra` | `f1c_`, `f1u_`, `rlc_`, `pdcp_`, `gtp_`, `ho_`, `rc_`/`rc0_`, `csi_`, `ru_`, `infra_` | | column name |
+| `aurora_mac` | every other column (HARQ, CRC, SINR/CQI/BSR, FAPI, MAC aggregates, ...) | | column name |
+
+- UDP sends are split into datagrams of at most 32 kB at line boundaries. A stream (TCP, Unix) connection that drops
+  is reopened at most once per second; rows that cannot be sent are dropped and counted, and the counts are printed
+  at exit.
+- Set `omit_hostname = true` in Telegraf, otherwise it adds its own `host` tag.
+
 ## OCUDU extension (`struct aurora_metrics_ext`)
 
 The extension is appended as the last member of `struct aurora_metrics`, so the OAI prefix stays byte-identical.
