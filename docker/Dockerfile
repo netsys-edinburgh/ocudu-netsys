@@ -401,7 +401,8 @@ RUN --mount=type=secret,id=rh_entitlement_cert,target=/etc/pki/entitlement/entit
     /usr/local/etc/install_ocudu_dependencies.sh run && \
     /usr/local/etc/install_rohc_dependencies.sh run && \
     /usr/local/etc/install_docker_dependencies.sh run && \
-    /usr/local/etc/install_aurora_ebpf_dependencies.sh run
+    /usr/local/etc/install_aurora_ebpf_dependencies.sh run && \
+    /usr/local/etc/install_aurora_anomaly_dependencies.sh
 
 # Register DPDK/UHD/ROHC library paths for the dynamic linker.
 # When binaries have file capabilities, ld.so enters secure-execution mode and

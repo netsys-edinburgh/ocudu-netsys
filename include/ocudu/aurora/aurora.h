@@ -359,7 +359,7 @@ void pdcp_tx_proc_latency(unsigned ue_index, unsigned rb_index, uint64_t proc_la
 /// TX sojourn of one SDU: arrival at PDCP until the PDU is handed to the lower layers. AURORA reports
 /// txsdu_wt_us = avg sojourn - avg processing cost (i.e. queueing in the crypto / UE executors).
 void pdcp_tx_sojourn(unsigned ue_index, unsigned rb_index, uint64_t sojourn_ns) noexcept;
-/// ANOMALY injection point on the PDCP data path (PDCP_CONTENTION delay, QUEUE_TUNING jitter).
+/// ANOMALY injection point on the PDCP data path (QUEUE_TUNING jitter).
 void pdcp_hook_anomaly() noexcept;
 
 // ---------------------------------------------------------------------------------------------------------------------

@@ -7,6 +7,7 @@
  *   aurora_kpm      kpm_<KPM name>; field = KPM name
  *   aurora_f1c, aurora_f1u, aurora_rlc, aurora_pdcp, aurora_gtp, aurora_handover (ho_), aurora_rc (rc_, rc0_),
  *   aurora_csi, aurora_rusage (ru_), aurora_infra (infra_)
+ *   aurora_anomaly  anomaly_label (string field: normal, mac_contention, pdcp_contention+..., unknown)
  *   aurora_mac      every other column (HARQ, CRC, SINR/CQI/BSR, FAPI, per-UE MAC aggregates, ...)
  * Outside flows, threads and KPMs, the field key is the full CSV column name.
  * Values keep the CSV text; empty and non-finite values are left out.
@@ -243,6 +244,7 @@ static const struct { const char *prefix, *measurement; } k_prefixes[] = {
     {"f1c_", "aurora_f1c"},   {"f1u_", "aurora_f1u"},     {"rlc_", "aurora_rlc"},       {"pdcp_", "aurora_pdcp"},
     {"gtp_", "aurora_gtp"},   {"ho_", "aurora_handover"}, {"rc0_", "aurora_rc"},        {"rc_", "aurora_rc"},
     {"csi_", "aurora_csi"},   {"ru_", "aurora_rusage"},   {"infra_", "aurora_infra"},
+    {"anomaly_", "aurora_anomaly"},
 };
 
 /* Returns the series index for (measurement, optional extra tag), creating it. */

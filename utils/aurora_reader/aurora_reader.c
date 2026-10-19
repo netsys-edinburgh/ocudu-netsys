@@ -43,6 +43,7 @@
 #include "aurora_infra.h"
 #include "aurora_reader_influx.h"
 #include <ctype.h>
+#include <stddef.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -184,6 +185,8 @@ typedef struct {
     uint32_t ho_prep_attempts, ho_prep_success, ho_prep_attempts_total, ho_prep_success_total;
     uint32_t ho_du_count;
     aurora_du_ho_stats_t ho_du[EXT_CSV_HO_DUS];
+    int      anomaly_present;                  /* producer publishes the anomaly label (extension version >= 2) */
+    char     anomaly_label[AURORA_ANOMALY_LABEL_LEN];
 } ext_snap_t;
 
 /* =========================================================
@@ -428,9 +431,15 @@ static void fill_f1_snapshot(f1_snap_t *f, const struct aurora_metrics *m)
 static void fill_ext_snapshot(ext_snap_t *e, const struct aurora_metrics *m)
 {
     const struct aurora_metrics_ext *x = &m->ext;
-    if (x->version < 1 || x->size < sizeof(struct aurora_metrics_ext))
+    /* Version 1 producers end before anomaly_label. */
+    if (x->version < 1 || x->size < offsetof(struct aurora_metrics_ext, anomaly_label))
         return;
     e->present = 1;
+    if (x->version >= 2 && x->size >= offsetof(struct aurora_metrics_ext, anomaly_label) + sizeof(x->anomaly_label)) {
+        e->anomaly_present = 1;
+        memcpy(e->anomaly_label, x->anomaly_label, sizeof(e->anomaly_label));
+        e->anomaly_label[sizeof(e->anomaly_label) - 1] = '\0';
+    }
     for (int i = 0; i < MAX_NO_UEs; i++) {
         const aurora_mac_ue_stats_t *u = &m->mac_ue_stats[i];
         const aurora_csi_ue_stats_t *c = &x->csi[i];
@@ -891,6 +900,21 @@ static void write_ext_csv_header(FILE *fp, const csv_gates_t *g)
 }
 #undef AGG3
 
+/* anomaly_label: the label set by the anomaly-injector sidecar, "normal" when none was set, "unknown" when the producer
+ * does not publish it. Characters outside [a-z0-9_+-] (the producer only accepts those) become '_', so a label can
+ * never break a CSV row. */
+static void format_anomaly_label(const ext_snap_t *e, char *out, size_t out_sz)
+{
+    if (!e->anomaly_present) {
+        snprintf(out, out_sz, "unknown");
+        return;
+    }
+    snprintf(out, out_sz, "%s", e->anomaly_label[0] ? e->anomaly_label : "normal");
+    for (char *c = out; *c; c++)
+        if (!strchr("abcdefghijklmnopqrstuvwxyz0123456789_+-", *c))
+            *c = '_';
+}
+
 static void write_agg3(FILE *fp, const agg_t *a)
 {
     fprintf(fp, ",%.2f,%.2f,%.2f", a->n ? a->min : 0.0, a->n ? a->max : 0.0, agg_avg(a));
@@ -1181,7 +1205,8 @@ static void write_csv_header(FILE *fp, const struct aurora_metrics *m)
 
     write_f1_csv_header(fp, &g);
     write_ext_csv_header(fp, &g);
-    fprintf(fp, "\n");
+    /* Ground-truth label of the row, always the last column. */
+    fprintf(fp, ",anomaly_label\n");
 }
 
 static void write_csv_row(FILE *fp, const snapshot_t *s)
@@ -1552,7 +1577,9 @@ static void write_csv_row(FILE *fp, const snapshot_t *s)
 
     write_f1_csv_row(fp, &g, &s->f1);
     write_ext_csv_row(fp, &g, &s->ext);
-    fprintf(fp, "\n");
+    char label[128];
+    format_anomaly_label(&s->ext, label, sizeof(label));
+    fprintf(fp, ",%s\n", label);
 }
 
 /* =========================================================
@@ -1996,6 +2023,10 @@ int main(int argc, char **argv)
                 }
                 printf("  UL failure: ues=%u timer_ms max=%.0f\n", e.ul_failure_ues,
                        e.ul_failure_timer_ms.n ? e.ul_failure_timer_ms.max : 0.0);
+                char anomaly_label[128];
+                format_anomaly_label(&e, anomaly_label, sizeof(anomaly_label));
+                printf("\n--- OCUDU extension: anomaly ground truth ---\n");
+                printf("  anomaly_label=%s\n", anomaly_label);
                 printf("\n--- OCUDU extension: handover per source DU ---\n");
                 printf("  N2 preparations: attempts=%u success=%u (total %u/%u)\n", e.ho_prep_attempts,
                        e.ho_prep_success, e.ho_prep_attempts_total, e.ho_prep_success_total);

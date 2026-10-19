@@ -308,7 +308,8 @@ typedef struct {
  * OCUDU extension (appended after the OAI layout, which stays byte-identical so OAI-built readers keep working on the
  * common prefix). Check `ext.version` / `ext.size` before using it.
  * =================================================================================================================== */
-#define AURORA_EXT_VERSION         1
+#define AURORA_EXT_VERSION         2   /* 2: anomaly_label */
+#define AURORA_ANOMALY_LABEL_LEN   32  /* anomaly_label, NUL included */
 #define AURORA_CSI_MAX_RS          4   /* csi_max_nof_reported_rs */
 #define AURORA_CSI_MAX_SUBBANDS    18  /* csi_max_nof_subbands */
 #define AURORA_CSI_MAX_T2_LAYERS   2   /* max_nof_typeII_layers */
@@ -393,6 +394,10 @@ struct aurora_metrics_ext {
     uint32_t             ho_prep_success;         /* interval */
     uint32_t             ho_prep_attempts_total;  /* cumulative */
     uint32_t             ho_prep_success_total;   /* cumulative */
+
+    /* Version 2. Anomaly label set by the anomaly-injector sidecar (ANOMALY "LABEL value=..."), NUL-terminated,
+     * [a-z0-9_+-]. Kept until the sidecar sends another one; "normal" until the first. */
+    char                 anomaly_label[AURORA_ANOMALY_LABEL_LEN];
 };
 
 /* One F1AP elementary procedure (request / response) over the collection interval. */

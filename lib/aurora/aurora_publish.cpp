@@ -10,6 +10,7 @@
 // `timestamp_us` changes.
 
 #include "aurora_state.h"
+#include "anomaly/anomaly_module.h"
 #include <cstring>
 #include <mutex>
 #include <algorithm>
@@ -674,9 +675,14 @@ void detail::init_shm_content(aurora_metrics& out, const config& cfg)
   out.ext.size                              = sizeof(aurora_metrics_ext);
 }
 
+static_assert(AURORA_ANOMALY_LABEL_LEN == ANOMALY_LABEL_LEN, "anomaly label length differs between SHM and module");
+
 void detail::publish_interval(aurora_metrics& m, global_state& st)
 {
   const uint64_t now_ns = monotonic_ns();
+
+  // Anomaly label of this interval, as last set by the anomaly-injector sidecar ("normal" until then).
+  anomaly_module_get_label(m.ext.anomaly_label, sizeof(m.ext.anomaly_label));
 
   publish_flows(m, st);
   publish_harq_crc(m, st);

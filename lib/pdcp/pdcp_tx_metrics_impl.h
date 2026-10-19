@@ -27,7 +27,7 @@ public:
   void add_sdus(uint32_t num_sdus_, size_t num_sdu_bytes_)
   {
     if (aurora_tap.valid()) {
-      // ANOMALY injection point on the PDCP TX SDU path (PDCP_CONTENTION delay, QUEUE_TUNING jitter).
+      // ANOMALY injection point on the PDCP TX SDU path (QUEUE_TUNING jitter).
       aurora::pdcp_hook_anomaly();
     }
     aurora_tap.add(aurora::pdcp_counter::txsdu_pkts, num_sdus_);

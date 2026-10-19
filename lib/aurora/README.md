@@ -108,6 +108,7 @@ retries while InfluxDB is unreachable and holds the token.
 | `aurora_thread` | `THREAD_<name>_*` | `thread` (name; `<name>_<tid>` for a repeated name) | metric (`total_events`, ...) |
 | `aurora_kpm` | `kpm_*` | | KPM name (`RRU.PrbTotDl`, ...) |
 | `aurora_f1c`, `aurora_f1u`, `aurora_rlc`, `aurora_pdcp`, `aurora_gtp`, `aurora_handover`, `aurora_rc`, `aurora_csi`, `aurora_rusage`, `aurora_infra` | `f1c_`, `f1u_`, `rlc_`, `pdcp_`, `gtp_`, `ho_`, `rc_`/`rc0_`, `csi_`, `ru_`, `infra_` | | column name |
+| `aurora_anomaly` | `anomaly_label` (string field, set by the anomaly-injector sidecar) | | column name |
 | `aurora_mac` | every other column (HARQ, CRC, SINR/CQI/BSR, FAPI, MAC aggregates, ...) | | column name |
 
 - UDP sends are split into datagrams of at most 32 kB at line boundaries. A stream (TCP, Unix) connection that drops
@@ -125,6 +126,7 @@ Check `ext.version` (`AURORA_EXT_VERSION`) and `ext.size` before using it.
 | `ext.csi[100]` | Full last CSI report per UE, with interval report counters (total / invalid). It carries every quantity OCUDU's CSI decoder supports (`csi_report_data`). |
 | `ext.ho_du[16]` | Handover executions per source gNB-DU ID: interval and cumulative attempts/successes, plus the success rate. |
 | `ext.ho_prep_*` | N2 handover preparations (CU-CP level). |
+| `ext.anomaly_label` | Version 2. Anomaly label set by the anomaly-injector sidecar, see [Anomaly label](#anomaly-label). |
 
 The CSI quantities in `ext.csi[100]` are:
 - CRI/SSBRI and L1-RSRP lists;
@@ -137,7 +139,8 @@ The CSI quantities in `ext.csi[100]` are:
 Quantities missing from the last report read `0xFF` (`AURORA_CSI_NOT_REPORTED`).
 
 RC cell 0 `handover_*` is the total over all DUs. `aurora_reader` appends the extension CSV columns (`csi_*`,
-`ul_failure_*`, `ho_*`) after all OAI columns, and prints both tables with `--once`.
+`ul_failure_*`, `ho_*`) after all OAI columns, then `anomaly_label` as the last column, and prints the tables with
+`--once`.
 
 ## Semantics vs. OAI
 
@@ -227,19 +230,126 @@ Whitespace and newlines around entries are ignored, so the list can span several
 
 The ANOMALY server uses the same line protocol and ports as OAI:
 
-- Commands: `PING`, `STATUS`, `SET target=... type=... duration_ms=...`, `CLEAR`.
+- Commands: `PING`, `STATUS`, `SET target=... type=... duration_ms=...`, `CLEAR`, and (OCUDU) `LABEL value=...`.
 - Ports: 47010 (gNB), 47011 (DU), 47012 (CU), 47013 (CU-CP), 47014 (CU-UP).
 - Environment variables `AURORA_ANOMALY_PORT`, `AURORA_ANOMALY_BIND` and `AURORA_ANOMALY_TOKEN` apply as before.
 
-The injection points sit on the real data path. In OAI, the MAC/RLC/PDCP hooks ran in the ~1 Hz statistics thread.
+The server binds to `127.0.0.1` by default, so an injector sidecar in the same pod (shared network namespace) reaches
+it without exposing the port. Example, a MAC contention rising from 10 % to 80 % over one minute:
+
+```bash
+echo "SET type=MAC_CONTENTION duration_ms=60000 load_min=10 load_max=80 step_ms=5000" | nc 127.0.0.1 47010
+```
+
+### MAC_CONTENTION and PDCP_CONTENTION
+
+These start `stress-ng` on the CPUs of the dedicated `mac_sched#<cell>` or `pdcp` worker, with the worker's own
+scheduling policy and priority. With `SCHED_FIFO` at the same priority neither preempts the other: each keeps the CPU
+until it blocks, so the worker waits for up to one stressor busy slice whenever it wakes up during one.
+
+- The workers are found by thread name and must exist: enable `expert_execution.threads.mac_sched` (gNB, DU) or
+  `expert_execution.threads.pdcp` (gNB, CU, CU-UP), see `configs/dedicated_layer_workers.yml`. Otherwise `SET` returns
+  `ERR code=NO_WORKER`.
+- Give each worker its own CPUs (`expert_execution.affinities.mac_sched_cpus` / `pdcp_cpus`). Without them it falls
+  back to the main thread pool CPUs, and the stressor hits the pool as well; the `SET` reply then carries
+  `warning=other_rt_threads_share_these_cpus`.
+- `stress-ng` must be on `PATH` (it is in the Docker images), or set `AURORA_ANOMALY_STRESS_NG` to its path. It is
+  started by the RAN process itself, so it lands in the same container and CPU set as the worker.
+
+| Parameter | Default | Meaning |
+|-----------|---------|---------|
+| `duration_ms` | 10000 | stressor lifetime (max 1 h); `CLEAR` stops it earlier |
+| `load` | 50 | constant busy share of the stressor in percent (1-100), when no ramp is given |
+| `load_min` | `load` | ramp start in percent (1-100) |
+| `load_max` | `load_min` | ramp end in percent (1-100); the load rises linearly from `load_min` to `load_max` over `duration_ms` |
+| `step_ms` | 1000 | ramp step (>= 100). stress-ng cannot change its load while running, so each step restarts it, leaving a gap of a few ms |
+| `slice_ms` | 1 | busy slice in ms (1-100), i.e. the longest wait it imposes on the worker per wake-up |
+| `prio_offset` | 0 | stressor priority relative to the worker (-10..10). `1` preempts the worker: a deterministic CPU steal of `load` % instead of competition |
+| `cell` | all | MAC only: target `mac_sched#<cell>` |
+
+The reply reports what was targeted, e.g. `OK applied=1 ... threads=1 cpus=12 policy=SCHED_FIFO worker_prio=97
+stress_prio=97 load_min=10 load_max=80 step_ms=5000 steps=12 slice_ms=1 pid=1234 shared_rt_threads=0`. It also reports `load_min`, `load_max`,
+`step_ms` and `steps`. `STATUS` adds `mac_stress_cpus`, `mac_stress_load`, `pdcp_stress_cpus` and `pdcp_stress_load`
+(the load of the running step). stress-ng also gets `--timeout duration + 2 s`, so it stops even if the RAN process dies.
+
+`SCHED_DEADLINE` is not offered: the kernel does not allow a deadline task to be pinned to a subset of the CPUs.
+
+### Anomaly label
+
+The `anomaly_label` of every sample comes from the anomaly-injector sidecar only, so it can also name anomalies the
+RAN process cannot inject itself (network impairment, host stress, ...):
+
+- `LABEL value=<label>` sets it: 1-31 characters of `a-z 0-9 _ + -`, e.g. `mac_contention`, `link_flap`, `normal`.
+  The reply is `OK label=<label> changed=<0|1>`, and `STATUS` shows it as `label=`.
+- The RAN process keeps the label until the next `LABEL`, and the publisher stamps it on every sample
+  (`ext.anomaly_label`). It is `normal` from the start until the first `LABEL`. `SET` / `CLEAR` never change it.
+- `aurora_reader` writes it as the last CSV column, `anomaly_label`, and as the `anomaly_label` field of the
+  `aurora_anomaly` InfluxDB measurement. It reads `unknown` from a producer older than extension version 2.
+- The sidecar sends the label when it changes and re-sends it every second, so a restarted RAN process (label back to
+  `normal`) gets it again within a second. One command costs the RAN process about 15 us of CPU on the listener
+  thread, which runs at normal priority and never preempts the real-time workers.
+
+A sample is labelled by the label the RAN process holds when the sample is published. For an anomaly injected by
+another tool, set the label right before injecting it and back to `normal` right after stopping it.
+
+### anomaly-injector sidecar (`docker/anomaly_injector/`)
+
+`utils/anomaly_injector/anomaly_injector.py` runs as a sidecar in the RAN pod (shared network namespace), image
+`24whitedevil/netsys-ocudu-anomaly-injector`. As a daemon it holds the label, plays an optional schedule, and offers a
+control port, `127.0.0.1:47020` (`ANOMALY_INJECTOR_PORT`), with the same line protocol: `LABEL value=...` changes the
+daemon's label, every other line is forwarded to the RAN process. Tools in other containers of the pod label their
+anomalies there, because a label sent directly to the RAN process would be overwritten by the daemon's next re-send.
+
+```bash
+anomaly-injector                                                            # daemon: run if $ANOMALY_SCHEDULE is set, else idle
+anomaly-injector label link_flap                                            # through the daemon (direct if none runs)
+echo "LABEL value=normal" | nc 127.0.0.1 47020                              # same, from any container of the pod
+anomaly-injector send SET type=PDCP_CONTENTION duration_ms=30000 load=40   # one command to the RAN process
+anomaly-injector status
+```
+
+A schedule is JSON, given as a file path or inline in `ANOMALY_SCHEDULE`. Either fixed steps, see
+`docker/anomaly_injector/schedule.example.json`:
+
+```json
+{"repeat": true, "start_delay_ms": 30000, "steps": [
+  {"type": "NONE", "duration_ms": 60000},
+  {"type": "MAC_CONTENTION", "duration_ms": 120000, "load_min": 10, "load_max": 80, "step_ms": 10000},
+  {"type": "LABEL_ONLY", "label": "link_flap", "duration_ms": 30000}]}
+```
+
+- `NONE`: a normal period, label `normal`.
+- `LABEL_ONLY`: sets `label` for the step; the anomaly itself comes from elsewhere.
+- Any other type is sent as `SET` with the other keys as parameters. Its label is `label`, by default the lower-case
+  type (`mac_contention`). It is set once the RAN process has confirmed the `SET`, and back to `normal` after the
+  step's `CLEAR`, so labelled samples always lie inside the anomaly.
+
+Or random RAN-injected anomalies separated by normal gaps, each range drawn uniformly:
+
+```json
+{"random": {"types": ["MAC_CONTENTION", "PDCP_CONTENTION"], "duration_ms": [30000, 120000],
+            "gap_ms": [30000, 90000], "load_min": [5, 30], "load_max": [40, 95], "step_ms": 5000,
+            "count": 0, "seed": 1}}
+```
+
+The daemon waits until the RAN process answers `PING` and starts from label `normal`. It logs every command and reply
+to stdout as JSON lines with the wall-clock time (`ts_us`, comparable with `timestamp_us`); the periodic re-sends are
+not logged. After a schedule it keeps holding the label. On SIGTERM it sends `CLEAR type=ALL` (when it played a
+schedule) and `LABEL value=normal`. Environment: `AURORA_ANOMALY_HOST` (127.0.0.1), `AURORA_ANOMALY_PORT` (47010;
+47011 DU, 47012 CU, 47013 CU-CP, 47014 CU-UP), `AURORA_ANOMALY_TOKEN`, `ANOMALY_SCHEDULE`, `ANOMALY_CONNECT_TIMEOUT_S`
+(0 = wait forever), `ANOMALY_LABEL_RESEND_S` (1; 0 = only on change), `ANOMALY_INJECTOR_PORT` (47020; 0 = none).
+
+### Other anomaly types
+
+They are injected on the data path. In OAI, the MAC/RLC/PDCP hooks ran in the ~1 Hz statistics thread.
 
 | Hook | Injection point | Anomaly types |
 |------|-----------------|---------------|
-| MAC | every scheduler slot of a cell | `L1_THREAD_CONTENTION`, `MAC_CONTENTION`, `QUEUE_TUNING` |
+| MAC | every scheduler slot of a cell | `L1_THREAD_CONTENTION` (`delay_us`), `QUEUE_TUNING` (`jitter_us`) |
 | RLC | every RLC TX SDU | `QUEUE_TUNING` |
-| PDCP | every PDCP TX SDU | `PDCP_CONTENTION`, `QUEUE_TUNING` |
+| PDCP | every PDCP TX SDU | `QUEUE_TUNING` |
 
-`MEMORY_LEAK` runs in its own worker thread.
+`MEMORY_LEAK` (`bytes_per_sec`) runs in its own worker thread.
 
 ## Build
 
