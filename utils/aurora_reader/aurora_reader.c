@@ -1669,6 +1669,9 @@ int main(int argc, char **argv)
     bool        out_csv    = true, out_influx = false;
     const char *influx_url = getenv("AURORA_INFLUX_URL") ? getenv("AURORA_INFLUX_URL") : "udp://127.0.0.1:8094";
     const char *output_mode = getenv("AURORA_OUTPUT_MODE");
+    /* OCUDU: samples of the first warmup_s seconds after the first publication are dropped (CSV and InfluxDB), e.g. so
+     * that a restarted RAN process records only once its cell is up and its UEs are attached again. */
+    double      warmup_s   = getenv("AURORA_WARMUP_S") ? atof(getenv("AURORA_WARMUP_S")) : 0.0;
     const char *influx_cli_tags[32];
     int         nof_influx_cli_tags = 0;
 
@@ -1688,6 +1691,8 @@ int main(int argc, char **argv)
                 "  --interval <ms>      Poll interval in ms (default 100)\n"
                 "  --output <file>      CSV output file (default: aurora_metrics_<ts>.csv)\n"
                 "  --samples <N>        Rows to buffer before flushing to CSV (default %d)\n"
+                "  --warmup <s>         Drop the samples of the first <s> seconds after the first publication\n"
+                "                       (CSV and InfluxDB; default 0, env AURORA_WARMUP_S)\n"
                 "  --once               Print one formatted snapshot and exit\n"
                 "\nOutputs (OCUDU):\n"
                 "  --output-mode <m>    csv|influx|both (default csv, env AURORA_OUTPUT_MODE)\n"
@@ -1740,6 +1745,8 @@ int main(int argc, char **argv)
             if (nof_influx_cli_tags < (int)(sizeof(influx_cli_tags) / sizeof(influx_cli_tags[0])))
                 influx_cli_tags[nof_influx_cli_tags++] = argv[i + 1];
             i++;
+        } else if (!strcmp(argv[i], "--warmup") && i + 1 < argc) {
+            warmup_s = atof(argv[++i]);
         } else if (!strncmp(argv[i], "--infra-", 8)) {
             /* Parsed later by aurora_infra_parse_cli(); skip the flag and its value. */
             if (i + 1 < argc) i++;
@@ -2313,6 +2320,14 @@ int main(int argc, char **argv)
     if (poll_us < 1000u)
         poll_us = 1000u;
     uint64_t missed_intervals = 0;
+    if (warmup_s < 0)
+        warmup_s = 0;
+    const uint64_t warmup_us   = (uint64_t)(warmup_s * 1e6);
+    uint64_t       first_ts    = 0;
+    bool           warming_up  = warmup_us > 0;
+    uint64_t       warmup_drop = 0;
+    if (warming_up)
+        fprintf(stderr, "aurora_reader: warm-up: dropping the samples of the first %.1f s\n", warmup_s);
 
     while (g_running) {
         usleep(poll_us);
@@ -2327,6 +2342,18 @@ int main(int argc, char **argv)
                 missed_intervals += (step_us + (uint64_t)interval_ms * 500u) / ((uint64_t)interval_ms * 1000u) - 1u;
         }
         last_ts = metrics->timestamp_us;
+
+        if (warming_up) {
+            if (first_ts == 0)
+                first_ts = last_ts;
+            if (last_ts < first_ts + warmup_us) {
+                warmup_drop++;
+                continue;
+            }
+            warming_up = false;
+            fprintf(stderr, "aurora_reader: warm-up over after %lu dropped samples, recording from timestamp_us=%lu\n",
+                    (unsigned long)warmup_drop, (unsigned long)last_ts);
+        }
 
         fill_snapshot(&batch[batch_count], metrics);
         total_rows++;

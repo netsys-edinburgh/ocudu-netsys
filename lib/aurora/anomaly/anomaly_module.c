@@ -64,6 +64,7 @@ typedef struct {
   char role_name[16];
   char bind_address[64];
 
+  uint64_t started_us; /* wall clock at anomaly_module_start(), i.e. AURORA start-up */
   pthread_t listener_thread;
   pthread_t leak_thread;
   atomic_bool listener_thread_started;
@@ -1040,10 +1041,11 @@ static void format_status(char *out, size_t out_sz)
 
   snprintf(out,
            out_sz,
-           "OK role=%s port=%u label=%s active={L1:%d,MAC:%d,PDCP:%d,QUEUE:%d,MEM:%d} leak_bytes=%zu "
+           "OK role=%s port=%u started_us=%llu label=%s active={L1:%d,MAC:%d,PDCP:%d,QUEUE:%d,MEM:%d} leak_bytes=%zu "
            "mac_stress_cpus=%s mac_stress_load=%u pdcp_stress_cpus=%s pdcp_stress_load=%u\n",
            g_runtime.role_name,
            g_runtime.listen_port,
+           (unsigned long long)g_runtime.started_us,
            label,
            l1,
            mac,
@@ -1068,7 +1070,12 @@ static void process_one_command(const char *line, char *out, size_t out_sz)
   }
 
   if (!strcasecmp(cmd.cmd, "PING")) {
-    snprintf(out, out_sz, "OK PONG role=%s port=%u\n", g_runtime.role_name, g_runtime.listen_port);
+    snprintf(out,
+             out_sz,
+             "OK PONG role=%s port=%u started_us=%llu\n",
+             g_runtime.role_name,
+             g_runtime.listen_port,
+             (unsigned long long)g_runtime.started_us);
     return;
   }
 
@@ -1345,6 +1352,13 @@ int anomaly_module_start(const anomaly_module_config_t *cfg)
   if (port == 0 || port > 65535)
     return -1;
   g_runtime.listen_port = port;
+  /* Started together with the AURORA publisher, so this is when its samples begin: anomaly-ctl times its injections
+   * from it (aurora_reader's warm-up counts from the first sample). */
+  {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    g_runtime.started_us = (uint64_t)tv.tv_sec * 1000000ULL + (uint64_t)tv.tv_usec;
+  }
 
   bind = getenv("AURORA_ANOMALY_BIND");
   if (!bind)

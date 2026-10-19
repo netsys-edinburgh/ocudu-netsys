@@ -23,8 +23,13 @@ LABEL summary="AURORA anomaly injector sidecar for OCUDU" \
       description="Sends anomaly schedules to the AURORA anomaly module of an OCUDU RAN process"
 
 COPY utils/anomaly_injector/anomaly_injector.py /usr/local/bin/anomaly-injector
+# Management-node controller, shipped here so it can be taken from the image:
+#   docker run --rm --entrypoint cat <image> /usr/local/bin/anomaly-ctl > anomaly-ctl
+COPY utils/anomaly_injector/anomaly_ctl.py /usr/local/bin/anomaly-ctl
 COPY docker/anomaly_injector/schedule.example.json /etc/anomaly-injector/schedule.example.json
-RUN chmod 0755 /usr/local/bin/anomaly-injector && useradd --system --uid 10001 --no-create-home injector
+RUN chmod 0755 /usr/local/bin/anomaly-injector /usr/local/bin/anomaly-ctl && \
+    groupadd --system --gid 10001 injector && \
+    useradd --system --uid 10001 --gid 10001 --no-create-home injector
 
 USER 10001
 ENV PYTHONUNBUFFERED=1 \

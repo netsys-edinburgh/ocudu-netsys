@@ -82,6 +82,10 @@ The entrypoint (`aurora-sidecar`) builds the `aurora_reader` command line from e
 - `AURORA_INFRA`, `AURORA_INFRA_BACKEND`, `AURORA_INFRA_CONTAINER`, `AURORA_INFRA_INTERVAL`, `AURORA_HOST_PREFIX`;
 - `AURORA_WAIT_S`.
 
+`AURORA_WARMUP_S` (or `--warmup <s>`) is read by `aurora_reader` itself: the samples of the first `<s>` seconds after
+the RAN process' first publication are dropped, from CSV and InfluxDB alike (e.g. until the cell is up and the UEs are
+attached again after a restart; `anomaly-ctl` relies on it).
+
 It waits until the RAN process has created its segment, so the start order does not matter. Arguments given to the
 container are passed to `aurora_reader` unchanged, e.g. `docker run ... ocudu/aurora_reader --once`.
 
@@ -231,6 +235,8 @@ Whitespace and newlines around entries are ignored, so the list can span several
 The ANOMALY server uses the same line protocol and ports as OAI:
 
 - Commands: `PING`, `STATUS`, `SET target=... type=... duration_ms=...`, `CLEAR`, and (OCUDU) `LABEL value=...`.
+- OCUDU: `PING` and `STATUS` replies carry `started_us`, the wall-clock time the anomaly server (and with it the AURORA
+  publisher) started, i.e. where the samples and aurora_reader's warm-up begin.
 - Ports: 47010 (gNB), 47011 (DU), 47012 (CU), 47013 (CU-CP), 47014 (CU-UP).
 - Environment variables `AURORA_ANOMALY_PORT`, `AURORA_ANOMALY_BIND` and `AURORA_ANOMALY_TOKEN` apply as before.
 
@@ -334,10 +340,52 @@ Or random RAN-injected anomalies separated by normal gaps, each range drawn unif
 
 The daemon waits until the RAN process answers `PING` and starts from label `normal`. It logs every command and reply
 to stdout as JSON lines with the wall-clock time (`ts_us`, comparable with `timestamp_us`); the periodic re-sends are
-not logged. After a schedule it keeps holding the label. On SIGTERM it sends `CLEAR type=ALL` (when it played a
-schedule) and `LABEL value=normal`. Environment: `AURORA_ANOMALY_HOST` (127.0.0.1), `AURORA_ANOMALY_PORT` (47010;
+not logged. After a schedule it keeps holding the label. On SIGTERM it changes nothing: the pod, RAN process included,
+is stopping, and the samples published meanwhile keep the current label. Environment: `AURORA_ANOMALY_HOST` (127.0.0.1), `AURORA_ANOMALY_PORT` (47010;
 47011 DU, 47012 CU, 47013 CU-CP, 47014 CU-UP), `AURORA_ANOMALY_TOKEN`, `ANOMALY_SCHEDULE`, `ANOMALY_CONNECT_TIMEOUT_S`
-(0 = wait forever), `ANOMALY_LABEL_RESEND_S` (1; 0 = only on change), `ANOMALY_INJECTOR_PORT` (47020; 0 = none).
+(0 = wait forever), `ANOMALY_LABEL_RESEND_S` (1; 0 = only on change), `ANOMALY_INJECTOR_PORT` (47020; 0 = none),
+`ANOMALY_RESTART_DEPLOYMENT` (watchdog, below).
+
+Control-port commands besides `LABEL` and forwarding (also as `anomaly-injector inject|lease|daemon-status`):
+
+| Command | Effect |
+|---------|--------|
+| `INJECT label=<label> type=<TYPE> <SET parameters>` | `SET` to the RAN process; on `OK` sets the label (default: lower-case type) |
+| `LABEL value=<label> duration_ms=<ms>` | as `LABEL`, and tells the watchdog when the anomaly (injected elsewhere) ends |
+| `LEASE ttl_s=<s>` | renews the controller lease |
+| `DAEMON` | `OK label=... lease_s=<left> anomaly_s=<left>` |
+
+**Watchdog.** Armed by the first `LEASE`. If the lease runs out while the label is not `normal`, the sidecar lets the
+current anomaly end (its `duration_ms`), sends `CLEAR type=ALL`, labels `recovery` and restarts its own pod: it patches
+the pod template of `ANOMALY_RESTART_DEPLOYMENT` like `kubectl rollout restart`, through the Kubernetes API with the
+pod's service account (token, CA and namespace under `/var/run/secrets/kubernetes.io/serviceaccount`). That needs a
+Role with `patch` on that Deployment. The restarted pod has no lease, so it stays `normal`. With the label `normal`
+the watchdog does nothing.
+
+### anomaly-ctl (management node)
+
+`utils/anomaly_injector/anomaly_ctl.py` (also `/usr/local/bin/anomaly-ctl` in the injector image) plays campaigns on a
+RAN pod through `kubectl` only:
+
+```bash
+anomaly-ctl --log run.jsonl run campaign.json      # namespace / deployment in the file, or -n / -d
+anomaly-ctl -n <ns> -d <deployment> status | restart | label <label> | send <line>
+```
+
+For every segment (`NONE`, `LABEL_ONLY`, or an anomaly type with its `SET` parameters, `duration_s` recorded):
+
+1. `kubectl rollout restart`, wait for Ready and for the RAN process to answer; retried `--restart-retries` (5) times
+   with `--ready-timeout` (300 s) each, then the campaign is aborted.
+2. Wait for the warm-up: `AURORA_WARMUP_S`, read from the Deployment.
+3. `--inject-lead` (3 s) before it ends, `inject` / `label` through the sidecar, with `--margin` (30 s) more anomaly
+   than the segment needs, so the anomaly still runs when the next restart stops the pod.
+4. Record `duration_s`; the log gets a `segment_recorded` line with the label and `record_start_us` /
+   `record_end_us`.
+
+It renews the sidecar lease every 10 s (valid 60 s) and, at the end or on Ctrl-C, restarts the pod once more and leaves
+it `normal`. Campaign files may also use `"random"` (anomaly types, `duration_s` / `gap_s` / load ranges, `count`,
+`seed`) and `"repeat"` (0 = forever). See the docstring for the format; the campus5g-ng deployment and campaigns are
+in `metrics/anomaly/` of campus5g-ng.
 
 ### Other anomaly types
 
