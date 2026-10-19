@@ -64,7 +64,9 @@ import time
 
 LEASE_RENEW_S = 10
 LEASE_TTL_S = 60
-INJECTED_TYPES = ("MAC_CONTENTION", "PDCP_CONTENTION", "L1_THREAD_CONTENTION", "QUEUE_TUNING", "MEMORY_LEAK")
+# Injected by the RAN process (SET). FRONTHAUL is injected by the sidecar itself; MULTI bundles several.
+INJECTED_TYPES = ("MAC_CONTENTION", "PDCP_CONTENTION", "L1_THREAD_CONTENTION", "QUEUE_TUNING", "MEMORY_LEAK",
+                  "FRONTHAUL")
 
 
 class Abort(Exception):
@@ -226,6 +228,11 @@ class Controller:
             label = "normal"
         elif kind == "LABEL_ONLY":
             label = seg.get("label", "")
+        elif kind == "MULTI":
+            anomalies = seg.get("anomalies", [])
+            if not anomalies:
+                raise Abort(f"segment {index}: MULTI without anomalies")
+            label = seg.get("label", "+".join(a.get("type", "").lower() for a in anomalies))
         elif kind in INJECTED_TYPES:
             label = seg.get("label", kind.lower())
         else:
@@ -243,6 +250,10 @@ class Controller:
         anomaly_ms = int((record_end - time.time() + self.args.margin) * 1000)
         if kind == "LABEL_ONLY":
             reply = self.kube.injector(["label", label, "--duration-ms", str(anomaly_ms)])
+        elif kind == "MULTI":
+            spec = {"label": label, "duration_ms": anomaly_ms,
+                    "anomalies": [dict(a, duration_ms=anomaly_ms) for a in seg["anomalies"]]}
+            reply = self.kube.injector(["multi", json.dumps(spec)], timeout=60)
         elif kind != "NONE":
             params = [f"{k}={v}" for k, v in seg.items() if k not in ("type", "duration_s", "label")]
             reply = self.kube.injector(

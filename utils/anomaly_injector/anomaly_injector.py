@@ -205,6 +205,121 @@ class LabelKeeper:
                 pass  # RAN process down; the next re-send after it is back restores the label
 
 
+def _iface_mac(iface):
+    with open(f"/sys/class/net/{iface}/address", encoding="utf-8") as f:
+        return bytes(int(b, 16) for b in f.read().strip().split(":"))
+
+
+def _parse_mac(text):
+    parts = text.split(":")
+    if len(parts) != 6:
+        raise ValueError(f"invalid MAC {text!r}")
+    return bytes(int(b, 16) for b in parts)
+
+
+class FronthaulSender:
+    """Floods raw Ethernet frames out a kernel fronthaul interface (a VLAN-103 iavf VF, e.g. fhinj0) toward the RU MAC,
+    to contend with the real O-RAN 7.2 U-plane on the shared NIC Tx path / switch egress. The bitrate ramps linearly
+    from rate_min_mbps to rate_max_mbps over the duration, one step every step_ms (like the stress-ng load ramp). Needs
+    CAP_NET_RAW. Only the AURORA / control threads start and stop it; one sender at a time."""
+
+    # Ethernet wire overhead per frame: VLAN tag 4 + FCS 4 + preamble 8 + inter-frame gap 12.
+    WIRE_OVERHEAD = 28
+
+    def __init__(self, stop):
+        self.stop = stop
+        self.lock = threading.Lock()
+        self.thread = None
+        self.run_flag = False
+        self.cur_mbps = 0.0
+        self.sent_bytes = 0
+
+    def active(self):
+        return self.thread is not None and self.thread.is_alive()
+
+    def start(self, params):
+        """params: iface, dst_mac, rate_min_mbps, rate_max_mbps, step_ms, duration_ms, frame_size, ethertype.
+        Returns a one-line OK/ERR string."""
+        self.stop_sender()
+        iface = params.get("iface") or os.environ.get("AURORA_FH_IFACE", "")
+        if not iface:
+            return "ERR code=BAD_ARG message=no_fronthaul_iface_(AURORA_FH_IFACE)"
+        dst = params.get("dst_mac") or os.environ.get("AURORA_FH_DST_MAC", "")
+        if not dst:
+            return "ERR code=BAD_ARG message=no_fronthaul_dst_mac_(AURORA_FH_DST_MAC)"
+        frame_size = int(params.get("frame_size", os.environ.get("AURORA_FH_FRAME_SIZE", "1500")))
+        frame_size = max(64, min(frame_size, 9000))
+        ethertype = int(str(params.get("ethertype", os.environ.get("AURORA_FH_ETHERTYPE", "0x88b5"))), 0)
+        rate_min = float(params.get("rate_min_mbps", params.get("rate_mbps", 100)))
+        rate_max = float(params.get("rate_max_mbps", rate_min))
+        if rate_min <= 0 or rate_max < rate_min:
+            return "ERR code=BAD_ARG message=rate_min_mbps_<=0_or_>rate_max_mbps"
+        step_ms = max(100, int(params.get("step_ms", 1000)))
+        duration_ms = int(params.get("duration_ms", 10000))
+        if duration_ms <= 0:
+            return "ERR code=BAD_ARG message=duration_ms_<=0"
+        try:
+            src = _iface_mac(iface)
+            frame = _parse_mac(dst) + src + ethertype.to_bytes(2, "big")
+            frame += bytes(frame_size - len(frame)) if frame_size > len(frame) else b""
+            sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, 0)
+            sock.bind((iface, 0))
+        except (OSError, ValueError, FileNotFoundError) as e:
+            return f"ERR code=FRONTHAUL_FAILED message={str(e).replace(' ', '_')}"
+
+        self.run_flag = True
+        self.sent_bytes = 0
+        self.thread = threading.Thread(
+            target=self._run,
+            args=(sock, frame, rate_min, rate_max, step_ms, duration_ms),
+            name="fronthaul", daemon=True)
+        self.thread.start()
+        steps = max(1, (duration_ms + step_ms - 1) // step_ms)
+        return (f"OK applied=1 fronthaul iface={iface} dst={dst} rate_min_mbps={rate_min:g} "
+                f"rate_max_mbps={rate_max:g} step_ms={step_ms} steps={steps} frame_size={frame_size} "
+                f"ethertype=0x{ethertype:04x} duration_ms={duration_ms}")
+
+    def _run(self, sock, frame, rate_min, rate_max, step_ms, duration_ms):
+        wire_bits = (len(frame) + self.WIRE_OVERHEAD) * 8
+        nof_steps = max(1, (duration_ms + step_ms - 1) // step_ms)
+        start = time.monotonic()
+        end = start + duration_ms / 1000.0
+        try:
+            while self.run_flag and not self.stop.is_set() and time.monotonic() < end:
+                step = min(nof_steps - 1, int((time.monotonic() - start) * 1000 // step_ms))
+                mbps = rate_max if nof_steps == 1 else rate_min + (rate_max - rate_min) * step / (nof_steps - 1)
+                self.cur_mbps = mbps
+                rate_bps = mbps * 1e6
+                step_end = min(end, start + (step + 1) * step_ms / 1000.0)
+                base = time.monotonic()
+                sent_bits = 0
+                while self.run_flag and not self.stop.is_set() and time.monotonic() < step_end:
+                    target_bits = (time.monotonic() - base) * rate_bps
+                    while sent_bits < target_bits and time.monotonic() < step_end:
+                        try:
+                            sock.send(frame)
+                        except OSError:
+                            break
+                        sent_bits += wire_bits
+                        self.sent_bytes += len(frame)
+                    time.sleep(0.0002)
+        finally:
+            self.cur_mbps = 0.0
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    def stop_sender(self):
+        self.run_flag = False
+        with self.lock:
+            t = self.thread
+        if t and t.is_alive():
+            t.join(timeout=3)
+        self.thread = None
+        self.cur_mbps = 0.0
+
+
 SA_DIR = "/var/run/secrets/kubernetes.io/serviceaccount"
 
 
@@ -258,10 +373,11 @@ class Watchdog:
 
     RESTART_RETRY_S = 10
 
-    def __init__(self, client, keeper, stop):
+    def __init__(self, client, keeper, stop, fronthaul):
         self.client = client
         self.keeper = keeper
         self.stop = stop
+        self.fronthaul = fronthaul
         self.lock = threading.Lock()
         self.lease_until = None   # monotonic
         self.anomaly_until = None  # monotonic, None = no end known (ends now)
@@ -304,6 +420,7 @@ class Watchdog:
                     self.client.send("CLEAR type=ALL")
                 except OSError as e:
                     log("error", cmd="CLEAR ALL", error=str(e))
+                self.fronthaul.stop_sender()
                 self.keeper.set("recovery", source="watchdog")
             if self.last_restart is None or now - self.last_restart >= self.RESTART_RETRY_S:
                 self.last_restart = now
@@ -314,9 +431,55 @@ class Watchdog:
                     log("error", cmd="restart", error=str(e))
 
 
-def start_control_server(port, client, keeper, watchdog):
+def start_control_server(port, client, keeper, watchdog, fronthaul):
     def parse_args(words):
         return dict(w.split("=", 1) for w in words if "=" in w)
+
+    def default_multi_label(types):
+        order = ["mac_contention", "pdcp_contention", "l1_thread_contention", "queue_tuning", "memory_leak",
+                 "fronthaul"]
+        names = sorted({t.lower() for t in types}, key=lambda t: order.index(t) if t in order else len(order))
+        return "+".join(names)
+
+    def handle_multi(payload):
+        try:
+            spec = json.loads(payload)
+            anomalies = spec["anomalies"]
+            duration_ms = int(spec.get("duration_ms", 10000))
+        except (ValueError, KeyError, TypeError) as e:
+            return f"ERR code=BAD_ARG message=bad_MULTI_json_{str(e).replace(' ', '_')}"
+        label = spec.get("label") or default_multi_label([a.get("type", "") for a in anomalies])
+        try:
+            check_label(label)
+        except ValueError as e:
+            return f"ERR code=BAD_ARG message={str(e).replace(' ', '_')}"
+
+        applied_ran = False
+        applied_fh = False
+        replies = []
+        for a in anomalies:
+            kind = str(a.get("type", "")).upper()
+            a = dict(a, duration_ms=a.get("duration_ms", duration_ms))
+            if kind == "FRONTHAUL":
+                r = fronthaul.start(a)
+                applied_fh = applied_fh or r.startswith("OK")
+            else:
+                params = " ".join(f"{k}={v}" for k, v in a.items() if k != "type")
+                r = client.send(f"SET type={kind} {params}")
+                applied_ran = applied_ran or r.startswith("OK")
+            replies.append(f"{kind}:{'OK' if r.startswith('OK') else r}")
+            if not r.startswith("OK"):
+                # Roll back what was applied, so a partial MULTI never runs mislabelled.
+                fronthaul.stop_sender()
+                if applied_ran:
+                    try:
+                        client.send("CLEAR type=ALL")
+                    except OSError:
+                        pass
+                return f"ERR code=MULTI_FAILED message={r}"
+        watchdog.anomaly(duration_ms / 1000.0)
+        keeper.set(label, source="control")
+        return f"OK applied={len(anomalies)} label={label} [{'; '.join(replies)}]"
 
     def handle_line(line):
         words = line.split()
@@ -329,23 +492,37 @@ def start_control_server(port, client, keeper, watchdog):
                 watchdog.anomaly(int(args.get("duration_ms", "0")) / 1000.0 if args.get("value") != "normal" else 0)
             return reply
         if cmd == "INJECT":
-            # INJECT label=<label> type=<TYPE> <SET parameters>: SET, then the label once the RAN process confirmed.
+            # INJECT label=<label> type=<TYPE> <params>: for FRONTHAUL the sidecar floods raw frames itself; for the
+            # RAN-process anomalies it forwards SET. In both cases the label is set once it is applied.
             args = parse_args(words[1:])
             label = check_label(args.pop("label", str(args.get("type", "")).lower()))
-            rest = " ".join(w for w in words[1:] if not w.startswith("label="))
-            reply = client.send(f"SET {rest}")
+            if args.get("type", "").upper() == "FRONTHAUL":
+                reply = fronthaul.start(args)
+            else:
+                rest = " ".join(w for w in words[1:] if not w.startswith("label="))
+                reply = client.send(f"SET {rest}")
             if reply.startswith("OK"):
                 watchdog.anomaly(int(args.get("duration_ms", "10000")) / 1000.0)
                 keeper.set(label, source="control")
             return reply
+        if cmd == "MULTI":
+            # MULTI {json}: several anomalies at once, applied all-or-nothing, one label. json has "label",
+            # "duration_ms", "anomalies":[{type, ...}]. FRONTHAUL runs in the sidecar, the rest are SET to the RAN.
+            return handle_multi(line[len("MULTI"):].strip())
+        if cmd == "CLEAR":
+            # Stop the local fronthaul flood too, then forward to the RAN process.
+            if parse_args(words[1:]).get("type", "ALL").upper() in ("ALL", "FRONTHAUL"):
+                fronthaul.stop_sender()
+            return client.send(line)
         if cmd == "LEASE":
             ttl = float(parse_args(words[1:]).get("ttl_s", "60"))
             watchdog.lease(ttl)
             return f"OK lease ttl_s={ttl:g}"
         if cmd == "DAEMON":
             lease, anomaly = watchdog.state()
+            fh = f"{fronthaul.cur_mbps:g}" if fronthaul.active() else "-"
             return (f"OK label={keeper.label} lease_s={'-' if lease is None else lease} "
-                    f"anomaly_s={'-' if anomaly is None else anomaly}")
+                    f"anomaly_s={'-' if anomaly is None else anomaly} fronthaul_mbps={fh}")
         return client.send(line)
 
     class Handler(socketserver.StreamRequestHandler):
@@ -451,9 +628,10 @@ def load_schedule(value):
 
 def run_daemon(client, schedule, stop):
     keeper = LabelKeeper(client, float(os.environ.get("ANOMALY_LABEL_RESEND_S", "1")), stop)
-    watchdog = Watchdog(client, keeper, stop)
+    fronthaul = FronthaulSender(stop)
+    watchdog = Watchdog(client, keeper, stop, fronthaul)
     control_port = int(os.environ.get("ANOMALY_INJECTOR_PORT", DEFAULT_CONTROL_PORT))
-    server = start_control_server(control_port, client, keeper, watchdog) if control_port else None
+    server = start_control_server(control_port, client, keeper, watchdog, fronthaul) if control_port else None
 
     if not client.wait_ready(float(os.environ.get("ANOMALY_CONNECT_TIMEOUT_S", "0")), stop):
         if not stop.is_set():
@@ -512,6 +690,8 @@ def main():
     p_inject.add_argument("params", nargs="*", help="SET parameters key=value (duration_ms=..., load_min=..., ...)")
     p_lease = sub.add_parser("lease", help="daemon: renew the controller lease")
     p_lease.add_argument("--ttl", type=float, default=60.0)
+    p_multi = sub.add_parser("multi", help="daemon: inject several anomalies at once (JSON)")
+    p_multi.add_argument("json", help='{"label":..,"duration_ms":..,"anomalies":[{"type":..,..},..]}')
     sub.add_parser("daemon-status", help="daemon: label, lease and anomaly time left")
     p_send = sub.add_parser("send", help="send one command line to the RAN process")
     p_send.add_argument("line", nargs="+")
@@ -525,10 +705,13 @@ def main():
     client = Client(args.host, args.port, os.environ.get("AURORA_ANOMALY_TOKEN", ""))
 
     control_port = int(os.environ.get("ANOMALY_INJECTOR_PORT", DEFAULT_CONTROL_PORT))
-    if args.cmd in ("inject", "lease", "daemon-status"):
+    if args.cmd in ("inject", "multi", "lease", "daemon-status"):
         if args.cmd == "inject":
             label = check_label(args.label or args.type.lower())
             line = " ".join([f"INJECT label={label} type={args.type.upper()}"] + args.params)
+        elif args.cmd == "multi":
+            json.loads(args.json)  # validate before sending
+            line = "MULTI " + args.json
         elif args.cmd == "lease":
             line = f"LEASE ttl_s={args.ttl:g}"
         else:
