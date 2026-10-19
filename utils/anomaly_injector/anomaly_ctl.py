@@ -265,6 +265,13 @@ class Controller:
                  anomaly_ms=anomaly_ms if kind != "NONE" else 0, lead_s=round(lead, 2))
         if not reply.startswith("OK"):
             raise Abort(f"segment {index}: {kind} not applied: {reply}")
+        # Silent clamp guard: the RAN anomaly module caps SET durations (1 h), so a
+        # longer segment would run short and the rest be mislabelled. The reply
+        # echoes the applied duration_ms; abort if it is shorter than requested.
+        clamp = re.search(r"duration_ms=(\d+)", reply)
+        if clamp and kind not in ("NONE", "LABEL_ONLY", "MULTI") and int(clamp.group(1)) < anomaly_ms - 1000:
+            raise Abort(f"segment {index}: {kind} duration clamped to {clamp.group(1)} ms < requested "
+                        f"{anomaly_ms} ms (RAN anomaly cap); split the segment to <= ~3500 s")
         if lead < 0 and kind != "NONE":
             self.log("warning", message=f"segment {index}: labelled {-lead:.1f} s after the recording started; "
                                         "its first samples are labelled normal")

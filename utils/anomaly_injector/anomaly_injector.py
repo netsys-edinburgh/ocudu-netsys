@@ -467,6 +467,12 @@ def start_control_server(port, client, keeper, watchdog, fronthaul):
                 params = " ".join(f"{k}={v}" for k, v in a.items() if k != "type")
                 r = client.send(f"SET type={kind} {params}")
                 applied_ran = applied_ran or r.startswith("OK")
+                # Reject a silently clamped sub-anomaly, so a MULTI never runs part
+                # of its span mislabelled (the RAN caps SET durations).
+                clamp = re.search(r"duration_ms=(\d+)", r)
+                if r.startswith("OK") and clamp and int(clamp.group(1)) < int(a["duration_ms"]) - 1000:
+                    r = (f"ERR code=CLAMPED message={kind}_duration_{clamp.group(1)}"
+                         f"_<_requested_{a['duration_ms']}")
             replies.append(f"{kind}:{'OK' if r.startswith('OK') else r}")
             if not r.startswith("OK"):
                 # Roll back what was applied, so a partial MULTI never runs mislabelled.
