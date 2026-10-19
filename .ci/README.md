@@ -5,7 +5,7 @@ workflows under `.github/workflows/`, and this one lives in `.ci/`.
 
 | Image | Docker Hub repo | Source |
 |-------|-----------------|--------|
-| gNB (FHI 7.2, DPDK, AVX512) | `24whitedevil/netsys-ocudu-gnb-fhi72-aurora` | `docker/Dockerfile`, target `runtime-dpdk`, `COMPONENT=gnb` |
+| gNB, DU, CU, CU-CP, CU-UP (FHI 7.2, DPDK, AVX512) | `24whitedevil/netsys-ocudu-gnb-fhi72-aurora` | `docker/Dockerfile`, target `runtime-dpdk`, `COMPONENT="gnb du cu cu-cp cu-up"` (binaries `gnb`, `odu`, `ocu`, `ocucp`, `ocuup`) |
 | aurora_reader sidecar | `24whitedevil/netsys-ocudu-aurora-reader-fhi72` | `docker/aurora_reader/Dockerfile` |
 
 Each image is tagged `:<10-char commit SHA>` and `:<branch>` (`/` in branch names becomes `-`).

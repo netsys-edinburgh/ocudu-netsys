@@ -40,7 +40,7 @@ jobs:
   build-gnb:
     runs-on: self-hosted
     steps:
-      - name: Build gNB image (runtime-dpdk, COMPONENT=gnb)
+      - name: Build gNB image (runtime-dpdk, gnb + odu + ocu + ocucp + ocuup)
         run: |
           cd "${REPO_ROOT:?REPO_ROOT not set, run through .ci/run.sh}"
           SHORT_SHA="${GITHUB_SHA:0:10}"
@@ -48,7 +48,7 @@ jobs:
           docker build \
             -f docker/Dockerfile \
             --target runtime-dpdk \
-            --build-arg COMPONENT=gnb \
+            --build-arg COMPONENT="gnb du cu cu-cp cu-up" \
             --build-arg MARCH="${MARCH}" \
             --build-arg DPDK_VERSION="${DPDK_VERSION}" \
             --build-arg NUM_JOBS="${NUM_JOBS}" \

@@ -14,6 +14,9 @@
 # NUM_JOBS              Number or empty for all
 # EXTRA_CMAKE_ARGS      Extra flags for OCUDU
 # COMPONENT             Which component to build: gnb | du | cu | cu-cp | cu-up | ru-emulator
+#                       The DPDK target (runtime-dpdk) also takes a list of gnb, du, cu, cu-cp, cu-up and
+#                       ru-emulator, separated by spaces or commas (e.g. "gnb du cu cu-cp cu-up"), and builds
+#                       all of them into one image.
 #                       Controls which single binary is compiled and installed.
 # STRIP_BIN             1 to strip OCUDU (and UHD, when present) executables in
 #                       builder / builder-lean / builder-component-uhd (default 0)
@@ -335,16 +338,23 @@ ADD . /src
 RUN if [ -z "$NUM_JOBS" ]; then NUM_JOBS=$(nproc); fi \
     && ARCH_FLAG=$([ "${TARGETARCH}" = "arm64" ] && echo "-DMCPU=${MARCH}" || echo "-DMARCH=${MARCH}") \
     && mkdir -p /opt/ocudu/bin \
-    && case "${COMPONENT}" in \
-         gnb)         TARGETS="gnb";         SRC="apps/gnb/gnb";                  BIN="gnb" ;; \
-         du)          TARGETS="odu";         SRC="apps/du/odu";                   BIN="odu" ;; \
-         ru-emulator) TARGETS="ru_emulator"; SRC="apps/examples/ofh/ru_emulator"; BIN="ru_emulator" ;; \
-         *)           echo "Unsupported DPDK component: ${COMPONENT}" >&2; exit 1 ;; \
-       esac \
-    && /src/docker/scripts/builder.sh -c ${COMPILER} -m "-j${NUM_JOBS} ${TARGETS}" \
+    && TARGETS="" && SRCS="" \
+    && for c in $(echo "${COMPONENT}" | tr ',' ' '); do \
+         case "$c" in \
+           gnb)         TARGETS="$TARGETS gnb";         SRCS="$SRCS apps/gnb/gnb" ;; \
+           du)          TARGETS="$TARGETS odu";         SRCS="$SRCS apps/du/odu" ;; \
+           cu)          TARGETS="$TARGETS ocu";         SRCS="$SRCS apps/cu/ocu" ;; \
+           cu-cp)       TARGETS="$TARGETS ocucp";       SRCS="$SRCS apps/cu_cp/ocucp" ;; \
+           cu-up)       TARGETS="$TARGETS ocuup";       SRCS="$SRCS apps/cu_up/ocuup" ;; \
+           ru-emulator) TARGETS="$TARGETS ru_emulator"; SRCS="$SRCS apps/examples/ofh/ru_emulator" ;; \
+           *)           echo "Unsupported DPDK component: $c" >&2; exit 1 ;; \
+         esac; \
+       done \
+    && [ -n "$TARGETS" ] || { echo "No DPDK component given" >&2; exit 1; } \
+    && /src/docker/scripts/builder.sh -c ${COMPILER} -m "-j${NUM_JOBS}${TARGETS}" \
        -DBUILD_TESTING=False -DENABLE_UHD=Off -DENABLE_DPDK=On \
        ${ARCH_FLAG} -DCMAKE_INSTALL_PREFIX=/opt/ocudu ${EXTRA_CMAKE_ARGS} /src \
-    && cp /src/build/${SRC} /opt/ocudu/bin/${BIN}
+    && for src in $SRCS; do cp "/src/build/$src" /opt/ocudu/bin/; done
 RUN if [ "${STRIP_BIN}" = "1" ]; then \
         command -v readelf >/dev/null 2>&1 || { echo "STRIP_BIN=1 requires readelf" >&2; exit 1; }; \
         command -v strip >/dev/null 2>&1 || { echo "STRIP_BIN=1 requires strip" >&2; exit 1; }; \
@@ -529,12 +539,17 @@ RUN --mount=type=secret,id=rh_entitlement_cert,target=/etc/pki/entitlement/entit
     /usr/local/etc/install_dpdk_dependencies.sh run && \
     ldconfig
 
-RUN case "${COMPONENT}" in \
-      gnb)         setcap cap_sys_nice,cap_ipc_lock,cap_perfmon,cap_bpf+ep /usr/local/bin/gnb && getcap /usr/local/bin/gnb ;; \
-      du)          setcap cap_sys_nice,cap_ipc_lock,cap_perfmon,cap_bpf+ep /usr/local/bin/odu && getcap /usr/local/bin/odu ;; \
-      ru-emulator) setcap cap_sys_nice,cap_ipc_lock+ep /usr/local/bin/ru_emulator && getcap /usr/local/bin/ru_emulator ;; \
-      *)           echo "Unsupported DPDK component: ${COMPONENT}" >&2; exit 1 ;; \
-    esac
+RUN for c in $(echo "${COMPONENT}" | tr ',' ' '); do \
+      case "$c" in \
+        gnb)         setcap cap_sys_nice,cap_ipc_lock,cap_perfmon,cap_bpf+ep /usr/local/bin/gnb   && getcap /usr/local/bin/gnb ;; \
+        du)          setcap cap_sys_nice,cap_ipc_lock,cap_perfmon,cap_bpf+ep /usr/local/bin/odu   && getcap /usr/local/bin/odu ;; \
+        cu)          setcap cap_sys_nice,cap_ipc_lock+ep                     /usr/local/bin/ocu   && getcap /usr/local/bin/ocu ;; \
+        cu-cp)       setcap cap_sys_nice,cap_ipc_lock,cap_perfmon,cap_bpf+ep /usr/local/bin/ocucp && getcap /usr/local/bin/ocucp ;; \
+        cu-up)       setcap cap_sys_nice,cap_ipc_lock,cap_perfmon,cap_bpf+ep /usr/local/bin/ocuup && getcap /usr/local/bin/ocuup ;; \
+        ru-emulator) setcap cap_sys_nice,cap_ipc_lock+ep /usr/local/bin/ru_emulator && getcap /usr/local/bin/ru_emulator ;; \
+        *)           echo "Unsupported DPDK component: $c" >&2; exit 1 ;; \
+      esac || exit 1; \
+    done
 
 USER 1001
 
