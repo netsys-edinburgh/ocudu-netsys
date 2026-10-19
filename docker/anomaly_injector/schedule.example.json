@@ -1,0 +1,14 @@
+{
+  "repeat": true,
+  "start_delay_ms": 30000,
+  "steps": [
+    {"type": "NONE", "duration_ms": 60000},
+    {"type": "MAC_CONTENTION", "duration_ms": 120000, "load_min": 10, "load_max": 80, "step_ms": 10000},
+    {"type": "NONE", "duration_ms": 60000},
+    {"type": "PDCP_CONTENTION", "duration_ms": 120000, "load_min": 10, "load_max": 80, "step_ms": 10000},
+    {"type": "NONE", "duration_ms": 60000},
+    {"type": "MAC_CONTENTION", "duration_ms": 60000, "load": 30, "prio_offset": 1, "label": "mac_preemption"},
+    {"type": "NONE", "duration_ms": 60000},
+    {"type": "LABEL_ONLY", "label": "link_flap", "duration_ms": 30000}
+  ]
+}

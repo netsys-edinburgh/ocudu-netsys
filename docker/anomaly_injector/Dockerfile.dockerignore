@@ -1,0 +1,4 @@
+# BuildKit per-Dockerfile ignore file (applies only to docker/anomaly_injector/Dockerfile): send only the injector.
+*
+!utils/anomaly_injector/
+!docker/anomaly_injector/

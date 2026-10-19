@@ -7,6 +7,7 @@ workflows under `.github/workflows/`, and this one lives in `.ci/`.
 |-------|-----------------|--------|
 | gNB, DU, CU, CU-CP, CU-UP (FHI 7.2, DPDK, AVX512) | `24whitedevil/netsys-ocudu-gnb-fhi72-aurora` | `docker/Dockerfile`, target `runtime-dpdk`, `COMPONENT="gnb du cu cu-cp cu-up"` (binaries `gnb`, `odu`, `ocu`, `ocucp`, `ocuup`) |
 | aurora_reader sidecar | `24whitedevil/netsys-ocudu-aurora-reader-fhi72` | `docker/aurora_reader/Dockerfile` |
+| anomaly-injector sidecar | `24whitedevil/netsys-ocudu-anomaly-injector` | `docker/anomaly_injector/Dockerfile` |
 
 Each image is tagged `:<10-char commit SHA>` and `:<branch>` (`/` in branch names becomes `-`).
 
@@ -15,14 +16,14 @@ Each image is tagged `:<10-char commit SHA>` and `:<branch>` (`/` in branch name
 Run this instead of `git push`:
 
 ```bash
-.ci/run.sh          # build both images -> push them to Docker Hub -> git push origin aurora-port
+.ci/run.sh          # build the images -> push them to Docker Hub -> git push origin aurora-port
 .ci/run.sh --list   # show the jobs only
 ```
 
 There is no dry run: act's `-n` still executes `run:` steps when jobs run on the host, so it would build and push.
 
-1. Both images are built (in parallel).
-2. Only if both builds succeed are they pushed to Docker Hub.
+1. The images are built (in parallel).
+2. Only if every build succeeds are they pushed to Docker Hub.
 3. Only if the push succeeds, and the current branch is `aurora-port`, the branch is pushed with `git push origin
    aurora-port`. On other branches the images are still published but the code is not pushed.
 

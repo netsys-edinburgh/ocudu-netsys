@@ -1,4 +1,5 @@
-# Local-only pipeline: builds the AURORA gNB (FHI 7.2 / DPDK) and aurora_reader images and pushes them to Docker Hub.
+# Local-only pipeline: builds the AURORA gNB (FHI 7.2 / DPDK), aurora_reader and anomaly-injector images and pushes
+# them to Docker Hub.
 #
 # This file lives outside .github/workflows on purpose, so GitHub never runs it. It is executed on this machine with
 # `act` through .ci/run.sh, which also git-pushes aurora-port once this workflow succeeds. See .ci/README.md.
@@ -15,6 +16,7 @@ on:
 env:
   GNB_REPO: 24whitedevil/netsys-ocudu-gnb-fhi72-aurora
   READER_REPO: 24whitedevil/netsys-ocudu-aurora-reader-fhi72
+  INJECTOR_REPO: 24whitedevil/netsys-ocudu-anomaly-injector
   # Target CPU of the gNB server. x86-64-v4 requires AVX512.
   MARCH: x86-64-v4
   DPDK_VERSION: "25.11.2"
@@ -34,6 +36,21 @@ jobs:
             -f docker/aurora_reader/Dockerfile \
             -t "${READER_REPO}:${SHORT_SHA}" \
             -t "${READER_REPO}:${BRANCH_TAG}" \
+            --label org.opencontainers.image.revision="${GITHUB_SHA}" \
+            .
+
+  build-injector:
+    runs-on: self-hosted
+    steps:
+      - name: Build anomaly-injector image
+        run: |
+          cd "${REPO_ROOT:?REPO_ROOT not set, run through .ci/run.sh}"
+          SHORT_SHA="${GITHUB_SHA:0:10}"
+          BRANCH_TAG="${GITHUB_REF_NAME//\//-}"
+          docker build \
+            -f docker/anomaly_injector/Dockerfile \
+            -t "${INJECTOR_REPO}:${SHORT_SHA}" \
+            -t "${INJECTOR_REPO}:${BRANCH_TAG}" \
             --label org.opencontainers.image.revision="${GITHUB_SHA}" \
             .
 
@@ -57,17 +74,17 @@ jobs:
             --label org.opencontainers.image.revision="${GITHUB_SHA}" \
             .
 
-  # Runs only when both images built, so Docker Hub never gets one image without the other.
+  # Runs only when every image built, so Docker Hub never gets a partial set.
   publish:
     runs-on: self-hosted
-    needs: [build-reader, build-gnb]
+    needs: [build-reader, build-injector, build-gnb]
     steps:
       - name: Push images to Docker Hub
         run: |
           cd "${REPO_ROOT:?REPO_ROOT not set, run through .ci/run.sh}"
           SHORT_SHA="${GITHUB_SHA:0:10}"
           BRANCH_TAG="${GITHUB_REF_NAME//\//-}"
-          for repo in "${READER_REPO}" "${GNB_REPO}"; do
+          for repo in "${READER_REPO}" "${INJECTOR_REPO}" "${GNB_REPO}"; do
             docker push "${repo}:${SHORT_SHA}"
             docker push "${repo}:${BRANCH_TAG}"
           done
