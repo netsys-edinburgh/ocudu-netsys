@@ -353,7 +353,34 @@ Control-port commands besides `LABEL` and forwarding (also as `anomaly-injector 
 | `INJECT label=<label> type=<TYPE> <SET parameters>` | `SET` to the RAN process; on `OK` sets the label (default: lower-case type) |
 | `LABEL value=<label> duration_ms=<ms>` | as `LABEL`, and tells the watchdog when the anomaly (injected elsewhere) ends |
 | `LEASE ttl_s=<s>` | renews the controller lease |
-| `DAEMON` | `OK label=... lease_s=<left> anomaly_s=<left>` |
+| `DAEMON` | `OK label=... lease_s=<left> anomaly_s=<left> fronthaul_mbps=<rate> bursts=<lane:on/off/count,...>` |
+
+**Bursts.** An `INJECT` (or `MULTI`, or one anomaly of a `MULTI`) with `burst_ms` is not one continuous anomaly: inside
+its `duration_ms` the sidecar plays repeated short bursts, so the controller only sets the segment and the sidecar
+decides when each burst runs.
+
+```text
+INJECT label=pdcp_preemption type=PDCP_CONTENTION duration_ms=3500000 burst_ms=800-6000 period_ms=10000 load_min=92 load_max=98 prio_offset=1
+```
+
+- `burst_ms` and `period_ms` (start to start) are ranges (`min-max`, or one value) drawn for every burst. The level is
+  drawn per burst from `load_min`..`load_max` (or `load=lo-hi`), `rate_min_mbps`..`rate_max_mbps` for `FRONTHAUL`. Other
+  keys (`prio_offset`, `slice_ms`, ...) go to `SET` unchanged.
+- Each burst is one `SET` of the burst's length plus 300 ms, then `CLEAR`. The label is set once the burst is applied
+  and back to `normal` before it is stopped, so labelled samples lie inside the anomaly.
+- In a burst `MULTI` every anomaly bursts on its own schedule (`burst_ms` / `period_ms` at the top level are the
+  default) and the label names the anomalies active at that moment, joined by `+`: `mac`, `pdcp`, `fh` by default, e.g.
+  `mac+fh` (a sub-anomaly's `label` overrides; every combination must fit 31 characters).
+- Every burst is logged as a `burst` event with `label`, `level`, `dur_ms`, `start_us` and `end_us` (same clock as the
+  AURORA `timestamp_us`).
+- The first burst of every anomaly is applied before the reply (all-or-nothing), so a bad parameter fails the `INJECT`;
+  the reply carries the segment's `duration_ms` (anomaly-ctl's clamp guard). A new `INJECT` / `MULTI` or
+  `CLEAR type=ALL` ends the bursts; with a lost lease they run to the end of the segment, which leaves the label
+  `normal`.
+
+In an anomaly-ctl campaign the same keys go in the segment, ranges as strings or lists:
+`{"type": "PDCP_CONTENTION", "duration_s": 3500, "burst_ms": [800, 6000], "period_ms": 10000, "load_min": 92,
+"load_max": 98, "prio_offset": 1, "label": "pdcp_preemption"}`.
 
 **Watchdog.** Armed by the first `LEASE`. If the lease runs out while the label is not `normal`, the sidecar lets the
 current anomaly end (its `duration_ms`), sends `CLEAR type=ALL`, labels `recovery` and restarts its own pod: it patches

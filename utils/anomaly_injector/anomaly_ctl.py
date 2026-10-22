@@ -40,9 +40,20 @@ Campaign (JSON; "namespace" / "deployment" may be given here instead of on the c
     ],
     "random": {                                    # instead of "segments": random anomalies with normal gaps
       "types": ["MAC_CONTENTION", "PDCP_CONTENTION"], "duration_s": [300, 900], "gap_s": [300, 600],
-      "load_min": [5, 30], "load_max": [40, 95], "step_ms": 30000, "count": 10, "seed": 1
-    }
+      "load_min": [5, 30], "load_max": [40, 95], "step_ms": 30000, "count": 10, "seed": 1,
+      "per_type": {"MAC_CONTENTION": {"label": "mac_preemption", "burst_ms": [800, 1200], "period_ms": 10000,
+                                      "load_min": 88, "load_max": 94, "prio_offset": 1}}
+    }                                              # per_type overrides the shared keys for one type; with
+                                                   # burst_ms the segment is a burst segment (ranges passed as is)
   }
+Bursts: a segment (or a MULTI, or one anomaly of a MULTI) with "burst_ms" is played as repeated bursts by the sidecar
+instead of one continuous anomaly; anomaly-ctl only sets the segment, the sidecar decides when each burst runs:
+      {"type": "PDCP_CONTENTION", "duration_s": 3500, "burst_ms": [800, 6000], "period_ms": 10000,
+       "load_min": 92, "load_max": 98, "prio_offset": 1, "label": "pdcp_preemption"}
+  burst_ms / period_ms (start to start) are ranges drawn per burst; load_min..load_max (rate_min_mbps..rate_max_mbps for
+  FRONTHAUL) is the range of the per-burst level. The label is the segment's label during a burst and "normal" in
+  between; in a burst MULTI every anomaly bursts on its own schedule and the label names the active ones ("mac+fh").
+
 "NONE" records a normal segment. "LABEL_ONLY" only labels the segment; the anomaly itself must come from another tool
 (started by you within the segment's recorded window, logged by this script). Any other type is injected by the RAN
 process (MAC_CONTENTION, PDCP_CONTENTION, L1_THREAD_CONTENTION, QUEUE_TUNING, MEMORY_LEAK) with the remaining keys
@@ -255,7 +266,9 @@ class Controller:
                     "anomalies": [dict(a, duration_ms=anomaly_ms) for a in seg["anomalies"]]}
             reply = self.kube.injector(["multi", json.dumps(spec)], timeout=60)
         elif kind != "NONE":
-            params = [f"{k}={v}" for k, v in seg.items() if k not in ("type", "duration_s", "label")]
+            # A range given as a JSON list ("burst_ms": [800, 6000]) goes on the line as 800-6000.
+            params = [f"{k}={'-'.join(map(str, v)) if isinstance(v, (list, tuple)) else v}"
+                      for k, v in seg.items() if k not in ("type", "duration_s", "label")]
             reply = self.kube.injector(
                 ["inject", "--label", label, kind, f"duration_ms={anomaly_ms}"] + params, timeout=60)
         else:
@@ -338,14 +351,22 @@ def random_segments(cfg):
     while count == 0 or n < count:
         yield {"type": "NONE", "duration_s": round(pick(rng, cfg.get("gap_s", [300, 600])))}
         kind = rng.choice(types)
-        seg = {"type": kind, "duration_s": round(pick(rng, cfg.get("duration_s", [300, 900])))}
-        if kind in ("MAC_CONTENTION", "PDCP_CONTENTION"):
-            lo = round(pick(rng, cfg.get("load_min", [5, 30])))
-            hi = max(lo, round(pick(rng, cfg.get("load_max", [40, 95]))))
-            seg.update(load_min=lo, load_max=hi, step_ms=int(pick(rng, cfg.get("step_ms", 30000))))
-            for key in ("slice_ms", "prio_offset", "cell", "method"):
-                if key in cfg:
-                    seg[key] = cfg[key]
+        # per_type: settings for one anomaly type, over the shared ones (e.g. a different load band per type).
+        tcfg = dict(cfg, **cfg.get("per_type", {}).get(kind, {}))
+        seg = {"type": kind, "duration_s": round(pick(rng, tcfg.get("duration_s", [300, 900])))}
+        if "burst_ms" in tcfg:
+            # Burst segment: the sidecar draws burst length, period and level per burst, so the ranges go as they are.
+            for key in ("label", "burst_ms", "period_ms", "load", "load_min", "load_max", "slice_ms", "prio_offset",
+                        "cell", "method"):
+                if key in tcfg:
+                    seg[key] = tcfg[key]
+        elif kind in ("MAC_CONTENTION", "PDCP_CONTENTION"):
+            lo = round(pick(rng, tcfg.get("load_min", [5, 30])))
+            hi = max(lo, round(pick(rng, tcfg.get("load_max", [40, 95]))))
+            seg.update(load_min=lo, load_max=hi, step_ms=int(pick(rng, tcfg.get("step_ms", 30000))))
+            for key in ("label", "slice_ms", "prio_offset", "cell", "method"):
+                if key in tcfg:
+                    seg[key] = tcfg[key]
         yield seg
         n += 1
 

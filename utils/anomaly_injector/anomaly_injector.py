@@ -32,6 +32,20 @@ and its reply returned. Other containers of the pod (e.g. a network impairment t
 Also: "INJECT label=<l> type=<T> <SET params>" (SET, then label on OK), "LABEL value=<l> duration_ms=<ms>" (the
 watchdog learns when an external anomaly ends), "LEASE ttl_s=<s>", "DAEMON".
 
+Bursts: an INJECT (or MULTI, or one anomaly of a MULTI) with burst_ms is played as repeated bursts inside its
+duration_ms instead of one continuous anomaly, so the controller only sets the segment and the sidecar decides when:
+  INJECT label=pdcp_preemption type=PDCP_CONTENTION duration_ms=3500000 burst_ms=800-6000 period_ms=10000
+         load_min=92 load_max=98 prio_offset=1
+burst_ms and period_ms (start to start) are ranges ("min-max" or one value) drawn per burst; the level is drawn per
+burst from load_min..load_max (or load=lo-hi; rate_min_mbps..rate_max_mbps for FRONTHAUL); other keys go to SET as they
+are. Each burst is a SET of the burst's length (plus a little slack), then CLEAR. The label is set once the burst is
+applied and back to "normal" before it is stopped, so labelled samples lie inside the anomaly. In a burst MULTI every
+anomaly bursts on its own schedule (spec-level burst_ms / period_ms are the default) and the label names the anomalies
+active at that moment, joined by "+" (mac, pdcp, fh by default: "mac+fh"). Every burst is logged ("burst" event:
+label, level, dur_ms, start_us, end_us). The first burst of every anomaly is applied before the reply, so a bad
+parameter fails the INJECT; the reply carries the segment's duration_ms. A new INJECT / MULTI or CLEAR type=ALL ends
+the bursts.
+
 Watchdog (anomaly-ctl, utils/anomaly_injector/anomaly_ctl.py): armed by the first LEASE. When the lease runs out while
 the label is not "normal" (controller gone), the current anomaly is let to end, then the label becomes "recovery" and
 the sidecar restarts its own pod through the Kubernetes API (patch of ANOMALY_RESTART_DEPLOYMENT, service account
@@ -320,6 +334,210 @@ class FronthaulSender:
         self.cur_mbps = 0.0
 
 
+def parse_range(value, cast=float):
+    """Range parameter: "800-6000", [800, 6000] or 800 (a single value) -> (lo, hi)."""
+    if isinstance(value, (list, tuple)):
+        lo, hi = cast(value[0]), cast(value[-1])
+    elif "-" in str(value).strip()[1:]:
+        lo, hi = (cast(v) for v in str(value).split("-", 1))
+    else:
+        lo = hi = cast(value)
+    if lo < 0 or hi < lo:
+        raise ValueError(f"bad range {value!r}: need 0 <= min <= max")
+    return lo, hi
+
+
+# Keys that shape the bursts; never forwarded to the RAN process as SET parameters.
+BURST_KEYS = ("type", "label", "duration_ms", "burst_ms", "period_ms", "seed", "load_min", "load_max", "step_ms",
+              "rate_mbps", "rate_min_mbps", "rate_max_mbps")
+# Default lane labels inside a burst MULTI: short, so that every combination fits the 31-character label limit.
+SHORT_LABELS = {"MAC_CONTENTION": "mac", "PDCP_CONTENTION": "pdcp", "FRONTHAUL": "fh",
+                "L1_THREAD_CONTENTION": "l1", "QUEUE_TUNING": "queue", "MEMORY_LEAK": "mem"}
+
+
+class BurstLane:
+    """One anomaly type played as repeated bursts: every period_ms (start to start) a burst of burst_ms, both drawn
+    uniformly from their ranges, at a level drawn from load_min..load_max (or rate_min_mbps..rate_max_mbps)."""
+
+    SLACK_MS = 300  # the RAN stressor outlives the labelled burst a little, so labelled samples lie inside it
+
+    def __init__(self, spec, label, rng):
+        self.kind = str(spec.get("type", "")).upper()
+        if not self.kind:
+            raise ValueError("burst anomaly without type")
+        self.label = check_label(label)
+        self.burst_ms = parse_range(spec["burst_ms"], int)
+        self.period_ms = parse_range(spec.get("period_ms", spec["burst_ms"]), int)
+        if self.burst_ms[0] <= 0 or self.period_ms[0] <= 0:
+            raise ValueError("burst_ms and period_ms must be > 0")
+        self.rng = rng
+        if self.kind == "FRONTHAUL":
+            self.level = parse_range(spec.get("rate_mbps", f"{spec.get('rate_min_mbps', 100)}-"
+                                                           f"{spec.get('rate_max_mbps', spec.get('rate_min_mbps', 100))}"))
+        elif "load" in spec:
+            self.level = parse_range(spec["load"], int)
+        elif "load_min" in spec:
+            self.level = (int(spec["load_min"]), int(spec.get("load_max", spec["load_min"])))
+        else:
+            self.level = None  # L1 / QUEUE / MEMORY: their own parameters (delay_us, ...) are passed through
+        self.extra = {k: v for k, v in spec.items() if k not in BURST_KEYS and k != "load"}
+        self.active = False
+        self.bursts = 0
+        self.thread = None
+
+    def draw(self):
+        dur = self.rng.randint(*self.burst_ms)
+        if self.level is None:
+            return dur, None
+        if self.kind == "FRONTHAUL":
+            return dur, round(self.rng.uniform(*self.level), 1)
+        return dur, self.rng.randint(*self.level)
+
+
+class BurstRunner:
+    """Bursty anomalies inside one anomaly-ctl segment: the controller sets the segment (type, levels, how long), the
+    sidecar decides when each burst runs. Each lane bursts on its own schedule; the label always names the lanes
+    active at that moment ("normal" in between), set once the burst is applied and dropped before it is stopped, so
+    labelled samples lie inside the anomaly. One burst program at a time; a new one replaces it."""
+
+    def __init__(self, client, keeper, fronthaul, stop):
+        self.client = client
+        self.keeper = keeper
+        self.fronthaul = fronthaul
+        self.stop = stop
+        self.lock = threading.Lock()
+        self.lanes = []
+        self.halt = threading.Event()
+        self.end = 0.0
+
+    def running(self):
+        return any(lane.thread and lane.thread.is_alive() for lane in self.lanes)
+
+    def state(self):
+        with self.lock:
+            if not self.lanes:
+                return "-"
+            return ",".join(f"{lane.label}:{'on' if lane.active else 'off'}/{lane.bursts}" for lane in self.lanes)
+
+    def _relabel(self):
+        with self.lock:
+            active = [lane.label for lane in self.lanes if lane.active]
+        self.keeper.set("+".join(active) if active else "normal", source="burst")
+
+    def _begin(self, lane, end, relabel=True):
+        """Applies one burst; returns (reply, dur_ms, level). Marks the lane active (and relabels) on OK."""
+        dur, level = lane.draw()
+        dur = max(1, min(dur, int((end - time.monotonic()) * 1000)))
+        if lane.kind == "FRONTHAUL":
+            params = dict(lane.extra, rate_min_mbps=level, rate_max_mbps=level, step_ms=dur + lane.SLACK_MS,
+                          duration_ms=dur + lane.SLACK_MS)
+            reply = self.fronthaul.start(params)
+        else:
+            parts = [f"SET type={lane.kind}", f"duration_ms={dur + lane.SLACK_MS}"]
+            if level is not None:
+                parts.append(f"load={level}")
+            parts += [f"{k}={v}" for k, v in lane.extra.items()]
+            reply = self.client.send(" ".join(parts), quiet=True)
+        if reply.startswith("OK"):
+            with self.lock:
+                lane.active = True
+                lane.bursts += 1
+            if relabel:
+                self._relabel()
+        return reply, dur, level
+
+    def _finish(self, lane, relabel=True):
+        with self.lock:
+            was_active, lane.active = lane.active, False
+        if not was_active:
+            return
+        if relabel:
+            self._relabel()  # label first: samples after this point are no longer inside the anomaly
+        if lane.kind == "FRONTHAUL":
+            self.fronthaul.stop_sender()
+        else:
+            try:
+                self.client.send(f"CLEAR type={lane.kind}", quiet=True)
+            except OSError as e:
+                log("error", cmd=f"CLEAR {lane.kind}", error=str(e))
+
+    def _lane_loop(self, lane, first):
+        """first: (start monotonic, start wall us, dur_ms, level) of the burst applied by start()."""
+        start, start_us, dur, level = first
+        while True:
+            self.halt.wait(max(0.0, start + dur / 1000.0 - time.monotonic()))
+            self._finish(lane)
+            end_us = int(time.time() * 1e6)
+            log("burst", label=lane.label, type=lane.kind, level=level, dur_ms=(end_us - start_us) // 1000,
+                start_us=start_us, end_us=end_us)
+            nxt = start + lane.rng.randint(*lane.period_ms) / 1000.0
+            nxt = max(nxt, time.monotonic() + 0.1)  # a burst longer than its period: next one right after it
+            while not self.halt.is_set() and not self.stop.is_set():
+                if nxt >= self.end:
+                    return
+                self.halt.wait(max(0.0, nxt - time.monotonic()))
+                if self.halt.is_set() or self.stop.is_set():
+                    return
+                start, start_us = time.monotonic(), int(time.time() * 1e6)
+                try:
+                    reply, dur, level = self._begin(lane, self.end)
+                except OSError as e:
+                    reply = f"ERR code=UNREACHABLE message={e}"
+                if reply.startswith("OK"):
+                    break
+                log("error", cmd=f"burst {lane.kind}", error=reply)
+                nxt = start + lane.rng.randint(*lane.period_ms) / 1000.0
+            else:
+                return
+
+    def start(self, specs, duration_ms, seed=None):
+        """specs: [(spec dict with type / burst_ms / period_ms / levels, lane label)]. Applies the first burst of every
+        lane at once (all-or-nothing, so a bad parameter is reported to the controller), then lets the lanes run."""
+        self.stop_all()
+        rng = random.Random(seed)
+        lanes = [BurstLane(spec, label, random.Random(rng.random())) for spec, label in specs]
+        check_label("+".join(lane.label for lane in lanes))  # every combination must fit
+        self.halt = threading.Event()
+        self.end = time.monotonic() + duration_ms / 1000.0
+        with self.lock:
+            self.lanes = lanes
+        firsts = []
+        for lane in lanes:
+            start, start_us = time.monotonic(), int(time.time() * 1e6)
+            try:
+                reply, dur, level = self._begin(lane, self.end, relabel=False)
+            except OSError as e:
+                reply = f"ERR code=UNREACHABLE message={str(e).replace(' ', '_')}"
+            if not reply.startswith("OK"):
+                for done in lanes:
+                    self._finish(done, relabel=False)  # never labelled: the label stays as it was
+                with self.lock:
+                    self.lanes = []
+                return f"ERR code=BURST_FAILED message={lane.kind}:{reply}"
+            firsts.append((start, start_us, dur, level))
+        self._relabel()  # all first bursts applied: label them together
+        for lane, first in zip(lanes, firsts):
+            lane.thread = threading.Thread(target=self._lane_loop, args=(lane, first), name=f"burst-{lane.label}",
+                                           daemon=True)
+            lane.thread.start()
+        desc = " ".join(f"{lane.label}:{lane.kind}:burst_ms={lane.burst_ms[0]}-{lane.burst_ms[1]}"
+                        f":period_ms={lane.period_ms[0]}-{lane.period_ms[1]}"
+                        + (f":level={lane.level[0]:g}-{lane.level[1]:g}" if lane.level else "") for lane in lanes)
+        # duration_ms first: anomaly-ctl's clamp guard reads the first duration_ms= of the reply.
+        return f"OK applied={len(lanes)} burst duration_ms={int(duration_ms)} lanes=[{desc}]"
+
+    def stop_all(self):
+        self.halt.set()
+        with self.lock:
+            lanes = list(self.lanes)
+        for lane in lanes:
+            if lane.thread and lane.thread.is_alive():
+                lane.thread.join(timeout=5)
+            self._finish(lane)
+        with self.lock:
+            self.lanes = []
+
+
 SA_DIR = "/var/run/secrets/kubernetes.io/serviceaccount"
 
 
@@ -378,6 +596,7 @@ class Watchdog:
         self.keeper = keeper
         self.stop = stop
         self.fronthaul = fronthaul
+        self.bursts = None  # BurstRunner, set by run_daemon
         self.lock = threading.Lock()
         self.lease_until = None   # monotonic
         self.anomaly_until = None  # monotonic, None = no end known (ends now)
@@ -410,12 +629,15 @@ class Watchdog:
             if not lost:
                 continue
             label = self.keeper.label
-            if label == "normal":
-                continue  # nothing to recover from
+            bursting = self.bursts is not None and self.bursts.running()
+            if label == "normal" and not bursting:
+                continue  # nothing to recover from (between two bursts the label is "normal" but bursts still run)
             if label != "recovery":
                 if anomaly_until is not None and now < anomaly_until:
                     continue  # let the current anomaly run to its end
                 log("lease_lost", label=label)
+                if self.bursts:
+                    self.bursts.stop_all()
                 try:
                     self.client.send("CLEAR type=ALL")
                 except OSError as e:
@@ -431,9 +653,15 @@ class Watchdog:
                     log("error", cmd="restart", error=str(e))
 
 
-def start_control_server(port, client, keeper, watchdog, fronthaul):
+def start_control_server(port, client, keeper, watchdog, fronthaul, bursts):
     def parse_args(words):
         return dict(w.split("=", 1) for w in words if "=" in w)
+
+    def start_bursts(specs, duration_ms, seed):
+        reply = bursts.start(specs, duration_ms, seed)
+        if reply.startswith("OK"):
+            watchdog.anomaly(duration_ms / 1000.0)
+        return reply
 
     def default_multi_label(types):
         order = ["mac_contention", "pdcp_contention", "l1_thread_contention", "queue_tuning", "memory_leak",
@@ -448,6 +676,20 @@ def start_control_server(port, client, keeper, watchdog, fronthaul):
             duration_ms = int(spec.get("duration_ms", 10000))
         except (ValueError, KeyError, TypeError) as e:
             return f"ERR code=BAD_ARG message=bad_MULTI_json_{str(e).replace(' ', '_')}"
+        bursts.stop_all()
+        if "burst_ms" in spec or any("burst_ms" in a for a in anomalies):
+            # Burst MULTI: every anomaly bursts on its own schedule (spec-level burst_ms / period_ms are the default);
+            # the label names the anomalies active at that moment, e.g. "mac+fh".
+            specs = []
+            for a in anomalies:
+                a = dict(a)
+                for key in ("burst_ms", "period_ms"):
+                    if key not in a and key in spec:
+                        a[key] = spec[key]
+                kind = str(a.get("type", "")).upper()
+                specs.append((a, a.get("label") or SHORT_LABELS.get(kind, kind.lower())))
+            return start_bursts(specs, duration_ms, spec.get("seed"))
+
         label = spec.get("label") or default_multi_label([a.get("type", "") for a in anomalies])
         try:
             check_label(label)
@@ -502,6 +744,10 @@ def start_control_server(port, client, keeper, watchdog, fronthaul):
             # RAN-process anomalies it forwards SET. In both cases the label is set once it is applied.
             args = parse_args(words[1:])
             label = check_label(args.pop("label", str(args.get("type", "")).lower()))
+            bursts.stop_all()
+            if "burst_ms" in args:
+                # Burst mode: duration_ms is the whole segment; the sidecar plays bursts inside it.
+                return start_bursts([(args, label)], int(args.get("duration_ms", "10000")), args.get("seed"))
             if args.get("type", "").upper() == "FRONTHAUL":
                 reply = fronthaul.start(args)
             else:
@@ -516,7 +762,9 @@ def start_control_server(port, client, keeper, watchdog, fronthaul):
             # "duration_ms", "anomalies":[{type, ...}]. FRONTHAUL runs in the sidecar, the rest are SET to the RAN.
             return handle_multi(line[len("MULTI"):].strip())
         if cmd == "CLEAR":
-            # Stop the local fronthaul flood too, then forward to the RAN process.
+            # Stop the bursts and the local fronthaul flood too, then forward to the RAN process.
+            if parse_args(words[1:]).get("type", "ALL").upper() == "ALL":
+                bursts.stop_all()
             if parse_args(words[1:]).get("type", "ALL").upper() in ("ALL", "FRONTHAUL"):
                 fronthaul.stop_sender()
             return client.send(line)
@@ -528,7 +776,7 @@ def start_control_server(port, client, keeper, watchdog, fronthaul):
             lease, anomaly = watchdog.state()
             fh = f"{fronthaul.cur_mbps:g}" if fronthaul.active() else "-"
             return (f"OK label={keeper.label} lease_s={'-' if lease is None else lease} "
-                    f"anomaly_s={'-' if anomaly is None else anomaly} fronthaul_mbps={fh}")
+                    f"anomaly_s={'-' if anomaly is None else anomaly} fronthaul_mbps={fh} bursts={bursts.state()}")
         return client.send(line)
 
     class Handler(socketserver.StreamRequestHandler):
@@ -636,8 +884,10 @@ def run_daemon(client, schedule, stop):
     keeper = LabelKeeper(client, float(os.environ.get("ANOMALY_LABEL_RESEND_S", "1")), stop)
     fronthaul = FronthaulSender(stop)
     watchdog = Watchdog(client, keeper, stop, fronthaul)
+    bursts = BurstRunner(client, keeper, fronthaul, stop)
+    watchdog.bursts = bursts
     control_port = int(os.environ.get("ANOMALY_INJECTOR_PORT", DEFAULT_CONTROL_PORT))
-    server = start_control_server(control_port, client, keeper, watchdog, fronthaul) if control_port else None
+    server = start_control_server(control_port, client, keeper, watchdog, fronthaul, bursts) if control_port else None
 
     if not client.wait_ready(float(os.environ.get("ANOMALY_CONNECT_TIMEOUT_S", "0")), stop):
         if not stop.is_set():
