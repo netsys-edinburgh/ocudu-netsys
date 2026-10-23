@@ -206,6 +206,14 @@ class Controller:
                 return started
         raise Abort(f"pod not ready after {self.args.restart_retries + 1} restarts")
 
+    def same_ran(self, started):
+        """True when the RAN process still answers and is the instance that started at `started` (wall clock s)."""
+        status = self.kube.injector(["status"])
+        if not status.startswith("OK"):
+            return False
+        m = re.search(r"started_us=(\d+)", status)
+        return not m or int(m.group(1)) <= 0 or abs(int(m.group(1)) / 1e6 - started) < 1.0
+
     # -- lease ---------------------------------------------------------------------------------------------------------
     def start_lease(self):
         def renew():
@@ -250,12 +258,21 @@ class Controller:
             raise Abort(f"segment {index}: unknown type {kind}")
 
         self.log("segment_start", index=index, type=kind, label=label, duration_s=duration)
-        started = self.restart()
-        # aurora_reader records from its first sample + warm-up; the RAN process publishes from `started` on.
-        record_start = started + warmup
-        record_end = record_start + duration
-        # Confirmed before record_start: the lead, plus the time the exec itself takes (and stress-ng start-up).
-        self.wait_until(record_start - self.args.inject_lead - self.kube.exec_latency() - 0.5)
+        for attempt in range(1, self.args.restart_retries + 2):
+            started = self.restart()
+            # aurora_reader records from its first sample + warm-up; the RAN process publishes from `started` on.
+            record_start = started + warmup
+            record_end = record_start + duration
+            # Confirmed before record_start: the lead, plus the time the exec itself takes (and stress-ng start-up).
+            self.wait_until(record_start - self.args.inject_lead - self.kube.exec_latency() - 0.5)
+            # The RAN process can die after answering (e.g. DPDK failing to configure the fronthaul port) and be
+            # restarted in the same pod: its warm-up and window would then be off, so restart the segment instead.
+            if self.same_ran(started):
+                break
+            self.log("ran_restarted", index=index, attempt=attempt,
+                     message="RAN process restarted or unreachable during the warm-up: restarting the segment")
+        else:
+            raise Abort(f"segment {index}: RAN process kept restarting during the warm-up")
 
         # Lasts until the next restart stops the pod (or, without controller, ends on its own).
         anomaly_ms = int((record_end - time.time() + self.args.margin) * 1000)
