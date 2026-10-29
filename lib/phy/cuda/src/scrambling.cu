@@ -30,6 +30,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <new>
 #include <thread>
@@ -537,8 +538,11 @@ constexpr size_t GOLD_SEQ_RETIRE_RECLAIM_THRESHOLD = 64;
 struct gold_seq_reclaimer {
     std::mutex              mutex;
     std::condition_variable wake;
+    std::condition_variable exited_cv;
     std::vector<uint32_t*>  parked;
     bool                    running = false;
+    bool                    stop    = false;
+    bool                    exited  = false;
     std::atomic<unsigned>   nof_reclaimed{0};
 };
 
@@ -557,8 +561,14 @@ void gold_seq_reclaim_loop(gold_seq_reclaimer* reclaimer, int device)
         {
             std::unique_lock<std::mutex> lock(reclaimer->mutex);
             reclaimer->wake.wait(lock, [reclaimer]() {
-                return reclaimer->parked.size() >= GOLD_SEQ_RETIRE_RECLAIM_THRESHOLD;
+                return reclaimer->stop || (reclaimer->parked.size() >= GOLD_SEQ_RETIRE_RECLAIM_THRESHOLD);
             });
+            if (reclaimer->stop) {
+                // The parked buffers go with the CUDA context at process exit.
+                reclaimer->exited = true;
+                reclaimer->exited_cv.notify_all();
+                return;
+            }
             batch.swap(reclaimer->parked);
         }
 
@@ -579,6 +589,18 @@ void gold_seq_reclaim_loop(gold_seq_reclaimer* reclaimer, int device)
     }
 }
 
+// Stops the reclaimer at process exit, before the CUDA runtime tears down: a CUDA call still running on the detached
+// thread during the teardown crashes the process. It is registered after the runtime initialized, so the exit handlers,
+// which run in reverse order of registration, run it first. A reclaimer stuck on a stuck GPU is given a bounded time.
+void stop_gold_seq_reclaimer()
+{
+    gold_seq_reclaimer&          reclaimer = get_gold_seq_reclaimer();
+    std::unique_lock<std::mutex> lock(reclaimer.mutex);
+    reclaimer.stop = true;
+    reclaimer.wake.notify_all();
+    reclaimer.exited_cv.wait_for(lock, std::chrono::seconds(2), [&reclaimer]() { return reclaimer.exited; });
+}
+
 // Park a buffer that has been detached from its slot but may still be in flight. Never waits for the GPU.
 void retire_gold_seq_buffer(uint32_t* buf)
 {
@@ -588,11 +610,12 @@ void retire_gold_seq_buffer(uint32_t* buf)
     gold_seq_reclaimer&         reclaimer = get_gold_seq_reclaimer();
     std::lock_guard<std::mutex> lock(reclaimer.mutex);
     reclaimer.parked.push_back(buf);
-    if (!reclaimer.running) {
+    if (!reclaimer.running && !reclaimer.stop) {
         int device = 0;
         (void)cudaGetDevice(&device);
         std::thread(gold_seq_reclaim_loop, &reclaimer, device).detach();
         reclaimer.running = true;
+        std::atexit(stop_gold_seq_reclaimer);
     }
     if (reclaimer.parked.size() >= GOLD_SEQ_RETIRE_RECLAIM_THRESHOLD) {
         reclaimer.wake.notify_one();
