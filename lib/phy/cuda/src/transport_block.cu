@@ -1516,7 +1516,8 @@ nr_ldpc_status_t tb_encoder_configure(tb_encoder_handle_t handle,
 
             int Kb_full = (ldpc_cfg->base_graph == 1) ? NR_LDPC_BG1_INFO_NODES : NR_LDPC_BG2_INFO_NODES;
             int K_prime = Kb_full * new_Z;
-            ldpc_cfg->num_filler_bits = (cfg->nof_filler_bits > 0) ? cfg->nof_filler_bits : ldpc_cfg->num_filler_bits;
+            // A lifting size from the CPU segmenter comes with its filler count, zero included.
+            ldpc_cfg->num_filler_bits = cfg->nof_filler_bits;
             ldpc_cfg->num_info_bits = K_prime - ldpc_cfg->num_filler_bits;
             handle->tb_cfg.cb_size_bits = ldpc_cfg->num_info_bits;
             handle->tb_cfg.filler_bits = ldpc_cfg->num_filler_bits;
@@ -3483,9 +3484,8 @@ nr_ldpc_status_t tb_batch_encoder_configure(tb_batch_encoder_handle_t handle,
 
         int Kb_full = (ldpc_cfg->base_graph == 1) ? NR_LDPC_BG1_INFO_NODES : NR_LDPC_BG2_INFO_NODES;
         int K_prime = Kb_full * new_Z;
-        if (cfg->tb_cfg.nof_filler_bits > 0) {
-            ldpc_cfg->num_filler_bits = cfg->tb_cfg.nof_filler_bits;
-        }
+        // A lifting size from the CPU segmenter comes with its filler count, zero included.
+        ldpc_cfg->num_filler_bits = cfg->tb_cfg.nof_filler_bits;
         ldpc_cfg->num_info_bits = K_prime - ldpc_cfg->num_filler_bits;
         handle->tb_cfg.cb_size_bits = ldpc_cfg->num_info_bits;
         handle->tb_cfg.filler_bits = ldpc_cfg->num_filler_bits;

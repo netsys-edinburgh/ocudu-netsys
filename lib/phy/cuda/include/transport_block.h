@@ -55,7 +55,7 @@ typedef struct {
   int base_graph;      // LDPC base graph (1 or 2, 0 = compute internally)
   int num_code_blocks; // Number of codeblocks C (0 = compute internally)
   int lifting_size;    // Z - LDPC lifting size (0 = compute internally)
-  int nof_filler_bits; // F - Number of filler bits (0 = compute internally)
+  int nof_filler_bits; // F - Number of filler bits (used as given, zero included, when lifting_size is set)
 
   // Rate matching parameters (from CPU segmenter for multi-CB consistency)
   int nof_short_segments; // Number of CBs with E_short (0 = compute internally)

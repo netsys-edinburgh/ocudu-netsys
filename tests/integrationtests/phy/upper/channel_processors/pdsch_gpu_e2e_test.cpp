@@ -2251,6 +2251,11 @@ INSTANTIATE_TEST_SUITE_P(
     PdschGpuE2eSweep,
     PdschGpuE2eFixture,
     ::testing::Values(
+        // Code blocks without filler bits: BG2 with one block, BG1 with 9, 36 and 72 blocks.
+        pdsch_gpu_e2e_params{pdsch_mcs_table::qam64, sch_mcs_index(5), 33, 1, 3, dmrs_profile::double_symbol, 1},
+        pdsch_gpu_e2e_params{pdsch_mcs_table::qam64, sch_mcs_index(13), 251, 1, 0, dmrs_profile::double_symbol, 1},
+        pdsch_gpu_e2e_params{pdsch_mcs_table::qam256, sch_mcs_index(26), 273, 1, 1, dmrs_profile::double_symbol, 1},
+        pdsch_gpu_e2e_params{pdsch_mcs_table::qam256, sch_mcs_index(26), 273, 2, 1, dmrs_profile::double_symbol, 1},
         pdsch_gpu_e2e_params{pdsch_mcs_table::qam64, sch_mcs_index(0), 3, 1, 0, dmrs_profile::double_symbol, 2},
         pdsch_gpu_e2e_params{pdsch_mcs_table::qam64, sch_mcs_index(0), 25, 1, 0, dmrs_profile::double_symbol, 2},
         pdsch_gpu_e2e_params{pdsch_mcs_table::qam64, sch_mcs_index(0), 106, 1, 0, dmrs_profile::double_symbol, 2},
