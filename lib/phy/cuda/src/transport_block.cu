@@ -1307,7 +1307,7 @@ extern "C" {
 // - Max TBS: NR_MAX_TBS_BITS (~1.57Mbits, 1024QAM 4 layers 273 PRB); reserve 200KB with CRC and headroom
 // - Max CBs: ceil((A + TB CRC) / (K_cb - CB CRC)) for BG1
 // - Max LDPC input: Kb=22 * Z=384 = 8448 bits/CB = 264 words/CB
-// - Max LDPC output: 66 * Z = 25344 bits/CB = 792 words/CB
+// - Max LDPC output: the encoder writes all 68 BG1 columns, 68 * Z = 26112 bits/CB = 816 words/CB
 // - Max rate matched: G up to 2Mbits plus per-CB word-rounding slack
     static constexpr size_t MAX_TB_WITH_CRC_BYTES = 200000;
     // 16 KiB slices keep each 256-thread block at ~64 bytes/thread while the serial GF-combine
@@ -1321,7 +1321,7 @@ extern "C" {
         (NR_LDPC_MAX_CB_INFO_BITS - NR_CB_CRC24B_BITS);
     static constexpr size_t MAX_OUTPUT_WORDS      = 65536; // ~256KB (2M bits / 32)
     static constexpr size_t MAX_CB_BITS_SIZE      = MAX_PDSCH_CODEBLOCKS * 264 * sizeof(uint32_t);
-    static constexpr size_t MAX_ENCODED_BITS_SIZE = MAX_PDSCH_CODEBLOCKS * 792 * sizeof(uint32_t);
+    static constexpr size_t MAX_ENCODED_BITS_SIZE = MAX_PDSCH_CODEBLOCKS * 816 * sizeof(uint32_t);
     static constexpr size_t MAX_RATE_MATCHED_SIZE =
         (MAX_OUTPUT_WORDS + MAX_PDSCH_CODEBLOCKS) * sizeof(uint32_t);
 

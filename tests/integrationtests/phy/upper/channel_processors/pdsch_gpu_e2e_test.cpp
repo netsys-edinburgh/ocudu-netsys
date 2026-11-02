@@ -2256,6 +2256,8 @@ INSTANTIATE_TEST_SUITE_P(
         pdsch_gpu_e2e_params{pdsch_mcs_table::qam64, sch_mcs_index(13), 251, 1, 0, dmrs_profile::double_symbol, 1},
         pdsch_gpu_e2e_params{pdsch_mcs_table::qam256, sch_mcs_index(26), 273, 1, 1, dmrs_profile::double_symbol, 1},
         pdsch_gpu_e2e_params{pdsch_mcs_table::qam256, sch_mcs_index(26), 273, 2, 1, dmrs_profile::double_symbol, 1},
+        // The largest transport block, 152 code blocks, which fills the encoder's output buffer.
+        pdsch_gpu_e2e_params{pdsch_mcs_table::qam256, sch_mcs_index(27), 273, 4, 0, dmrs_profile::single_symbol, 1},
         pdsch_gpu_e2e_params{pdsch_mcs_table::qam64, sch_mcs_index(0), 3, 1, 0, dmrs_profile::double_symbol, 2},
         pdsch_gpu_e2e_params{pdsch_mcs_table::qam64, sch_mcs_index(0), 25, 1, 0, dmrs_profile::double_symbol, 2},
         pdsch_gpu_e2e_params{pdsch_mcs_table::qam64, sch_mcs_index(0), 106, 1, 0, dmrs_profile::double_symbol, 2},
