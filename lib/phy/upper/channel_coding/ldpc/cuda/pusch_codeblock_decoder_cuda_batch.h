@@ -285,6 +285,8 @@ private:
     unsigned stride = 0;
     /// Number of codeblocks of the last resident decode.
     unsigned nof_cbs = 0;
+    /// Modulation order of the last resident decode, which sets the host soft-bit scale.
+    unsigned modulation_order = 0;
   };
   resident_export_state resident_export_;
 

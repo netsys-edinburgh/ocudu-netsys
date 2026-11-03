@@ -4,6 +4,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "pusch_demodulator_gpu_impl.h"
+#include "../../channel_coding/ldpc/cuda/cuda_host_llr_scale.h"
 #include "../../channel_coding/ldpc/cuda/cuda_rt_utils.h"
 #include "../../phy_acceleration_runtime_options.h"
 #include "cuda/pusch_sch_llr_compactor.h"
@@ -471,13 +472,20 @@ static void build_resident_compaction_re_indices(std::vector<int>&              
                csi_part1_re_indices.size());
 }
 
-/// Precomputed LUT mapping FP16 bit patterns to clamped INT8 (x4.0 scale).
-/// 64KB table, initialized once on first use. Eliminates per-element FP16 bit
+/// Precomputed LUTs mapping FP16 bit patterns to clamped INT8, one for each host LLR scale.
+/// 64KB tables, initialized once on first use. Eliminates per-element FP16 bit
 /// manipulation in the non-GPU-resident D2H LLR conversion path.
-alignas(64) static int8_t fp16_to_int8_lut[65536];
+alignas(64) static int8_t fp16_to_int8_lut_bpsk_qpsk[65536];
+alignas(64) static int8_t fp16_to_int8_lut_qam[65536];
 static bool fp16_lut_initialized = false;
 
-void init_fp16_to_int8_lut()
+/// Gets the FP16 to INT8 LUT for a modulation.
+const int8_t* get_fp16_to_int8_lut(modulation_scheme modulation)
+{
+  return (get_bits_per_symbol(modulation) <= 2) ? fp16_to_int8_lut_bpsk_qpsk : fp16_to_int8_lut_qam;
+}
+
+void init_fp16_to_int8_lut(int8_t* lut, float scale)
 {
   for (unsigned bits = 0; bits < 65536; ++bits) {
     uint32_t sign = (bits >> 15) & 0x1;
@@ -493,12 +501,11 @@ void init_fp16_to_int8_lut()
     } else {
       val = (sign ? -1.0f : 1.0f) * (1.0f + mant / 1024.0f) * std::pow(2.0f, static_cast<float>(exp) - 15.0f);
     }
-    float scaled           = val * 4.0f;
-    int   clamped          = static_cast<int>(std::round(scaled));
-    clamped                = clamp_host_llr(clamped);
-    fp16_to_int8_lut[bits] = static_cast<int8_t>(clamped);
+    float scaled  = val * scale;
+    int   clamped = static_cast<int>(std::round(scaled));
+    clamped       = clamp_host_llr(clamped);
+    lut[bits]     = static_cast<int8_t>(clamped);
   }
-  fp16_lut_initialized = true;
 }
 
 } // namespace
@@ -539,9 +546,12 @@ pusch_demodulator_gpu_impl::pusch_demodulator_gpu_impl(
   ocudu_assert(demapper_fallback, "Invalid pointer to demodulation_mapper object.");
   ocudu_assert(descrambler, "Invalid pointer to pseudo_random_generator object.");
 
-  // Initialize FP16→INT8 conversion LUT once (64KB, thread-safe via static flag).
+  // Initialize the FP16→INT8 conversion LUTs once (64KB each, thread-safe via static flag).
   if (!fp16_lut_initialized) {
-    init_fp16_to_int8_lut();
+    init_fp16_to_int8_lut(fp16_to_int8_lut_bpsk_qpsk,
+                          get_cuda_host_llr_scale(get_bits_per_symbol(modulation_scheme::QPSK)));
+    init_fp16_to_int8_lut(fp16_to_int8_lut_qam, get_cuda_host_llr_scale(get_bits_per_symbol(modulation_scheme::QAM16)));
+    fp16_lut_initialized = true;
   }
 
   // Enable optional path tracing for diagnostics and release qualification.
@@ -1304,6 +1314,7 @@ void pusch_demodulator_gpu_impl::demodulate(pusch_codeword_buffer&              
   gpu_csi_part1_decoded_             = false;
   gpu_uci_demux_pending_             = false;
   gpu_uci_device_decode_requested_   = false;
+  host_llr_lut_                      = get_fp16_to_int8_lut(config.modulation);
   host_codeword_written_             = false;
   last_resident_llrs_                = nullptr;
   h_harq_ack_payload_size_           = 0;
@@ -1781,8 +1792,8 @@ void pusch_demodulator_gpu_impl::process_gpu_batch(pusch_codeword_buffer&      c
   }
 
   // Convert FP16 LLRs to INT8 and write to codeword buffer.
-  constexpr float FP16_TO_INT8_SCALE = 4.0f;
-  size_t          offset             = 0;
+  const float FP16_TO_INT8_SCALE = get_cuda_host_llr_scale(get_bits_per_symbol(config.modulation));
+  size_t      offset             = 0;
   while (offset < num_llrs) {
     size_t remain = std::min(num_llrs - offset, size_t(pusch_constants::MAX_NOF_BITS_PER_OFDM_SYMBOL));
     span<log_likelihood_ratio> block      = codeword_buffer.get_next_block_view(remain);
@@ -3033,7 +3044,7 @@ void pusch_demodulator_gpu_impl::process_gpu_e2e(pusch_codeword_buffer&         
     }
 
     for (size_t i = 0; i < block_size; ++i) {
-      block[i] = log_likelihood_ratio(fp16_to_int8_lut[h_llrs_half[offset + i]]);
+      block[i] = log_likelihood_ratio(host_llr_lut_[h_llrs_half[offset + i]]);
     }
 
     static_bit_buffer<pusch_constants::MAX_NOF_BITS_PER_OFDM_SYMBOL> dummy_seq(block_size);
@@ -3259,7 +3270,7 @@ void pusch_demodulator_gpu_impl::finalize_resident_uci()
     gpu_harq_ack_decoded_ = true;
   } else {
     for (size_t i = 0; i < harq_llrs_half_size; ++i) {
-      h_harq_ack_llrs_[i] = log_likelihood_ratio(fp16_to_int8_lut[harq_llrs_half[i]]);
+      h_harq_ack_llrs_[i] = log_likelihood_ratio(host_llr_lut_[harq_llrs_half[i]]);
     }
     need_host_uci_llrs = need_host_uci_llrs || !h_harq_ack_llrs_.empty();
   }
@@ -3276,7 +3287,7 @@ void pusch_demodulator_gpu_impl::finalize_resident_uci()
     gpu_csi_part1_decoded_ = true;
   } else {
     for (size_t i = 0; i < csi_llrs_half_size; ++i) {
-      h_csi_part1_llrs_[i] = log_likelihood_ratio(fp16_to_int8_lut[csi_llrs_half[i]]);
+      h_csi_part1_llrs_[i] = log_likelihood_ratio(host_llr_lut_[csi_llrs_half[i]]);
     }
     need_host_uci_llrs = need_host_uci_llrs || !h_csi_part1_llrs_.empty();
   }

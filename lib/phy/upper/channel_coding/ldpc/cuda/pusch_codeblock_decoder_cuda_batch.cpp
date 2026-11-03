@@ -6,6 +6,7 @@
 #include "pusch_codeblock_decoder_cuda_batch.h"
 #include "../ldpc_graph_impl.h"
 #include "../ldpc_luts_impl.h"
+#include "cuda_host_llr_scale.h"
 #include "cuda_rt_utils.h"
 #include "pusch_codeblock_information_cuda.h"
 #include "ocudu/ocudulog/ocudulog.h"
@@ -820,9 +821,10 @@ void pusch_codeblock_decoder_cuda_batch::rate_dematch_only(span<const log_likeli
 namespace {
 
 /// Converts a device fp16 LLR to the host int8 LLR scale. Must stay bit-for-bit consistent with the demodulator's D2H
-/// conversion (pusch_demodulator_gpu_impl fp16_to_int8_lut: value x 4, rounded, clipped to +/-LLR_MAX), otherwise a
-/// retransmission demodulated on the host would be combined with first-transmission soft bits on a different scale.
-inline log_likelihood_ratio fp16_llr_to_host(uint16_t bits)
+/// conversion (pusch_demodulator_gpu_impl fp16_to_int8_lut: value x get_cuda_host_llr_scale(), rounded, clipped to
+/// +/-LLR_MAX), otherwise a retransmission demodulated on the host would be combined with first-transmission soft bits
+/// on a different scale.
+inline log_likelihood_ratio fp16_llr_to_host(uint16_t bits, float scale)
 {
   constexpr int  host_max = log_likelihood_ratio::max().to_int();
   const uint32_t sign     = (bits >> 15) & 0x1;
@@ -837,7 +839,7 @@ inline log_likelihood_ratio fp16_llr_to_host(uint16_t bits)
     val = (sign ? -1.0f : 1.0f) * (1.0f + static_cast<float>(mant) / 1024.0f) *
           std::ldexp(1.0f, static_cast<int>(exp) - 15);
   }
-  int scaled = static_cast<int>(std::lround(val * 4.0f));
+  int scaled = static_cast<int>(std::lround(val * scale));
   scaled     = std::max(-host_max, std::min(host_max, scaled));
   return log_likelihood_ratio(static_cast<int8_t>(scaled));
 }
@@ -881,12 +883,13 @@ bool pusch_codeblock_decoder_cuda_batch::export_resident_softbits(span<span<log_
     return false;
   }
   const unsigned available = state.stride - puncture_offset;
+  const float    scale     = get_cuda_host_llr_scale(state.modulation_order);
   for (unsigned cb = 0; cb != state.nof_cbs; ++cb) {
     span<log_likelihood_ratio> rm_buffer = rm_buffers[cb];
     const uint16_t*            src   = h_export_half_.data() + static_cast<size_t>(cb) * state.stride + puncture_offset;
     const unsigned             count = std::min<unsigned>(rm_buffer.size(), available);
     for (unsigned i = 0; i != count; ++i) {
-      rm_buffer[i] = fp16_llr_to_host(src[i]);
+      rm_buffer[i] = fp16_llr_to_host(src[i], scale);
     }
     // Positions the device never produced (limited buffer) start clean.
     if (count < rm_buffer.size()) {
@@ -1778,6 +1781,7 @@ pusch_codeblock_decoder_cuda_batch::tb_decode_result pusch_codeblock_decoder_cud
   resident_export_.lifting_size = lifting_size;
   resident_export_.stride       = llr_stride_;
   resident_export_.nof_cbs      = nof_cbs;
+  resident_export_.modulation_order = get_mod_order(tb_common.mod);
 
   // Get actual average iterations from the decoder.
   auto  avg_iters_start = timing_enabled_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};

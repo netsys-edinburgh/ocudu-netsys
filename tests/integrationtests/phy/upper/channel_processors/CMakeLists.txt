@@ -46,6 +46,10 @@ target_link_libraries(pxsch_chain_test
 )
 gtest_discover_tests(pxsch_chain_test)
 
+add_executable(pusch_gpu_softbit_scale_test pusch_gpu_softbit_scale_test.cpp)
+target_link_libraries(pusch_gpu_softbit_scale_test ocudu_pxsch_bler_test_helpers gtest gtest_main)
+add_test(pusch_gpu_softbit_scale_test pusch_gpu_softbit_scale_test)
+
 add_executable(pusch_gpu_cpu_comparison_test pusch_gpu_cpu_comparison_test.cpp)
 target_link_libraries(pusch_gpu_cpu_comparison_test ocudu_pxsch_bler_test_helpers)
 add_test(pusch_gpu_cpu_comparison_test pusch_gpu_cpu_comparison_test -R 10)
@@ -218,6 +222,7 @@ set_tests_properties(pusch_e2e_sensitivity_sweep PROPERTIES TIMEOUT 600)
 if (CUDA_ACCEL_FOUND)
     set_tests_properties(
             pusch_gpu_cpu_comparison_test
+            pusch_gpu_softbit_scale_test
             pusch_gpu_cpu_cfo_interpolation_test
             pusch_gpu_cpu_sync_sinr_test
             pusch_gpu_cpu_estimator_sinr_test

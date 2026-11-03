@@ -374,6 +374,8 @@ private:
   bool gpu_harq_ack_decoded_  = false;
   bool gpu_csi_part1_decoded_ = false;
   bool gpu_uci_demux_pending_ = false;
+  /// FP16 to INT8 soft-bit table for the modulation of the current transmission.
+  const int8_t* host_llr_lut_ = nullptr;
   /// True when the last slot's SINR readback copies were routed to d2h_stream_
   /// (OCUDU_PUSCH_SINR_SIDE_STREAM); report_deferred_sinr must sync d2h_complete_.
   bool last_sinr_on_side_stream_        = false;

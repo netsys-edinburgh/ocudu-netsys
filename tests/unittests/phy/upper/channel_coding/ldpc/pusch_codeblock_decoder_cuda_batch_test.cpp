@@ -11,6 +11,7 @@
 /// decode must be able to seed that buffer. These tests check that export_resident_softbits() reproduces what the host
 /// rate dematcher would have written (layout, scale, saturation) so that the subsequent combination is exact.
 
+#include "cuda_host_llr_scale.h"
 #include "pusch_codeblock_decoder_cuda_batch.h"
 #include "ocudu/adt/bit_buffer.h"
 #include "ocudu/phy/upper/channel_coding/channel_coding_factories.h"
@@ -64,12 +65,13 @@ protected:
         dematcher_factory->create(), std::move(crcs), 0, max_prb, 1, std::move(quarantine));
   }
 
-  /// Uploads host int8 LLRs as device fp16 LLRs on the demodulator scale (host = 4 x device).
-  static void* upload_as_half(const std::vector<log_likelihood_ratio>& llrs)
+  /// Uploads host int8 LLRs as device fp16 LLRs on the demodulator scale (host = scale x device).
+  static void* upload_as_half(const std::vector<log_likelihood_ratio>& llrs, modulation_scheme mod)
   {
+    const float         scale = get_cuda_host_llr_scale(get_bits_per_symbol(mod));
     std::vector<__half> half(llrs.size());
     for (size_t i = 0; i != llrs.size(); ++i) {
-      half[i] = __float2half(static_cast<float>(llrs[i].to_int()) / 4.0F);
+      half[i] = __float2half(static_cast<float>(llrs[i].to_int()) / scale);
     }
     void* device = nullptr;
     if (cudaMalloc(&device, half.size() * sizeof(__half)) != cudaSuccess) {
@@ -85,7 +87,8 @@ protected:
 
 std::unique_ptr<pusch_codeblock_decoder_cuda_batch>
       PuschCodeblockDecoderCudaBatchExportTest_make_decoder(std::shared_ptr<cuda_gpu_wait_quarantine> quarantine);
-void* PuschCodeblockDecoderCudaBatchExportTest_upload_as_half(const std::vector<log_likelihood_ratio>& llrs);
+void* PuschCodeblockDecoderCudaBatchExportTest_upload_as_half(const std::vector<log_likelihood_ratio>& llrs,
+                                                              modulation_scheme                        mod);
 
 /// Gives the timeout test access to the fixture helpers.
 class PuschCodeblockDecoderCudaBatchHelpers : public PuschCodeblockDecoderCudaBatchExportTest
@@ -101,9 +104,10 @@ PuschCodeblockDecoderCudaBatchExportTest_make_decoder(std::shared_ptr<cuda_gpu_w
   return PuschCodeblockDecoderCudaBatchHelpers::make_decoder(std::move(quarantine));
 }
 
-void* PuschCodeblockDecoderCudaBatchExportTest_upload_as_half(const std::vector<log_likelihood_ratio>& llrs)
+void* PuschCodeblockDecoderCudaBatchExportTest_upload_as_half(const std::vector<log_likelihood_ratio>& llrs,
+                                                              modulation_scheme                        mod)
 {
-  return PuschCodeblockDecoderCudaBatchHelpers::upload_as_half(llrs);
+  return PuschCodeblockDecoderCudaBatchHelpers::upload_as_half(llrs, mod);
 }
 
 } // namespace
@@ -157,7 +161,7 @@ TEST_P(PuschCodeblockDecoderCudaBatchExportTest, ExportMatchesHostDematcherAndCo
   host_dematcher->rate_dematch(host_buffer, first, true, cfg);
 
   // Device: resident decode of the first transmission, then export into a buffer pre-filled with garbage.
-  void* d_llrs = upload_as_half(first);
+  void* d_llrs = upload_as_half(first, params.mod);
   ASSERT_NE(d_llrs, nullptr);
   std::vector<uint8_t>                                  tb(tbs_bits / 8);
   std::vector<codeblock_metadata::cb_specific_metadata> cb_specific = {cfg.cb_specific};
@@ -314,7 +318,7 @@ TEST_P(PuschCodeblockDecoderCudaBatchExportTest, AllErasureCodeblockIsNotDecoded
   std::vector<log_likelihood_ratio> erasures(E, log_likelihood_ratio(0));
 
   // Resident decode of a first transmission.
-  void* d_llrs = upload_as_half(erasures);
+  void* d_llrs = upload_as_half(erasures, params.mod);
   ASSERT_NE(d_llrs, nullptr);
   std::vector<uint8_t>                                  tb(tbs_bits / 8);
   std::vector<codeblock_metadata::cb_specific_metadata> cb_specific = {cfg.cb_specific};
@@ -436,7 +440,7 @@ TEST(PuschCodeblockDecoderCudaBatchTimeoutTest, GpuWaitTimeoutFailsTheTransportB
   for (log_likelihood_ratio& llr : llrs) {
     llr = log_likelihood_ratio(static_cast<int8_t>(dist(rng)));
   }
-  void* d_llrs = PuschCodeblockDecoderCudaBatchExportTest_upload_as_half(llrs);
+  void* d_llrs = PuschCodeblockDecoderCudaBatchExportTest_upload_as_half(llrs, cfg.tb_common.mod);
   ASSERT_NE(d_llrs, nullptr);
   std::vector<uint8_t>                                  tb((K - tb_crc_bits) / 8);
   std::vector<codeblock_metadata::cb_specific_metadata> cb_specific = {cfg.cb_specific};
