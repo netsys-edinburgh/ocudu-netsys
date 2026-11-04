@@ -780,6 +780,22 @@ static void fill_snapshot(snapshot_t *s, const struct aurora_metrics *m)
     }
 }
 
+/* Seqlock-consistent read: retries fill_snapshot() until the writer did not run concurrently with it (see
+ * the seqlock comment on `struct aurora_metrics::seq` in aurora_shm.h). Without this, a reader sampling
+ * mid-write could silently mix fields from two consecutive intervals -- fill_snapshot() alone can't detect
+ * that, it just copies whatever is there right now. */
+static void fill_snapshot_consistent(snapshot_t *s, const struct aurora_metrics *m)
+{
+    for (;;) {
+        uint32_t seq = aurora_seq_read_begin(m);
+        fill_snapshot(s, m);
+        if (!aurora_seq_read_retry(m, seq))
+            return;
+        /* Writer ran while we copied -- discard and retry. Its critical section is a handful of
+         * microseconds (see aurora_publish.cpp), so this does not spin for long. */
+    }
+}
+
 /* =========================================================
  * CSV header and row writers
  * ========================================================= */
@@ -1848,7 +1864,7 @@ int main(int argc, char **argv)
                rn, aurora_cfg.shm_key, metrics->timestamp_us);
 
         snapshot_t s;
-        fill_snapshot(&s, metrics);
+        fill_snapshot_consistent(&s, metrics);
 
         printf("\n--- Traffic flows (bytes | pkts | mean-pkt-bytes) ---\n");
 #define PRINT_FLOW(name, field) \
@@ -2355,7 +2371,7 @@ int main(int argc, char **argv)
                     (unsigned long)warmup_drop, (unsigned long)last_ts);
         }
 
-        fill_snapshot(&batch[batch_count], metrics);
+        fill_snapshot_consistent(&batch[batch_count], metrics);
         total_rows++;
 
         /* InfluxDB: every sample at once (Telegraf batches the writes). */

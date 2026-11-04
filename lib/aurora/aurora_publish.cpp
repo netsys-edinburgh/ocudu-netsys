@@ -673,12 +673,18 @@ void detail::init_shm_content(aurora_metrics& out, const config& cfg)
   out.timestamp_us                          = aurora_get_current_timestamp_us();
   out.ext.version                           = AURORA_EXT_VERSION;
   out.ext.size                              = sizeof(aurora_metrics_ext);
+  out.seq                                   = 0; /* even: stable */
 }
 
 static_assert(AURORA_ANOMALY_LABEL_LEN == ANOMALY_LABEL_LEN, "anomaly label length differs between SHM and module");
 
 void detail::publish_interval(aurora_metrics& m, global_state& st)
 {
+  // Seqlock: readers attached to this segment must not trust a snapshot sampled while we're writing it
+  // (see the seqlock comment on `struct aurora_metrics::seq` in aurora_shm.h). Everything below, through
+  // the final m.timestamp_us write, is this interval's write-in-progress window.
+  aurora_seq_begin_write(&m);
+
   const uint64_t now_ns = monotonic_ns();
 
   // Anomaly label of this interval, as last set by the anomaly-injector sidecar ("normal" until then).
@@ -708,4 +714,6 @@ void detail::publish_interval(aurora_metrics& m, global_state& st)
     aurora_thread_reset_interval_stats(&st.thread_buf);
   }
   m.timestamp_us = aurora_get_current_timestamp_us();
+
+  aurora_seq_end_write(&m); // stable again -- readers polling timestamp_us may now sample this interval
 }

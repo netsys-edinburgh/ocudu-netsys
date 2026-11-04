@@ -635,10 +635,60 @@ struct aurora_metrics {
     uint32_t f1u_dds_failures;       /* DL Data Delivery Status that could not be handled */
     uint32_t _f1u_pad0;
 
+    /* -------------------------------------------------------
+     * Phase 6: seqlock for torn-read-free reads.
+     *
+     * Single writer (the publishing process), many readers. Odd = a write is in progress (readers must not
+     * trust the snapshot); even = stable. The writer increments `seq` to odd before touching any field of
+     * this interval and back to even after `timestamp_us` has been written (see
+     * detail::publish_interval()/aurora_seq_begin_write()/aurora_seq_end_write()). Readers call
+     * aurora_seq_read_begin() before copying any field out of a live segment and aurora_seq_read_retry()
+     * after; a torn/concurrent read is detected (not prevented) and must be retried.
+     *
+     * This replaces the older "poll until timestamp_us changes, accept whatever you read" convention (see
+     * the comment at the top of aurora_publish.cpp): that convention could still hand a reader a mix of two
+     * consecutive intervals if it sampled mid-write. The seqlock catches that case instead of silently
+     * returning torn data.
+     * ------------------------------------------------------- */
+    uint32_t seq;
+
     /* OCUDU extension, see struct aurora_metrics_ext. Must stay the last member. */
     struct aurora_metrics_ext ext;
 };
 
+/* ---- Seqlock helpers (single writer / many readers). GCC/Clang builtins so the same inline code works
+ * unchanged from both the C reader/collectors and the C++ core -- no <stdatomic.h>/<atomic> mismatch. ---- */
+
+/* Writer: call before writing any field of this interval's snapshot. */
+static inline void aurora_seq_begin_write(struct aurora_metrics *m)
+{
+    __atomic_add_fetch(&m->seq, 1, __ATOMIC_RELEASE); /* now odd: write in progress */
+}
+
+/* Writer: call after every field, including timestamp_us, has been written. */
+static inline void aurora_seq_end_write(struct aurora_metrics *m)
+{
+    __atomic_add_fetch(&m->seq, 1, __ATOMIC_RELEASE); /* now even: stable again */
+}
+
+/* Reader: call before copying anything out of a live (attached) segment. Spins briefly while a write is
+ * in progress (odd) -- the writer's critical section is a handful of microseconds. Returns the sequence
+ * number to pass to aurora_seq_read_retry() once the copy is done. */
+static inline uint32_t aurora_seq_read_begin(const struct aurora_metrics *m)
+{
+    uint32_t s;
+    do {
+        s = __atomic_load_n(&m->seq, __ATOMIC_ACQUIRE);
+    } while (s & 1u);
+    return s;
+}
+
+/* Reader: call after copying. Returns true if the copy must be discarded and retried (the writer ran
+ * concurrently, so some fields may be a mix of two consecutive intervals). */
+static inline bool aurora_seq_read_retry(const struct aurora_metrics *m, uint32_t start)
+{
+    return __atomic_load_n(&m->seq, __ATOMIC_ACQUIRE) != start;
+}
 
 void aurora_hist_record(aurora_hist_t *hist, uint32_t val);
 void aurora_hist_record_shift(aurora_hist_t *hist, uint32_t val, int shift);
