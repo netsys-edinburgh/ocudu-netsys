@@ -73,6 +73,8 @@ struct base_harq_process : public intrusive_double_linked_list_element<>,
   harq_mode_t   mode   = harq_mode_t::normal;
   /// Slot at which the PxSCH was transmitted.
   slot_point slot_tx;
+  /// [netsys] Slot of the first transmission (newTx) of the current TB. Unlike slot_tx, it is not updated on reTxs.
+  slot_point slot_first_tx;
   /// \brief Slot of the last occasion of the transmission starting at \c slot_tx. Equal to \c slot_tx, unless Rel-16
   /// PDSCH repetitions were used, in which case it is \c slot_tx + the number of repetitions - 1.
   slot_point last_occasion_slot;

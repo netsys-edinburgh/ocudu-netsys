@@ -8,6 +8,7 @@
 #include "ocudu/scheduler/result/pusch_info.h"
 #include "ocudu/support/format/fmt_to_c_str.h"
 #include <algorithm>
+#include <chrono>
 
 using namespace ocudu;
 using namespace harq_utils;
@@ -156,6 +157,61 @@ static constexpr unsigned NTN_ACK_WAIT_TIMEOUT = 1;
 /// Upper bound for the number of slots a HARQ can spend in pending reTx state, before it is considered zombie/stale.
 static constexpr unsigned MAX_RETX_TIMEOUT = NOF_SFNS / 2;
 
+// [netsys] Per-TB HARQ statistics: number of reTxs and time from the first transmission to the final ACK/CRC.
+namespace {
+
+/// [netsys] Creates the logger used for the HARQ statistics and enables its info level.
+ocudulog::basic_logger& create_harq_stats_logger()
+{
+  ocudulog::basic_logger& logger = ocudulog::fetch_basic_logger("HARQSTAT");
+  logger.set_level(ocudulog::basic_levels::info);
+  return logger;
+}
+
+/// [netsys] Returns the HARQ statistics logger. It is created only once, on the first call.
+ocudulog::basic_logger& harq_stats_logger()
+{
+  static ocudulog::basic_logger& logger = create_harq_stats_logger();
+  return logger;
+}
+
+/// [netsys] Converts a number of slots to a duration, using the numerology of \c ref.
+std::chrono::microseconds slots_to_duration(slot_difference nof_slots, slot_point ref)
+{
+  // A subframe lasts 1 ms and contains 2^numerology slots.
+  return std::chrono::microseconds{nof_slots * 1000 / static_cast<int>(ref.nof_slots_per_subframe())};
+}
+
+/// [netsys] Logs the final outcome of the TB held by HARQ process \c h.
+template <typename HarqType>
+void report_tb_outcome(const HarqType& h, bool is_dl, const char* result)
+{
+  ocudulog::basic_logger& logger = harq_stats_logger();
+  if (not logger.info.enabled() or not h.slot_first_tx.valid()) {
+    return;
+  }
+
+  // Time from the first transmission to the slot at which the last ACK/CRC was received over the air.
+  const slot_difference     nof_slots = h.slot_ack - h.slot_first_tx;
+  std::chrono::microseconds t_ack     = slots_to_duration(nof_slots, h.slot_first_tx);
+
+  logger.info("HARQ_TB dir={} ue={} rnti={} h_id={} result={} nof_retxs={} max_retxs={} tbs={} first_tx={} "
+              "ack_slot={} t_ack_us={}",
+              is_dl ? "DL" : "UL",
+              h.ue_idx,
+              h.rnti,
+              h.h_id,
+              result,
+              static_cast<unsigned>(h.nof_retxs),
+              static_cast<unsigned>(h.max_nof_harq_retxs),
+              h.prev_tx_params.tbs,
+              h.slot_first_tx,
+              h.slot_ack,
+              t_ack.count());
+}
+
+} // namespace
+
 template <bool IsDl>
 cell_harq_repository<IsDl>::cell_harq_repository(unsigned                max_nof_ue_indexes,
                                                  unsigned                max_nof_ue_contexts,
@@ -242,6 +298,7 @@ void cell_harq_repository<IsDl>::handle_harq_ack_timeout(harq_type& h, slot_poin
 
   if (h.status == harq_state_t::pending_retx) {
     // This HARQ is being starved by the scheduler.
+    report_tb_outcome(h, IsDl, "retx_timeout"); // [netsys]
     logger.info("rnti={} h_id={}: Discarding {} HARQ. Cause: The scheduler took too long to reschedule this HARQ "
                 "process ({} slots elapsed since last NOK).",
                 h.rnti,
@@ -253,6 +310,7 @@ void cell_harq_repository<IsDl>::handle_harq_ack_timeout(harq_type& h, slot_poin
     timeout_notifier.on_retx_timeout(h.ue_idx, IsDl);
   } else {
     // The UCI outcome was never propagated to the HARQ.
+    report_tb_outcome(h, IsDl, "feedback_timeout"); // [netsys]
     logger.warning("rnti={} h_id={}: Discarding {} HARQ. Cause: Timeout was reached ({} slots) to receive the "
                    "respective HARQ-ACK indication from lower layers (HARQ-ACK slot={})",
                    h.rnti,
@@ -346,6 +404,7 @@ cell_harq_repository<IsDl>::alloc_harq(du_ue_index_t                       ue_id
   // Set allocated HARQ common params.
   h.status             = harq_state_t::waiting_ack;
   h.slot_tx            = sl_tx;
+  h.slot_first_tx      = sl_tx; // [netsys] Kept unchanged across reTxs.
   h.last_occasion_slot = sl_tx + (nof_repetitions - 1U);
   h.slot_ack           = sl_ack;
   h.slot_ack_end       = sl_ack_end;
@@ -443,6 +502,13 @@ void cell_harq_repository<IsDl>::handle_ack(harq_type& h, bool ack)
     // In NTN mode B, ACK info does not affect the timeout/retx containers.
     alloc_hist->handle_ack(h);
     return;
+  }
+
+  // [netsys] Report TBs that were ACKed after at least one reTx, and TBs that are dropped after the last reTx.
+  if (ack and h.nof_retxs > 0) {
+    report_tb_outcome(h, IsDl, "ack");
+  } else if (not ack and h.nof_retxs >= h.max_nof_harq_retxs) {
+    report_tb_outcome(h, IsDl, h.retxs_cancelled ? "cancelled" : "max_retx");
   }
 
   if (ack or h.nof_retxs >= h.max_nof_harq_retxs) {
@@ -597,6 +663,7 @@ void cell_harq_repository<IsDl>::cancel_retxs(harq_type& h)
   }
   if (h.status == harq_state_t::pending_retx) {
     // If a retx is pending, do not allow it to take place.
+    report_tb_outcome(h, IsDl, "cancelled"); // [netsys]
     dealloc_harq(h);
     return;
   }
@@ -648,6 +715,10 @@ void harq_utils::base_harq_process_handle<IsDl>::cancel_retxs()
 template <bool IsDl>
 void harq_utils::base_harq_process_handle<IsDl>::reset()
 {
+  // [netsys] A TB that already had reTxs is being dropped (e.g. its reTx grant could not be allocated).
+  if (impl->status != harq_state_t::empty and impl->nof_retxs > 0) {
+    report_tb_outcome(*impl, IsDl, "reset");
+  }
   harq_repo->dealloc_harq(*impl);
 }
 
