@@ -123,6 +123,13 @@ void on_ul_dtx(unsigned ue_index) noexcept;
 void on_harq_max_retx_failure(unsigned ue_index, bool is_dl) noexcept;
 void on_pucch_snr(unsigned ue_index, float snr_db) noexcept;
 
+/// UL Timing Advance command for a UE, in units of Tc. Three independent UL references, each
+/// surfaced where the scheduler already consumes a time_advance_offset: PUSCH/CRC (general TA),
+/// SRS, and PUCCH. Aggregated per interval into the top-level {ta,srs_ta,pucch_ta}_{min,max,avg}.
+void on_ta_update(unsigned ue_index, int ta_tc) noexcept;
+void on_srs_ta_update(unsigned ue_index, int ta_tc) noexcept;
+void on_pucch_ta_update(unsigned ue_index, int ta_tc) noexcept;
+
 /// Full content of one decoded UE CSI report (OCUDU csi_report_data: CRI/RI/LI/PMI/CQI and L1-RSRP quantities).
 struct csi_info {
   static constexpr unsigned max_rs        = 4;  ///< csi_max_nof_reported_rs.
@@ -323,6 +330,8 @@ enum class rlc_gauge : unsigned {
   txbuf_occ_bytes,
   rxbuf_occ_bytes,
   retransmit_list_depth,
+  tx_sdu_queue_depth, ///< DL: RLC TX SDU-queue depth in SDUs (PDCP->RLC submit queue equivalent).
+  rx_sdu_queue_depth, ///< UL: RLC RX reassembly depth in SDUs (RLC->PDCP delivery backlog equivalent).
   nof_gauges
 };
 

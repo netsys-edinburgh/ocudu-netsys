@@ -41,8 +41,10 @@ public:
   }
   bool valid() const { return rb_index < aurora::max_rbs_per_ue and aurora::is_active(); }
 
-  /// TX gauges sampled whenever the buffer state is computed: occupancy, head-of-line delay, ReTx queue depth.
-  void report_tx_buffer(const rlc_buffer_state& bs, size_t retx_depth) const
+  /// TX gauges sampled whenever the buffer state is computed: occupancy, head-of-line delay, ReTx queue depth,
+  /// and the SDU-queue depth (SDUs submitted by PDCP awaiting MAC pull -- the srsRAN-native PDCP->RLC submit
+  /// queue; 0 for TM, which does not queue).
+  void report_tx_buffer(const rlc_buffer_state& bs, size_t retx_depth, uint32_t sdu_queue_depth = 0) const
   {
     if (not valid()) {
       return;
@@ -55,6 +57,7 @@ public:
     }
     set(aurora::rlc_gauge::txsdu_wt_us, hol_us);
     set(aurora::rlc_gauge::retransmit_list_depth, static_cast<uint32_t>(retx_depth));
+    set(aurora::rlc_gauge::tx_sdu_queue_depth, sdu_queue_depth);
   }
 
   /// TX window full: counts one stall event per stall episode (edge triggered), not one per MAC pull.

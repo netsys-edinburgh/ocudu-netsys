@@ -11,6 +11,7 @@
 
 #include "aurora_state.h"
 #include "anomaly/anomaly_module.h"
+#include <cstdint>
 #include <cstring>
 #include <mutex>
 #include <algorithm>
@@ -171,6 +172,14 @@ struct ue_totals {
   float    sinr_min = 1e38F, sinr_max = -1e38F, sinr_sum = 0;
   uint32_t csi_min = 255, csi_max = 0;
   float    csi_sum = 0;
+  uint32_t ri_min = 255, ri_max = 0;
+  float    ri_sum = 0;
+  int32_t  ta_min = INT32_MAX, ta_max = INT32_MIN;
+  float    ta_sum = 0;
+  int32_t  srs_ta_min = INT32_MAX, srs_ta_max = INT32_MIN;
+  float    srs_ta_sum = 0;
+  int32_t  pucch_ta_min = INT32_MAX, pucch_ta_max = INT32_MIN;
+  float    pucch_ta_sum = 0;
   uint32_t bsr_min = u32_max, bsr_max = 0;
   float    bsr_sum   = 0;
   double   rsrp_sum  = 0;
@@ -309,6 +318,19 @@ void publish_mac_ue(aurora_metrics& m, mac_ue_acc& u, unsigned slot, ue_totals& 
   t.csi_min = std::min<uint32_t>(t.csi_min, o.wb_cqi);
   t.csi_max = std::max<uint32_t>(t.csi_max, o.wb_cqi);
   t.csi_sum += o.wb_cqi;
+  t.ri_min = std::min<uint32_t>(t.ri_min, o.ri);
+  t.ri_max = std::max<uint32_t>(t.ri_max, o.ri);
+  t.ri_sum += o.ri;
+  int32_t ta_v = get(u.ta_update), srs_ta_v = get(u.srs_ta), pucch_ta_v = get(u.pucch_ta);
+  t.ta_min = std::min(t.ta_min, ta_v);
+  t.ta_max = std::max(t.ta_max, ta_v);
+  t.ta_sum += float(ta_v);
+  t.srs_ta_min = std::min(t.srs_ta_min, srs_ta_v);
+  t.srs_ta_max = std::max(t.srs_ta_max, srs_ta_v);
+  t.srs_ta_sum += float(srs_ta_v);
+  t.pucch_ta_min = std::min(t.pucch_ta_min, pucch_ta_v);
+  t.pucch_ta_max = std::max(t.pucch_ta_max, pucch_ta_v);
+  t.pucch_ta_sum += float(pucch_ta_v);
   t.bsr_min = std::min(t.bsr_min, o.bsr);
   t.bsr_max = std::max(t.bsr_max, o.bsr);
   t.bsr_sum += float(o.bsr);
@@ -361,6 +383,8 @@ void publish_rlc(aurora_metrics& m, global_state& st)
       o.txbuf_occ_bytes        = g(rlc_gauge::txbuf_occ_bytes);
       o.rxbuf_occ_bytes        = g(rlc_gauge::rxbuf_occ_bytes);
       o.retransmit_list_depth  = uint16_t(g(rlc_gauge::retransmit_list_depth));
+      o.pdcp_rlc_q_depth       = g(rlc_gauge::tx_sdu_queue_depth);
+      o.rlc_pdcp_q_depth       = g(rlc_gauge::rx_sdu_queue_depth);
     }
   }
 }
@@ -470,6 +494,18 @@ void publish_aggregates(aurora_metrics& m,
   m.csi_min         = n != 0 ? uint8_t(t.csi_min) : 0;
   m.csi_max         = n != 0 ? uint8_t(t.csi_max) : 0;
   m.csi_avg         = n != 0 ? t.csi_sum / n : 0;
+  m.ri_min          = n != 0 ? uint8_t(t.ri_min) : 0;
+  m.ri_max          = n != 0 ? uint8_t(t.ri_max) : 0;
+  m.ri_avg          = n != 0 ? t.ri_sum / n : 0;
+  m.ta_min          = n != 0 ? int16_t(t.ta_min) : 0;
+  m.ta_max          = n != 0 ? int16_t(t.ta_max) : 0;
+  m.ta_avg          = n != 0 ? t.ta_sum / n : 0;
+  m.srs_ta_min      = n != 0 ? int16_t(t.srs_ta_min) : 0;
+  m.srs_ta_max      = n != 0 ? int16_t(t.srs_ta_max) : 0;
+  m.srs_ta_avg      = n != 0 ? t.srs_ta_sum / n : 0;
+  m.pucch_ta_min    = n != 0 ? int16_t(t.pucch_ta_min) : 0;
+  m.pucch_ta_max    = n != 0 ? int16_t(t.pucch_ta_max) : 0;
+  m.pucch_ta_avg    = n != 0 ? t.pucch_ta_sum / n : 0;
   m.bsr_min         = n != 0 ? t.bsr_min : 0;
   m.bsr_max         = n != 0 ? t.bsr_max : 0;
   m.bsr_avg         = n != 0 ? t.bsr_sum / n : 0;

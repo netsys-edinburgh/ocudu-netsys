@@ -73,7 +73,7 @@ void reset_mac_ue(mac_ue_acc& u)
   for (auto& bo : u.dl_bo) {
     set(bo, 0U);
   }
-  for (auto* a : {&u.ssb_rsrp, &u.csirs_rsrp, &u.phr}) {
+  for (auto* a : {&u.ssb_rsrp, &u.csirs_rsrp, &u.phr, &u.ta_update, &u.srs_ta, &u.pucch_ta}) {
     set(*a, int32_t{0});
   }
   for (auto* a : {&u.pusch_snr, &u.pucch_snr, &u.rsrp_dbm}) {
@@ -301,6 +301,27 @@ void aurora::on_pucch_snr(unsigned ue_index, float snr_db) noexcept
 {
   if (mac_ue_acc* u = mac_ue(ue_index); u != nullptr && std::isfinite(snr_db)) {
     set(u->pucch_snr, snr_db);
+  }
+}
+
+void aurora::on_ta_update(unsigned ue_index, int ta_tc) noexcept
+{
+  if (mac_ue_acc* u = mac_ue(ue_index)) {
+    set(u->ta_update, int32_t(ta_tc));
+  }
+}
+
+void aurora::on_srs_ta_update(unsigned ue_index, int ta_tc) noexcept
+{
+  if (mac_ue_acc* u = mac_ue(ue_index)) {
+    set(u->srs_ta, int32_t(ta_tc));
+  }
+}
+
+void aurora::on_pucch_ta_update(unsigned ue_index, int ta_tc) noexcept
+{
+  if (mac_ue_acc* u = mac_ue(ue_index)) {
+    set(u->pucch_ta, int32_t(ta_tc));
   }
 }
 

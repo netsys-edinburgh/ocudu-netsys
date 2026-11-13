@@ -530,6 +530,7 @@ void rlc_rx_um_entity::aurora_report_rx_window()
   }
   // SDUs under reassembly live in [RX_Next_Reassembly, RX_Next_Highest).
   uint64_t                                             bytes = 0;
+  uint32_t                                             pending_sdus = 0;
   std::optional<std::chrono::steady_clock::time_point> oldest;
   uint32_t                                             visited = 0;
   for (uint32_t sn = st.rx_next_reassembly; sn != st.rx_next_highest and visited != rlc_aurora_tap::max_rx_scan;
@@ -537,6 +538,7 @@ void rlc_rx_um_entity::aurora_report_rx_window()
     if (not rx_window.has_sn(sn)) {
       continue;
     }
+    ++pending_sdus;
     const rlc_rx_um_sdu_info& info = rx_window[sn];
     for (const auto& seg : info.segments) {
       bytes += seg.payload.length();
@@ -552,4 +554,5 @@ void rlc_rx_um_entity::aurora_report_rx_window()
   }
   metrics.aurora_tap.set(aurora::rlc_gauge::rxbuf_occ_bytes, static_cast<uint32_t>(bytes));
   metrics.aurora_tap.set(aurora::rlc_gauge::rxsdu_wt_us, wait_us);
+  metrics.aurora_tap.set(aurora::rlc_gauge::rx_sdu_queue_depth, pending_sdus);
 }

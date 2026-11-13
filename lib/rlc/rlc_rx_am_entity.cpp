@@ -101,6 +101,7 @@ void rlc_rx_am_entity::aurora_report_rx_window()
   }
   // Pending (not yet delivered) SDUs live in [RX_Next, RX_Next_Highest).
   uint64_t                                             bytes = 0;
+  uint32_t                                             pending_sdus = 0;
   std::optional<std::chrono::steady_clock::time_point> oldest;
   uint32_t                                             visited = 0;
   for (uint32_t sn = st.rx_next; sn != st.rx_next_highest and visited != rlc_aurora_tap::max_rx_scan;
@@ -108,6 +109,7 @@ void rlc_rx_am_entity::aurora_report_rx_window()
     if (not rx_window.has_sn(sn)) {
       continue;
     }
+    ++pending_sdus;
     const rlc_rx_am_sdu_info& info = rx_window[sn];
     if (const auto* full = std::get_if<byte_buffer_slice>(&info.sdu_data)) {
       bytes += full->length();
@@ -127,6 +129,7 @@ void rlc_rx_am_entity::aurora_report_rx_window()
   }
   metrics.aurora_tap.set(aurora::rlc_gauge::rxbuf_occ_bytes, static_cast<uint32_t>(bytes));
   metrics.aurora_tap.set(aurora::rlc_gauge::rxsdu_wt_us, wait_us);
+  metrics.aurora_tap.set(aurora::rlc_gauge::rx_sdu_queue_depth, pending_sdus);
 }
 
 void rlc_rx_am_entity::handle_control_pdu(byte_buffer_slice buf)

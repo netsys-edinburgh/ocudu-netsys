@@ -227,6 +227,14 @@ typedef struct {
     uint32_t rxbuf_occ_bytes;        // Current RX buffer occupancy (gauge, snapshot)
     uint16_t retransmit_list_depth;  // AM retransmit list length (snapshot; 0 for UM/TM)
     uint32_t tx_window_stall_events; // Estimated window stall count (retransmit_list non-empty + tx buffer occupancy > 0)
+
+    // PDCP<->RLC interface queue occupancy (gauge, snapshot). srsRAN-native equivalent of
+    // OAI's pdcp_rlc_q_depth / rlc_pdcp_q_depth: srsRAN PDCP hands SDUs directly to RLC with
+    // no internal twin queues, so the real queues are RLC's own. DL = depth (in SDUs) of the
+    // RLC TX SDU queue (SDUs submitted by PDCP, awaiting MAC pull); UL = SDUs held in RLC RX
+    // reassembly awaiting in-order delivery up to PDCP. Both 0 for TM.
+    uint32_t pdcp_rlc_q_depth;       // DL: RLC TX SDU-queue depth (SDUs queued toward RLC from PDCP)
+    uint32_t rlc_pdcp_q_depth;       // UL: RLC RX reassembly depth (SDUs pending delivery to PDCP)
 } aurora_rlc_radio_bearer_stats_t;
 
 
@@ -469,6 +477,32 @@ struct aurora_metrics {
     uint8_t csi_min;    // MIN wideband CQI reported amongst all active UEs
     uint8_t csi_max;    // MAX wideband CQI reported amongst all active UEs
     float   csi_avg;    // Average wideband CQI across all active UEs
+
+    // RI (Rank Indicator) aggregate metrics: minimum, maximum, and mean Rank Indicator
+    // across all active UEs. Computed from per-UE mac_ue_stats[].ri each scheduling round
+    // (already captured from CSI reports; see aurora::on_csi_report).
+    uint8_t ri_min;     // MIN Rank Indicator reported amongst all active UEs
+    uint8_t ri_max;     // MAX Rank Indicator reported amongst all active UEs
+    float   ri_avg;     // Average Rank Indicator across all active UEs
+
+    // TA (Timing Advance) aggregate metrics (units of Tc): min, max, and mean per-UE UL
+    // timing-advance command across all active UEs. Derived from the PUSCH/CRC timing
+    // estimate (crc.time_advance_offset), the general UL TA -- see aurora::on_ta_update.
+    int16_t ta_min;     // MIN TA command (Tc) amongst all active UEs
+    int16_t ta_max;     // MAX TA command (Tc) amongst all active UEs
+    float   ta_avg;     // Average TA command (Tc) across all active UEs
+
+    // SRS-based TA aggregate metrics (units of Tc): separate UL reference signal from ta_*
+    // above -- from srs_indication.time_advance_offset. See aurora::on_srs_ta_update.
+    int16_t srs_ta_min; // MIN SRS-based TA (Tc) amongst all active UEs
+    int16_t srs_ta_max; // MAX SRS-based TA (Tc) amongst all active UEs
+    float   srs_ta_avg; // Average SRS-based TA (Tc) across all active UEs
+
+    // PUCCH-based TA aggregate metrics (units of Tc): from the PUCCH UCI timing estimate
+    // (uci action.time_advance_offset, non-PUSCH). See aurora::on_pucch_ta_update.
+    int16_t pucch_ta_min; // MIN PUCCH-based TA (Tc) amongst all active UEs
+    int16_t pucch_ta_max; // MAX PUCCH-based TA (Tc) amongst all active UEs
+    float   pucch_ta_avg; // Average PUCCH-based TA (Tc) across all active UEs
 
     // BSR aggregate metrics: minimum, maximum, and mean Buffer Status Report value across all active UEs.
     // Computed from per-UE mac_ue_stats[].bsr each scheduling round

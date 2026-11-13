@@ -493,6 +493,7 @@ void cell_event_manager::handle_ue_crc(slot_point sl_rx, const ul_crc_pdu_indica
   if (crc.tb_crc_success and crc.time_advance_offset.has_value() and crc.ul_sinr_dB.has_value()) {
     ue_ev_handler.handle_ul_n_ta_update(
         ue_cc->ue_index, ue_cc->cfg().tag_id(), crc.time_advance_offset.value(), crc.ul_sinr_dB.value());
+    aurora::on_ta_update(ue_cc->ue_index, static_cast<int>(crc.time_advance_offset.value().to_Tc()));
   }
 
   // Log event.
@@ -742,6 +743,7 @@ void cell_event_manager::handle_srs_indication(const srs_indication& srs)
         // Notify UL TA update.
         ue_ev_handler.handle_ul_n_ta_update(
             ue_cc->ue_index, ue_cc->cfg().tag_id(), srs_ptr->time_advance_offset.value(), sinr_dB);
+        aurora::on_srs_ta_update(ue_cc->ue_index, static_cast<int>(srs_ptr->time_advance_offset.value().to_Tc()));
 
         // Report the SRS PDU to the metrics handler.
         metrics.handle_srs_indication(*srs_ptr, ue_cc->channel_state_manager().get_nof_ul_layers());
@@ -820,6 +822,10 @@ void cell_event_manager::handle_uci_pdu(slot_point uci_sl, const uci_indication:
     if (action->time_advance_offset.has_value()) {
       ue_ev_handler.handle_ul_n_ta_update(
           ue_cc->ue_index, ue_cc->cfg().tag_id(), *action->time_advance_offset, action->ul_sinr_dB.value());
+      // PUCCH-carried UCI only: PUSCH-carried TA is already reported from the CRC path above.
+      if (action->type != uci_action::pdu_type::pusch) {
+        aurora::on_pucch_ta_update(ue_cc->ue_index, static_cast<int>(action->time_advance_offset->to_Tc()));
+      }
     }
   }
 

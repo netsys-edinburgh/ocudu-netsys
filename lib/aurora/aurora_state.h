@@ -166,6 +166,8 @@ struct mac_ue_acc {
   std::atomic<uint32_t> dl_mcs{0}, ul_mcs{0}, dl_mcs_table{0}, ul_mcs_table{0}, dl_max_mcs{0};
   std::atomic<uint32_t> dl_prb_last{0}, ul_prb_last{0}, dl_tbs_last{0}, ul_tbs_last{0};
   std::atomic<int32_t>  phr{0};
+  // UL Timing Advance commands (units of Tc). Last value seen per UL reference signal this interval.
+  std::atomic<int32_t>  ta_update{0}, srs_ta{0}, pucch_ta{0};
   std::atomic<uint32_t> bsr{0};
   std::atomic<uint32_t> frame{0}, slot{0};
   std::atomic<uint32_t> pusch_kos{0}, pucch_kos{0};

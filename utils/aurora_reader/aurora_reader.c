@@ -283,10 +283,18 @@ typedef struct {
     uint64_t ul_crc_total;
     double   ul_crc_loss_rate;
 
-    /* Group 4 — SINR / CSI / BSR aggregates */
+    /* Group 4 — SINR / CSI / RI / TA / BSR aggregates */
     float    sinr_min, sinr_max, sinr_avg;
     uint8_t  cqi_min,  cqi_max;
     float    cqi_avg;
+    uint8_t  ri_min,   ri_max;
+    float    ri_avg;
+    int16_t  ta_min,   ta_max;       /* UL timing advance command (units of Tc) */
+    float    ta_avg;
+    int16_t  srs_ta_min, srs_ta_max; /* SRS-based TA (Tc) */
+    float    srs_ta_avg;
+    int16_t  pucch_ta_min, pucch_ta_max; /* PUCCH-based TA (Tc) */
+    float    pucch_ta_avg;
     uint32_t bsr_min,  bsr_max;
     float    bsr_avg;
 
@@ -350,6 +358,9 @@ typedef struct {
     double rlc_rx_hol_us_min,   rlc_rx_hol_us_max,   rlc_rx_hol_us_avg;
     double rlc_retx_depth_min,  rlc_retx_depth_max,  rlc_retx_depth_avg;
     double rlc_stall_events_min, rlc_stall_events_max, rlc_stall_events_avg;
+    /* PDCP<->RLC interface queue depth (SDUs): DL = RLC TX SDU queue, UL = RLC RX reassembly. */
+    double rlc_dl_q_depth_min, rlc_dl_q_depth_max, rlc_dl_q_depth_avg;
+    double rlc_ul_q_depth_min, rlc_ul_q_depth_max, rlc_ul_q_depth_avg;
 
     /* Group 14 — Per-UE PDCP (aggregated across active bearers) */
     int    pdcp_active_bearers;
@@ -528,6 +539,18 @@ static void fill_snapshot(snapshot_t *s, const struct aurora_metrics *m)
     s->cqi_min  = m->csi_min;
     s->cqi_max  = m->csi_max;
     s->cqi_avg  = m->csi_avg;
+    s->ri_min   = m->ri_min;
+    s->ri_max   = m->ri_max;
+    s->ri_avg   = m->ri_avg;
+    s->ta_min   = m->ta_min;
+    s->ta_max   = m->ta_max;
+    s->ta_avg   = m->ta_avg;
+    s->srs_ta_min = m->srs_ta_min;
+    s->srs_ta_max = m->srs_ta_max;
+    s->srs_ta_avg = m->srs_ta_avg;
+    s->pucch_ta_min = m->pucch_ta_min;
+    s->pucch_ta_max = m->pucch_ta_max;
+    s->pucch_ta_avg = m->pucch_ta_avg;
     s->bsr_min  = m->bsr_min;
     s->bsr_max  = m->bsr_max;
     s->bsr_avg  = m->bsr_avg;
@@ -644,6 +667,7 @@ static void fill_snapshot(snapshot_t *s, const struct aurora_metrics *m)
     {
         agg_t txpdu_b={0}, rxpdu_b={0}, txsdu_b={0}, rxsdu_b={0};
         agg_t lost={0}, hol={0}, rx_hol={0}, retx_depth={0}, stall={0};
+        agg_t dl_q={0}, ul_q={0};
 
         for (int i = 0; i < MAX_NO_UEs; i++) {
             for (int rb = 0; rb < MAX_RBS_PER_UE; rb++) {
@@ -659,6 +683,8 @@ static void fill_snapshot(snapshot_t *s, const struct aurora_metrics *m)
                 agg_add(&rx_hol,     (double)r->rxsdu_wt_us);
                 agg_add(&retx_depth, (double)r->retransmit_list_depth);
                 agg_add(&stall,      (double)r->tx_window_stall_events);
+                agg_add(&dl_q,       (double)r->pdcp_rlc_q_depth);
+                agg_add(&ul_q,       (double)r->rlc_pdcp_q_depth);
             }
         }
         EXPAND_AGG3(rlc_txpdu_bytes, txpdu_b);
@@ -670,6 +696,8 @@ static void fill_snapshot(snapshot_t *s, const struct aurora_metrics *m)
         EXPAND_AGG3(rlc_rx_hol_us,   rx_hol);
         EXPAND_AGG3(rlc_retx_depth,  retx_depth);
         EXPAND_AGG3(rlc_stall_events, stall);
+        EXPAND_AGG3(rlc_dl_q_depth,  dl_q);
+        EXPAND_AGG3(rlc_ul_q_depth,  ul_q);
     }
 
     /* --- Group 14: Per-UE PDCP → aggregate across active bearers --- */
@@ -1033,10 +1061,15 @@ static void write_csv_header(FILE *fp, const struct aurora_metrics *m)
             ",dl_harq_ack,dl_harq_nack,dl_harq_total,dl_harq_loss_rate,dl_harq_max_cons"
             /* Group 3 — CRC */
             ",ul_crc_loss,ul_crc_total,ul_crc_loss_rate"
-            /* Group 4 — SINR/CSI/BSR */
+            /* Group 4 — SINR/CSI/RI/TA/BSR */
             ",sinr_min,sinr_max,sinr_avg"
             /* Wideband CQI over the active UEs, named "cqi" like OCUDU's own metrics (OAI: csi_min/max/avg). */
             ",cqi_min,cqi_max,cqi_avg"
+            ",ri_min,ri_max,ri_avg"
+            /* UL timing advance (units of Tc): general (PUSCH/CRC), SRS-based, PUCCH-based. */
+            ",ta_min,ta_max,ta_avg"
+            ",srs_ta_min,srs_ta_max,srs_ta_avg"
+            ",pucch_ta_min,pucch_ta_max,pucch_ta_avg"
             ",bsr_min,bsr_max,bsr_avg"
             /* Group 5 — FAPI DL */
             /* The averages are exact (sum / count), so no separate *_hist_avg columns; the TBS average is
@@ -1102,7 +1135,10 @@ static void write_csv_header(FILE *fp, const struct aurora_metrics *m)
             ",rlc_hol_us_min,rlc_hol_us_max,rlc_hol_us_avg"
             ",rlc_rx_hol_us_min,rlc_rx_hol_us_max,rlc_rx_hol_us_avg"
             ",rlc_retx_depth_min,rlc_retx_depth_max,rlc_retx_depth_avg"
-            ",rlc_stall_events_min,rlc_stall_events_max,rlc_stall_events_avg");
+            ",rlc_stall_events_min,rlc_stall_events_max,rlc_stall_events_avg"
+            /* PDCP<->RLC queue depth (SDUs): DL = RLC TX SDU queue, UL = RLC RX reassembly. */
+            ",rlc_dl_q_depth_min,rlc_dl_q_depth_max,rlc_dl_q_depth_avg"
+            ",rlc_ul_q_depth_min,rlc_ul_q_depth_max,rlc_ul_q_depth_avg");
     }
 
     if (g.pdcp) {
@@ -1287,6 +1323,10 @@ static void write_csv_row(FILE *fp, const snapshot_t *s)
             ",%.2f,%.2f,%.2f"
             ",%u,%u,%.2f"
             ",%u,%u,%.2f"
+            ",%d,%d,%.2f"
+            ",%d,%d,%.2f"
+            ",%d,%d,%.2f"
+            ",%u,%u,%.2f"
             /* Group 5 */
             ",%u,%.2f"
             ",%u,%u,%.2f"
@@ -1318,6 +1358,10 @@ static void write_csv_row(FILE *fp, const snapshot_t *s)
             /* Group 4 */
             (double)s->sinr_min, (double)s->sinr_max, (double)s->sinr_avg,
             (unsigned)s->cqi_min, (unsigned)s->cqi_max, (double)s->cqi_avg,
+            (unsigned)s->ri_min, (unsigned)s->ri_max, (double)s->ri_avg,
+            (int)s->ta_min, (int)s->ta_max, (double)s->ta_avg,
+            (int)s->srs_ta_min, (int)s->srs_ta_max, (double)s->srs_ta_avg,
+            (int)s->pucch_ta_min, (int)s->pucch_ta_max, (double)s->pucch_ta_avg,
             s->bsr_min, s->bsr_max, (double)s->bsr_avg,
 
             /* Group 5 */
@@ -1380,6 +1424,8 @@ static void write_csv_row(FILE *fp, const snapshot_t *s)
             ",%.2f,%.2f,%.2f"
             ",%.2f,%.2f,%.2f"
             ",%.2f,%.2f,%.2f"
+            ",%.2f,%.2f,%.2f"
+            ",%.2f,%.2f,%.2f"
             ",%.2f,%.2f,%.2f",
 
             /* Group 8 — KPM items 11, 13-16 */
@@ -1411,7 +1457,9 @@ static void write_csv_row(FILE *fp, const snapshot_t *s)
             s->rlc_hol_us_min,      s->rlc_hol_us_max,      s->rlc_hol_us_avg,
             s->rlc_rx_hol_us_min,   s->rlc_rx_hol_us_max,   s->rlc_rx_hol_us_avg,
             s->rlc_retx_depth_min,  s->rlc_retx_depth_max,  s->rlc_retx_depth_avg,
-            s->rlc_stall_events_min, s->rlc_stall_events_max, s->rlc_stall_events_avg);
+            s->rlc_stall_events_min, s->rlc_stall_events_max, s->rlc_stall_events_avg,
+            s->rlc_dl_q_depth_min,  s->rlc_dl_q_depth_max,  s->rlc_dl_q_depth_avg,
+            s->rlc_ul_q_depth_min,  s->rlc_ul_q_depth_max,  s->rlc_ul_q_depth_avg);
     }
 
     if (g.pdcp) {
