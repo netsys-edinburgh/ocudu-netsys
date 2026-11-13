@@ -1766,9 +1766,10 @@ int main(int argc, char **argv)
                 "                       (also env AURORA_INFLUX_TAGS=k=v,k=v)\n"
                 "\nInfrastructure metrics (sidecar mode):\n"
                 "  --infra-enabled yes|no     Enable infra metrics collection\n"
-                "  --infra-shm-key <hex>      Infra SHM key (default 0xAEF10001)\n"
-                "  --infra-interval <ms>      Default infra poll interval (default 1000)\n"
+                "  --infra-interval <ms>      Default infra poll interval (default 100)\n"
                 "  --infra-container <name>   Target container name\n"
+                "  --infra-container-interval <ms>  Base poll interval for all container\n"
+                "                             categories (0=use --infra-interval)\n"
                 "  --infra-discover <mode>    manual|auto (default auto)\n"
                 "  --infra-gpu yes|no         Enable GPU metrics\n"
                 "  --infra-host-proc <prefix> Host /proc mount prefix (default /host)\n"
@@ -1859,24 +1860,6 @@ int main(int argc, char **argv)
     aurora_infra_parse_cli(&g_infra_cfg, argc, argv);
 
     if (g_infra_cfg.enabled) {
-        /* Auto-derive unique SHM key from ran_type if CLI did not override.
-         * Default is 0xAEF10001; readers for different ran_types collide
-         * on the same key otherwise. */
-        {
-            static const key_t default_key = (key_t)0xAEF10001;
-            if (g_infra_cfg.infra_shm_key == default_key) {
-                static const key_t per_ran[] = {
-                    0xAEF10000,  /* RAN_GNB  */
-                    0xAEF10001,  /* RAN_DU   */
-                    0xAEF10002,  /* RAN_CU   */
-                    0xAEF10003,  /* RAN_CU_CP */
-                    0xAEF10004,  /* RAN_CU_UP */
-                };
-                if (aurora_cfg.ran_type <= RAN_CU_UP)
-                    g_infra_cfg.infra_shm_key = per_ran[aurora_cfg.ran_type];
-            }
-        }
-
         /* Auto-select container from ran_type if not provided via CLI. */
         if (g_infra_cfg.container_name[0] == '\0') {
             static const char *ran_hint[] = {"gnb","du","cu","cu_cp","cu_up"};
@@ -1886,19 +1869,18 @@ int main(int argc, char **argv)
         }
 
         fprintf(stderr,
-                "aurora_reader: infra cfg: container='%s' shm_key=0x%x "
+                "aurora_reader: infra cfg: container='%s' "
                 "host_proc='%s' host_sys='%s'\n",
-                g_infra_cfg.container_name, g_infra_cfg.infra_shm_key,
+                g_infra_cfg.container_name,
                 g_infra_cfg.host_proc_prefix, g_infra_cfg.host_sys_prefix);
 
         if (aurora_infra_init(&g_infra_cfg) == 0) {
-            /* Attach read-only view for CSV export */
-            g_infra_metrics = aurora_infra_get_metrics(g_infra_cfg.infra_shm_key);
+            /* In-process store (same process as the collector thread) */
+            g_infra_metrics = aurora_infra_get_metrics();
             if (!g_infra_metrics)
-                fprintf(stderr, "aurora_reader: infra SHM attach failed (continuing without)\n");
+                fprintf(stderr, "aurora_reader: infra store unavailable (continuing without)\n");
             else
-                fprintf(stderr, "aurora_reader: infra metrics enabled (key=0x%x)\n",
-                        g_infra_cfg.infra_shm_key);
+                fprintf(stderr, "aurora_reader: infra metrics enabled\n");
         }
     }
 

@@ -22,11 +22,13 @@
 /*
  * aurora_infra.h — Infrastructure metrics (container + host + GPU).
  *
- * Collected by the aurora sidecar container using eBPF (primary) or
- * procfs/sysfs/cgroup (fallback).  Data is written to a separate SHM
- * segment (Option B) so that the RAN application process is not touched.
+ * Collected by the aurora sidecar (aurora_reader) using eBPF (primary) or
+ * procfs/sysfs/cgroup (fallback).  Data lives in an in-process store: the
+ * collector thread and the reader's export path are in the same process,
+ * so no SHM round-trip is used.  The RAN application process is never
+ * touched — infra is independent of the RAN application SHM.
  *
- * The aurora_reader merges infra SHM with RAN SHM at export time.
+ * The aurora_reader merges the infra store with RAN SHM at export time.
  */
 
 #ifndef AURORA_INFRA_H
@@ -88,11 +90,14 @@ typedef struct {
     /* Container identification — manual mode */
     char container_name[AURORA_INFRA_CONTAINER_NAME_LEN];
 
-    /* SHM key for infra metrics segment (separate from RAN SHM) */
-    key_t infra_shm_key;
-
     /* Default collection interval (ms) — used when per-category = 0 */
     uint32_t infra_interval_ms;
+
+    /* Base interval (ms) for every CONTAINER category (cpu/mem/net/disk/proc).
+     * 0 = fall back to infra_interval_ms. A per-category override in
+     * `intervals` still takes precedence over this. Lets container KPIs be
+     * polled at a different cadence than host/GPU KPIs. */
+    uint32_t container_interval_ms;
 
     /* Per-category overrides */
     aurora_infra_intervals_t intervals;
@@ -414,7 +419,7 @@ typedef struct {
 } aurora_gpu_stats_t;
 
 /* ===============================================================
- * TOP-LEVEL INFRA METRICS (written to separate SHM segment)
+ * TOP-LEVEL INFRA METRICS (in-process store inside aurora_reader)
  * =============================================================== */
 
 typedef struct {
@@ -440,23 +445,23 @@ typedef struct {
 
 /**
  * aurora_infra_init — initialise infra metrics collection.
- * Creates SHM segment, starts collector thread.
+ * Allocates the in-process store, starts the collector thread.
  * @cfg: configuration (copied internally)
  * Returns 0 on success, -1 on error.
  */
 int aurora_infra_init(const aurora_infra_config_t *cfg);
 
 /**
- * aurora_infra_shutdown — stop collector thread, detach SHM.
+ * aurora_infra_shutdown — stop collector thread.
  */
 void aurora_infra_shutdown(void);
 
 /**
- * aurora_infra_get_metrics — attach to existing infra SHM by key.
- * Used by aurora_reader to read infra metrics.
- * Returns pointer to shared memory, or NULL on failure.
+ * aurora_infra_get_metrics — get the in-process metrics store.
+ * Used by aurora_reader (same process) to read infra metrics.
+ * Returns the store pointer, or NULL if collection is not running.
  */
-aurora_infra_metrics_t *aurora_infra_get_metrics(key_t shm_key);
+aurora_infra_metrics_t *aurora_infra_get_metrics(void);
 
 /* ---------------------------------------------------------------
  * Procfs/sysfs backend API (always available)

@@ -31,8 +31,7 @@
 #include <stdlib.h>
 
 /* Defaults (were aurora_paramdef.h in OAI; OCUDU has no libconfig section for infra). */
-static const char* const aurora_config_infra_shm_key_default          = "0xAEF10001";
-static const uint32_t    aurora_config_infra_interval_ms_default      = 1000;
+static const uint32_t    aurora_config_infra_interval_ms_default      = 100;
 static const char* const aurora_config_infra_host_proc_prefix_default = "/host";
 static const char* const aurora_config_infra_host_sys_prefix_default  = "/host";
 #include <stdlib.h>
@@ -65,9 +64,9 @@ static int str_is_yes(const char *s)
  *
  * Recognized flags:
  *   --infra-enabled yes|no
- *   --infra-shm-key <hex>
  *   --infra-interval <ms>
  *   --infra-container <name>
+ *   --infra-container-interval <ms>
  *   --infra-discover <manual|auto>
  *   --infra-gpu yes|no
  *   --infra-host-proc <prefix>
@@ -86,9 +85,6 @@ int aurora_infra_parse_cli(aurora_infra_config_t *cfg, int argc, char **argv)
         if (!strcmp(argv[i], "--infra-enabled") && i + 1 < argc) {
             cfg->enabled = str_is_yes(argv[++i]);
             consumed += 2;
-        } else if (!strcmp(argv[i], "--infra-shm-key") && i + 1 < argc) {
-            cfg->infra_shm_key = (key_t)strtol(argv[++i], NULL, 0);
-            consumed += 2;
         } else if (!strcmp(argv[i], "--infra-interval") && i + 1 < argc) {
             uint32_t ms = parse_ms(argv[++i]);
             if (ms != 0) cfg->infra_interval_ms = ms; /* 0 / invalid keeps the default */
@@ -97,6 +93,9 @@ int aurora_infra_parse_cli(aurora_infra_config_t *cfg, int argc, char **argv)
             i++;
             strncpy(cfg->container_name, argv[i], AURORA_INFRA_CONTAINER_NAME_LEN - 1);
             cfg->container_name[AURORA_INFRA_CONTAINER_NAME_LEN - 1] = '\0';
+            consumed += 2;
+        } else if (!strcmp(argv[i], "--infra-container-interval") && i + 1 < argc) {
+            cfg->container_interval_ms = parse_ms(argv[++i]); /* 0 = fall back to --infra-interval */
             consumed += 2;
         } else if (!strcmp(argv[i], "--infra-discover") && i + 1 < argc) {
             i++;
@@ -153,8 +152,8 @@ aurora_infra_config_t aurora_infra_default_config(void)
     cfg.enabled = 0;
     cfg.backend = AURORA_INFRA_BACKEND_AUTO;
     cfg.discover_mode = AURORA_CONTAINER_DISCOVER_AUTO;
-    cfg.infra_shm_key = (key_t)strtol(aurora_config_infra_shm_key_default, NULL, 0);
     cfg.infra_interval_ms = aurora_config_infra_interval_ms_default;
+    cfg.container_interval_ms = 0; /* 0 = follow infra_interval_ms */
     strncpy(cfg.host_proc_prefix, aurora_config_infra_host_proc_prefix_default,
             AURORA_INFRA_PATH_LEN - 1);
     strncpy(cfg.host_sys_prefix, aurora_config_infra_host_sys_prefix_default,

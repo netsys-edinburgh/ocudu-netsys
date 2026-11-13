@@ -22,13 +22,16 @@
 /*
  * aurora_infra.c — Main infrastructure metrics collector.
  *
- * Creates a separate SHM segment (Option B) for container + host + GPU
- * metrics.  Runs a collector thread that polls procfs/sysfs/cgroup at
- * per-category configurable intervals.
+ * Holds container + host + GPU metrics in an in-process store and runs a
+ * collector thread that polls procfs/sysfs/cgroup at per-category
+ * configurable intervals.  The collector thread and the reader's export
+ * path both live in the aurora_reader process, so no SHM round-trip is
+ * needed — the store is plain process memory.
  *
  * Used by:
- *   - aurora_reader (sidecar) to init collection + export CSV
- *   - RAN process never touches this — fully decoupled via SHM key
+ *   - aurora_reader (sidecar) to init collection + export CSV/InfluxDB
+ *   - RAN process never touches this — infra is collected entirely inside
+ *     aurora_reader, independent of the RAN application SHM.
  */
 
 #include "aurora_infra.h"
@@ -36,8 +39,6 @@
 #include "aurora_infra_ebpf.h"
 #endif
 
-#include <sys/shm.h>
-#include <sys/ipc.h>
 #include <sys/stat.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,8 +52,8 @@
 /* ---------------------------------------------------------------
  * Module state
  * --------------------------------------------------------------- */
-static aurora_infra_metrics_t *g_infra_shm  = NULL;
-static int                     g_infra_shmid = -1;
+static aurora_infra_metrics_t  g_infra_store;        /* in-process metrics store (was a separate SHM segment) */
+static aurora_infra_metrics_t *g_infra       = NULL; /* -> &g_infra_store while running, NULL otherwise */
 static aurora_infra_config_t   g_cfg;
 static pthread_t               g_collector_tid;
 static volatile int            g_running = 0;
@@ -83,26 +84,17 @@ static int should_poll(uint64_t last_us, uint32_t interval_ms, uint64_t now)
 }
 
 /* ---------------------------------------------------------------
- * SHM management
+ * Interval resolution for container categories
+ *
+ * Precedence (first non-zero wins):
+ *   per-category override  >  container_interval_ms  >  infra_interval_ms
+ * so a single --infra-container-interval retunes every container category
+ * at once, while a per-category flag still overrides it.
  * --------------------------------------------------------------- */
-static aurora_infra_metrics_t *create_infra_shm(key_t key)
+static uint32_t resolve_container_interval(uint32_t category_ms)
 {
-    int shmid = shmget(key, sizeof(aurora_infra_metrics_t), IPC_CREAT | 0666);
-    if (shmid < 0) {
-        fprintf(stderr, "AURORA_INFRA: shmget(0x%x) failed: %s\n",
-                key, strerror(errno));
-        return NULL;
-    }
-    void *ptr = shmat(shmid, NULL, 0);
-    if (ptr == (void *)-1) {
-        fprintf(stderr, "AURORA_INFRA: shmat failed: %s\n", strerror(errno));
-        return NULL;
-    }
-    g_infra_shmid = shmid;
-    aurora_infra_metrics_t *m = (aurora_infra_metrics_t *)ptr;
-    memset(m, 0, sizeof(*m));
-    m->version = AURORA_INFRA_VERSION;
-    return m;
+    uint32_t base = resolve_interval(g_cfg.container_interval_ms, g_cfg.infra_interval_ms);
+    return resolve_interval(category_ms, base);
 }
 
 /* ---------------------------------------------------------------
@@ -124,10 +116,10 @@ static uint32_t compute_tick_ms(void)
 {
     uint32_t def = g_cfg.infra_interval_ms;
     uint32_t intervals[] = {
-        resolve_interval(g_cfg.intervals.cpu_interval_ms,     def),
-        resolve_interval(g_cfg.intervals.memory_interval_ms,  def),
-        resolve_interval(g_cfg.intervals.network_interval_ms, def),
-        resolve_interval(g_cfg.intervals.disk_interval_ms,    def),
+        resolve_container_interval(g_cfg.intervals.cpu_interval_ms),
+        resolve_container_interval(g_cfg.intervals.memory_interval_ms),
+        resolve_container_interval(g_cfg.intervals.network_interval_ms),
+        resolve_container_interval(g_cfg.intervals.disk_interval_ms),
         resolve_interval(g_cfg.intervals.host_interval_ms,    def),
         resolve_interval(g_cfg.intervals.gpu_interval_ms,     def),
     };
@@ -141,62 +133,58 @@ static uint32_t compute_tick_ms(void)
 
 static void collect_container_cpu(uint64_t now)
 {
-    uint32_t iv = resolve_interval(g_cfg.intervals.cpu_interval_ms,
-                                   g_cfg.infra_interval_ms);
-    if (!should_poll(g_infra_shm->last_cpu_poll_us, iv, now))
+    uint32_t iv = resolve_container_interval(g_cfg.intervals.cpu_interval_ms);
+    if (!should_poll(g_infra->last_cpu_poll_us, iv, now))
         return;
 
-    aurora_infra_procfs_collect_container_cpu(&g_cfg, &g_infra_shm->container.cpu);
+    aurora_infra_procfs_collect_container_cpu(&g_cfg, &g_infra->container.cpu);
 #ifdef AURORA_INFRA_EBPF_ENABLED
     if (g_ebpf_active)
-        aurora_infra_ebpf_collect_container_cpu(&g_infra_shm->container.cpu);
+        aurora_infra_ebpf_collect_container_cpu(&g_infra->container.cpu);
 #endif
-    g_infra_shm->last_cpu_poll_us = now;
+    g_infra->last_cpu_poll_us = now;
 }
 
 static void collect_container_mem(uint64_t now)
 {
-    uint32_t iv = resolve_interval(g_cfg.intervals.memory_interval_ms,
-                                   g_cfg.infra_interval_ms);
-    if (!should_poll(g_infra_shm->last_mem_poll_us, iv, now))
+    uint32_t iv = resolve_container_interval(g_cfg.intervals.memory_interval_ms);
+    if (!should_poll(g_infra->last_mem_poll_us, iv, now))
         return;
 
-    aurora_infra_procfs_collect_container_mem(&g_cfg, &g_infra_shm->container.mem);
+    aurora_infra_procfs_collect_container_mem(&g_cfg, &g_infra->container.mem);
 #ifdef AURORA_INFRA_EBPF_ENABLED
     if (g_ebpf_active)
-        aurora_infra_ebpf_collect_container_mem(&g_infra_shm->container.mem);
+        aurora_infra_ebpf_collect_container_mem(&g_infra->container.mem);
 #endif
-    g_infra_shm->last_mem_poll_us = now;
+    g_infra->last_mem_poll_us = now;
 }
 
 static void collect_container_net(uint64_t now)
 {
-    uint32_t iv = resolve_interval(g_cfg.intervals.network_interval_ms,
-                                   g_cfg.infra_interval_ms);
-    if (!should_poll(g_infra_shm->last_net_poll_us, iv, now))
+    uint32_t iv = resolve_container_interval(g_cfg.intervals.network_interval_ms);
+    if (!should_poll(g_infra->last_net_poll_us, iv, now))
         return;
 
-    aurora_infra_procfs_collect_container_net(&g_cfg, &g_infra_shm->container.net);
+    aurora_infra_procfs_collect_container_net(&g_cfg, &g_infra->container.net);
 #ifdef AURORA_INFRA_EBPF_ENABLED
     if (g_ebpf_active)
-        aurora_infra_ebpf_collect_container_net(&g_infra_shm->container.net);
+        aurora_infra_ebpf_collect_container_net(&g_infra->container.net);
 #endif
-    g_infra_shm->last_net_poll_us = now;
+    g_infra->last_net_poll_us = now;
 }
 
 static void collect_container_disk(uint64_t now)
 {
-    uint32_t iv = resolve_interval(g_cfg.intervals.disk_interval_ms,
-                                   g_cfg.infra_interval_ms);
-    if (!should_poll(g_infra_shm->last_disk_poll_us, iv, now))
+    uint32_t iv = resolve_container_interval(g_cfg.intervals.disk_interval_ms);
+    if (!should_poll(g_infra->last_disk_poll_us, iv, now))
         return;
 
-    aurora_infra_procfs_collect_container_io(&g_cfg, &g_infra_shm->container.io);
+    aurora_infra_procfs_collect_container_io(&g_cfg, &g_infra->container.io);
 #ifdef AURORA_INFRA_EBPF_ENABLED
     if (g_ebpf_active)
-        aurora_infra_ebpf_collect_container_io(&g_infra_shm->container.io);
+        aurora_infra_ebpf_collect_container_io(&g_infra->container.io);
 #endif
-    g_infra_shm->last_disk_poll_us = now;
+    g_infra->last_disk_poll_us = now;
 }
 
 static void collect_container_proc(uint64_t now)
@@ -204,12 +192,11 @@ static void collect_container_proc(uint64_t now)
     /* Collect proc/FD at same interval as CPU (lightweight). OCUDU fix: uses its own poll timestamp -- OAI gated on
      * last_cpu_poll_us, which collect_container_cpu() had just refreshed, so these metrics were never collected. */
     static uint64_t last_proc_poll_us = 0;
-    uint32_t iv = resolve_interval(g_cfg.intervals.cpu_interval_ms,
-                                   g_cfg.infra_interval_ms);
+    uint32_t iv = resolve_container_interval(g_cfg.intervals.cpu_interval_ms);
     if (!should_poll(last_proc_poll_us, iv, now))
         return;
 
-    aurora_infra_procfs_collect_container_proc(&g_cfg, &g_infra_shm->container.proc);
+    aurora_infra_procfs_collect_container_proc(&g_cfg, &g_infra->container.proc);
     last_proc_poll_us = now;
 }
 
@@ -217,15 +204,15 @@ static void collect_host_metrics(uint64_t now)
 {
     uint32_t iv = resolve_interval(g_cfg.intervals.host_interval_ms,
                                    g_cfg.infra_interval_ms);
-    if (!should_poll(g_infra_shm->last_host_poll_us, iv, now))
+    if (!should_poll(g_infra->last_host_poll_us, iv, now))
         return;
 
-    aurora_infra_procfs_collect_host_thermal(&g_cfg, &g_infra_shm->host.thermal);
-    aurora_infra_procfs_collect_host_cpu(&g_cfg, &g_infra_shm->host.cpu);
-    aurora_infra_procfs_collect_host_mem(&g_cfg, &g_infra_shm->host.mem);
-    aurora_infra_procfs_collect_host_disk(&g_cfg, &g_infra_shm->host.disk);
-    aurora_infra_procfs_collect_host_net(&g_cfg, &g_infra_shm->host.net);
-    aurora_infra_procfs_collect_host_kernel(&g_cfg, &g_infra_shm->host.kernel);
+    aurora_infra_procfs_collect_host_thermal(&g_cfg, &g_infra->host.thermal);
+    aurora_infra_procfs_collect_host_cpu(&g_cfg, &g_infra->host.cpu);
+    aurora_infra_procfs_collect_host_mem(&g_cfg, &g_infra->host.mem);
+    aurora_infra_procfs_collect_host_disk(&g_cfg, &g_infra->host.disk);
+    aurora_infra_procfs_collect_host_net(&g_cfg, &g_infra->host.net);
+    aurora_infra_procfs_collect_host_kernel(&g_cfg, &g_infra->host.kernel);
 
 #ifdef AURORA_INFRA_EBPF_ENABLED
     /* carrier_changes: eBPF supersedes the procfs/sysfs value per NIC when
@@ -233,8 +220,8 @@ static void collect_host_metrics(uint64_t now)
      * not summed, since the two count from different start points (sysfs:
      * since boot; eBPF: since this program attached). */
     if (g_ebpf_active) {
-        for (uint32_t i = 0; i < g_infra_shm->host.net.num_nics; i++) {
-            aurora_host_nic_t *nic = &g_infra_shm->host.net.nics[i];
+        for (uint32_t i = 0; i < g_infra->host.net.num_nics; i++) {
+            aurora_host_nic_t *nic = &g_infra->host.net.nics[i];
             uint64_t ebpf_count;
             if (aurora_infra_ebpf_collect_host_nic_carrier(nic->name, &ebpf_count) == 0)
                 nic->carrier_changes = ebpf_count;
@@ -242,8 +229,8 @@ static void collect_host_metrics(uint64_t now)
     }
 #endif
 
-    g_infra_shm->host.timestamp_us = now;
-    g_infra_shm->last_host_poll_us = now;
+    g_infra->host.timestamp_us = now;
+    g_infra->last_host_poll_us = now;
 }
 
 static void collect_gpu_metrics(uint64_t now)
@@ -252,12 +239,12 @@ static void collect_gpu_metrics(uint64_t now)
 
     uint32_t iv = resolve_interval(g_cfg.intervals.gpu_interval_ms,
                                    g_cfg.infra_interval_ms);
-    if (!should_poll(g_infra_shm->last_gpu_poll_us, iv, now))
+    if (!should_poll(g_infra->last_gpu_poll_us, iv, now))
         return;
 
-    aurora_infra_procfs_collect_gpu(&g_cfg, &g_infra_shm->gpu);
-    g_infra_shm->gpu.timestamp_us = now;
-    g_infra_shm->last_gpu_poll_us = now;
+    aurora_infra_procfs_collect_gpu(&g_cfg, &g_infra->gpu);
+    g_infra->gpu.timestamp_us = now;
+    g_infra->last_gpu_poll_us = now;
 }
 
 static void *infra_collector_thread(void *arg)
@@ -267,13 +254,15 @@ static void *infra_collector_thread(void *arg)
 
     printf("AURORA_INFRA: Collector thread started (tick=%u ms, backend=%s)\n",
            tick_ms, g_ebpf_active ? "ebpf+procfs" : "procfs");
-    printf("AURORA_INFRA: Intervals — cpu:%u mem:%u net:%u disk:%u host:%u gpu:%u ms\n",
-           resolve_interval(g_cfg.intervals.cpu_interval_ms,     g_cfg.infra_interval_ms),
-           resolve_interval(g_cfg.intervals.memory_interval_ms,  g_cfg.infra_interval_ms),
-           resolve_interval(g_cfg.intervals.network_interval_ms, g_cfg.infra_interval_ms),
-           resolve_interval(g_cfg.intervals.disk_interval_ms,    g_cfg.infra_interval_ms),
+    printf("AURORA_INFRA: Intervals — cpu:%u mem:%u net:%u disk:%u host:%u gpu:%u ms "
+           "(container base:%u ms)\n",
+           resolve_container_interval(g_cfg.intervals.cpu_interval_ms),
+           resolve_container_interval(g_cfg.intervals.memory_interval_ms),
+           resolve_container_interval(g_cfg.intervals.network_interval_ms),
+           resolve_container_interval(g_cfg.intervals.disk_interval_ms),
            resolve_interval(g_cfg.intervals.host_interval_ms,    g_cfg.infra_interval_ms),
-           resolve_interval(g_cfg.intervals.gpu_interval_ms,     g_cfg.infra_interval_ms));
+           resolve_interval(g_cfg.intervals.gpu_interval_ms,     g_cfg.infra_interval_ms),
+           resolve_interval(g_cfg.container_interval_ms,         g_cfg.infra_interval_ms));
 
     while (g_running) {
         uint64_t now = now_us();
@@ -285,7 +274,7 @@ static void *infra_collector_thread(void *arg)
             collect_container_net(now);
             collect_container_disk(now);
             collect_container_proc(now);
-            g_infra_shm->container.timestamp_us = now;
+            g_infra->container.timestamp_us = now;
         }
 
         /* Host metrics */
@@ -295,7 +284,7 @@ static void *infra_collector_thread(void *arg)
         collect_gpu_metrics(now);
 
         /* Update global timestamp */
-        g_infra_shm->timestamp_us = now;
+        g_infra->timestamp_us = now;
 
         /* Sleep for one tick */
         usleep(tick_ms * 1000);
@@ -329,7 +318,9 @@ int aurora_infra_init(const aurora_infra_config_t *cfg)
 
     /* Default interval if not set */
     if (g_cfg.infra_interval_ms == 0)
-        g_cfg.infra_interval_ms = 1000;
+        g_cfg.infra_interval_ms = 100;
+    /* container_interval_ms == 0 is valid: it means "fall back to
+     * infra_interval_ms" (see resolve_container_interval). */
 
     /* Container discovery */
     if (g_cfg.target_pid == 0 && g_cfg.container_name[0] != '\0') {
@@ -389,17 +380,16 @@ int aurora_infra_init(const aurora_infra_config_t *cfg)
     }
 #endif
 
-    /* Create SHM segment */
-    g_infra_shm = create_infra_shm(g_cfg.infra_shm_key);
-    if (!g_infra_shm) {
-        fprintf(stderr, "AURORA_INFRA: Failed to create SHM\n");
-        return -1;
-    }
+    /* Initialise the in-process metrics store (no SHM: collector and reader
+     * export path share this process's address space). */
+    g_infra = &g_infra_store;
+    memset(g_infra, 0, sizeof(*g_infra));
+    g_infra->version = AURORA_INFRA_VERSION;
 
-    /* Copy container identity into SHM */
-    snprintf(g_infra_shm->container.container_name,
+    /* Copy container identity into the store */
+    snprintf(g_infra->container.container_name,
              AURORA_INFRA_CONTAINER_NAME_LEN, "%s", g_cfg.container_name);
-    g_infra_shm->container.container_pid = g_cfg.target_pid;
+    g_infra->container.container_pid = g_cfg.target_pid;
 
     /* Start collector thread */
     g_running = 1;
@@ -411,8 +401,8 @@ int aurora_infra_init(const aurora_infra_config_t *cfg)
     }
     pthread_detach(g_collector_tid);
 
-    printf("AURORA_INFRA: Initialized — SHM key=0x%x size=%zu bytes\n",
-           g_cfg.infra_shm_key, sizeof(aurora_infra_metrics_t));
+    printf("AURORA_INFRA: Initialized — in-process store size=%zu bytes\n",
+           sizeof(aurora_infra_metrics_t));
     return 0;
 }
 
@@ -433,29 +423,13 @@ void aurora_infra_shutdown(void)
     }
 #endif
 
-    if (g_infra_shm) {
-        shmdt(g_infra_shm);
-        g_infra_shm = NULL;
-        printf("AURORA_INFRA: Detached from SHM\n");
-    }
-    if (g_infra_shmid >= 0) {
-        if (shmctl(g_infra_shmid, IPC_RMID, NULL) == 0)
-            printf("AURORA_INFRA: Removed SHM segment\n");
-        else
-            perror("AURORA_INFRA: shmctl IPC_RMID failed");
-        g_infra_shmid = -1;
-    }
+    g_infra = NULL;
+    printf("AURORA_INFRA: Collector stopped\n");
 }
 
-aurora_infra_metrics_t *aurora_infra_get_metrics(key_t shm_key)
+aurora_infra_metrics_t *aurora_infra_get_metrics(void)
 {
-    int shmid = shmget(shm_key, sizeof(aurora_infra_metrics_t), 0666);
-    if (shmid < 0) {
-        /* Try with size 0 to attach to existing segment */
-        shmid = shmget(shm_key, 0, 0666);
-        if (shmid < 0) return NULL;
-    }
-    void *ptr = shmat(shmid, NULL, SHM_RDONLY);
-    if (ptr == (void *)-1) return NULL;
-    return (aurora_infra_metrics_t *)ptr;
+    /* Collector and export path share this process; hand back the store
+     * directly. NULL until aurora_infra_init() has started collection. */
+    return g_infra;
 }
