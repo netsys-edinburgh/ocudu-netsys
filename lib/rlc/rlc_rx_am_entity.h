@@ -15,6 +15,7 @@
 #include "fmt/base.h"
 #include <atomic>
 #include <set>
+#include <unordered_map>
 
 namespace ocudu {
 
@@ -131,6 +132,13 @@ private:
   pcap_rlc_pdu_context pcap_context;
 
   bool stopped = false;
+
+  /// [netsys] Dedicated logger for per-SDU UL RLC reTx statistics. Uses the same prefix as the RLC bearer logger.
+  rlc_bearer_logger stats_logger;
+
+  /// [netsys] Time at which each SN was first NACKed in a generated STATUS report. Entries are removed once the SN is
+  /// fully received. Only accessed from the ue_executor.
+  std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> first_nack_time;
 
 public:
   rlc_rx_am_entity(gnb_du_id_t                       gnb_du_id,

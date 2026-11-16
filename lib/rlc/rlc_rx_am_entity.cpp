@@ -29,9 +29,13 @@ rlc_rx_am_entity::rlc_rx_am_entity(gnb_du_id_t                       gnb_du_id,
   status_prohibit_timer(ue_timer_factory.create_timer()),
   reassembly_timer(ue_timer_factory.create_timer()),
   ue_executor(ue_executor_),
-  pcap_context(ue_index, rb_id, config)
+  pcap_context(ue_index, rb_id, config),
+  stats_logger("RLCSTAT", {gnb_du_id, ue_index, rb_id, "UL"})
 {
   metrics.metrics_set_mode(rlc_mode::am);
+
+  // [netsys] Enable the info level of the RLC statistics logger, independently of the RLC logger level.
+  stats_logger.get_basic_logger().set_level(ocudulog::basic_levels::info);
 
   // check status_prohibit_timer
   ocudu_assert(status_prohibit_timer.is_valid(), "Cannot create RLC RX AM, status_prohibit_timer not configured.");
@@ -197,6 +201,15 @@ void rlc_rx_am_entity::handle_data_pdu(byte_buffer_slice buf)
    * - if all bytes of the RLC SDU with SN = x are received:
    */
   if (rx_window.has_sn(header.sn) && rx_window[header.sn].fully_received) {
+    // [netsys] Report SNs that were NACKed before being fully received, and forget their NACK time.
+    auto nack_it = first_nack_time.find(header.sn);
+    if (nack_it != first_nack_time.end()) {
+      const auto t_us =
+          std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nack_it->second);
+      stats_logger.log_info("RLC_UL_SDU sn={} t_nack_to_rx_us={}", header.sn, t_us.count());
+      first_nack_time.erase(nack_it);
+    }
+
     /*
      * - reassemble the RLC SDU from AMD PDU(s) with SN = x, remove RLC headers when doing so and deliver
      *   the reassembled RLC SDU to upper layer;
@@ -552,6 +565,9 @@ expected<byte_buffer_chain> rlc_rx_am_entity::reassemble_sdu(rlc_rx_am_sdu_info&
 
 void rlc_rx_am_entity::refresh_status_report()
 {
+  // [netsys] Generation time of this STATUS report, used as the NACK time of the SNs NACKed in it.
+  const auto t_now = std::chrono::steady_clock::now();
+
   status_owned_by_writer->reset();
   /*
    * - for the RLC SDUs with SN such that RX_Next <= SN < RX_Highest_Status that has not been completely
@@ -570,6 +586,8 @@ void rlc_rx_am_entity::refresh_status_report()
     if ((rx_window.has_sn(i) && rx_window[i].fully_received)) {
       logger.log_debug("SDU complete. sn={}", i);
     } else {
+      // [netsys] SN i is NACKed in this report. try_emplace does not overwrite, so the first NACK time is kept.
+      first_nack_time.try_emplace(i, t_now);
       if (not rx_window.has_sn(i)) {
         // No segment received, NACK the whole SDU
         rlc_am_status_nack nack;
