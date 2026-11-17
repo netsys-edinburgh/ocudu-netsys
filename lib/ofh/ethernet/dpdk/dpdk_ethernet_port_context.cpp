@@ -6,6 +6,7 @@
 #include <charconv>
 #include <optional>
 #include <rte_ethdev.h>
+#include <rte_flow.h>
 
 using namespace ocudu;
 using namespace ether;
@@ -15,6 +16,49 @@ static constexpr unsigned MBUF_CACHE_SIZE = 256;
 static constexpr unsigned RX_RING_SIZE    = 1024;
 static constexpr unsigned TX_RING_SIZE    = 1024;
 static constexpr unsigned NUM_MBUFS       = 13824;
+
+/// Steer only eCPRI to a shared mlx5 PF, leaving PTP and other traffic to the kernel.
+static bool create_ecpri_rx_flow(unsigned port_id, bool tagged)
+{
+  constexpr uint16_t ecpri_ethertype = 0xaefe;
+  rte_flow_attr    attr{};
+  attr.ingress = 1;
+  rte_flow_item_eth eth_spec{};
+  rte_flow_item_eth eth_mask{};
+  eth_spec.hdr.ether_type = rte_cpu_to_be_16(tagged ? RTE_ETHER_TYPE_VLAN : ecpri_ethertype);
+  eth_mask.hdr.ether_type = rte_cpu_to_be_16(0xffff);
+  rte_flow_item_vlan vlan_spec{};
+  rte_flow_item_vlan vlan_mask{};
+  vlan_spec.hdr.eth_proto = rte_cpu_to_be_16(ecpri_ethertype);
+  vlan_mask.hdr.eth_proto = rte_cpu_to_be_16(0xffff);
+
+  rte_flow_item pattern[3]{};
+  pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
+  pattern[0].spec = &eth_spec;
+  pattern[0].mask = &eth_mask;
+  pattern[1].type = tagged ? RTE_FLOW_ITEM_TYPE_VLAN : RTE_FLOW_ITEM_TYPE_END;
+  if (tagged) {
+    pattern[1].spec = &vlan_spec;
+    pattern[1].mask = &vlan_mask;
+  }
+  pattern[2].type = RTE_FLOW_ITEM_TYPE_END;
+  rte_flow_action_queue queue{};
+  queue.index = 0;
+  rte_flow_action actions[2]{};
+  actions[0].type = RTE_FLOW_ACTION_TYPE_QUEUE;
+  actions[0].conf = &queue;
+  actions[1].type = RTE_FLOW_ACTION_TYPE_END;
+  rte_flow_error error{};
+  if (rte_flow_validate(port_id, &attr, pattern, actions, &error) != 0 ||
+      rte_flow_create(port_id, &attr, pattern, actions, &error) == nullptr) {
+    fmt::print("DPDK - Failed to install {}eCPRI receive flow on port {}: {}\n",
+               tagged ? "VLAN " : "",
+               port_id,
+               error.message ? error.message : "unknown flow error");
+    return false;
+  }
+  return true;
+}
 
 /// DPDK port initialization routine.
 static bool port_init(const dpdk_port_config& config, ::rte_mempool* mem_pool, unsigned port_id)
@@ -32,6 +76,20 @@ static bool port_init(const dpdk_port_config& config, ::rte_mempool* mem_pool, u
   if (ret != 0) {
     fmt::print("DPDK - Error getting Ethernet device information: {}\n", port_id, ::strerror(-ret));
     return false;
+  }
+
+  const std::string driver_name = dev_info.driver_name ? dev_info.driver_name : "";
+  const bool shared_mlx5_port = driver_name == "mlx5_pci" || driver_name == "net_mlx5";
+  if (shared_mlx5_port) {
+    rte_flow_error error{};
+    // mlx5 requires isolation before configuring the port. Do not fall back to
+    // promiscuous reception, which would divert the host's PTP Announce frames.
+    if (rte_flow_isolate(port_id, 1, &error) != 0) {
+      fmt::print("DPDK - Cannot isolate shared mlx5 port {}: {}\n",
+                 port_id,
+                 error.message ? error.message : "unknown flow error");
+      return false;
+    }
   }
 
   ::rte_eth_conf port_conf = {};
@@ -81,7 +139,12 @@ static bool port_init(const dpdk_port_config& config, ::rte_mempool* mem_pool, u
   }
 
   // Enable RX in promiscuous mode for the Ethernet device.
-  if (config.is_promiscuous_mode_enabled) {
+  if (shared_mlx5_port) {
+    if (!create_ecpri_rx_flow(port_id, false) || !create_ecpri_rx_flow(port_id, true)) {
+      return false;
+    }
+    fmt::print("DPDK - Port {} receives only eCPRI; PTP remains on the kernel interface\n", port_id);
+  } else if (config.is_promiscuous_mode_enabled) {
     if (::rte_eth_promiscuous_enable(port_id) != 0) {
       fmt::print("DPDK - Error enabling promiscuous mode\n");
       return false;
