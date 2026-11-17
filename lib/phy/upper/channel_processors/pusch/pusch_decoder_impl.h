@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "pusch_bit_error_tracker.h"
 #include "pusch_codeblock_decoder.h"
 #include "ocudu/adt/mutexed_mpsc_queue.h"
 #include "ocudu/ocudulog/ocudulog.h"
@@ -47,19 +48,23 @@ public:
   /// \param[in] executor_     Task executor for asynchronous PUSCH code block decoding.
   /// \param[in] nof_prb       Number of PRBs.
   /// \param[in] nof_layers    Number of layers.
+  /// \param[in] bit_error_tracker_ [netsys] Optional UL bit error tracker. Set to \c nullptr to disable the
+  ///                               measurements.
 
-  pusch_decoder_impl(std::unique_ptr<ldpc_segmenter_rx>      segmenter_,
-                     std::shared_ptr<codeblock_decoder_pool> decoder_pool_,
-                     sch_crc                                 crc_set_,
-                     task_executor*                          executor_,
-                     unsigned                                nof_prb,
-                     unsigned                                nof_layers) :
+  pusch_decoder_impl(std::unique_ptr<ldpc_segmenter_rx>       segmenter_,
+                     std::shared_ptr<codeblock_decoder_pool>  decoder_pool_,
+                     sch_crc                                  crc_set_,
+                     task_executor*                           executor_,
+                     unsigned                                 nof_prb,
+                     unsigned                                 nof_layers,
+                     std::shared_ptr<pusch_bit_error_tracker> bit_error_tracker_ = nullptr) :
     logger(ocudulog::fetch_basic_logger("PHY")),
     segmenter(std::move(segmenter_)),
     decoder_pool(std::move(decoder_pool_)),
     crc_set(std::move(crc_set_)),
     executor(executor_),
-    softbits_buffer(pusch_constants::get_max_codeword_size(nof_prb, nof_layers).value())
+    softbits_buffer(pusch_constants::get_max_codeword_size(nof_prb, nof_layers).value()),
+    bit_error_tracker(std::move(bit_error_tracker_))
   {
     ocudu_assert(segmenter, "Invalid segmenter.");
     ocudu_assert(decoder_pool, "Invalid codeblock decoder pool.");
@@ -167,6 +172,11 @@ private:
   unsigned nof_codeblocks;
   /// CRC calculator for inner codeblock checks.
   crc_calculator* block_crc;
+  /// [netsys] UL bit error tracker. Set to \c nullptr if the measurements are disabled.
+  std::shared_ptr<pusch_bit_error_tracker> bit_error_tracker;
+  /// \brief [netsys] Indicates, for each codeblock, whether the receive buffer holds data bits that the decoder wrote
+  /// for the current transport block.
+  std::array<bool, MAX_NOF_SEGMENTS> cb_hard_bits_valid;
 
   // See the pusch_decoder_buffer interface for the documentation.
   span<log_likelihood_ratio> get_next_block_view(unsigned block_size) override;
@@ -193,6 +203,12 @@ private:
 
   /// Concatenates code blocks and returns the CRC checksum.
   unsigned concatenate_codeblocks();
+
+  /// \brief [netsys] Reports the current transmission to the UL bit error tracker.
+  ///
+  /// It must be called before the receive buffer is released and before the result is notified, while the LLRs and the
+  /// decoded data bits of the current transmission are still available.
+  void report_bit_errors(bool tb_crc_ok);
 };
 
 } // namespace ocudu

@@ -9,6 +9,7 @@ add_library(ocudu_pusch_demodulator STATIC
 
 add_library(ocudu_pusch_processor STATIC
         processor_factories.cpp
+        pusch_bit_error_tracker.cpp
         pusch_codeblock_decoder.cpp
         pusch_decoder_empty_impl.cpp
         pusch_decoder_hw_impl.cpp

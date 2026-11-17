@@ -48,6 +48,18 @@ struct pusch_decoder_factory_sw_configuration {
   task_executor*                               executor                  = nullptr;
   unsigned                                     nof_prb;
   unsigned                                     nof_layers;
+
+  /// \brief [netsys] LDPC encoder factory for the UL bit error measurements.
+  ///
+  /// The measurements are enabled only if both \c bit_error_encoder_factory and \c bit_error_rate_matcher_factory are
+  /// set.
+  std::shared_ptr<ldpc_encoder_factory> bit_error_encoder_factory;
+  /// [netsys] LDPC rate matcher factory for the UL bit error measurements.
+  std::shared_ptr<ldpc_rate_matcher_factory> bit_error_rate_matcher_factory;
+  /// \brief [netsys] Number of LDPC encoder and rate matcher pairs used concurrently by the UL bit error measurements.
+  ///
+  /// It should be equal to the number of threads that can complete the decoding of a transport block.
+  unsigned bit_error_nof_reencoders = 1;
 };
 
 std::shared_ptr<pusch_decoder_factory> create_pusch_decoder_factory_sw(pusch_decoder_factory_sw_configuration config);

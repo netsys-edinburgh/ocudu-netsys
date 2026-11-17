@@ -9,8 +9,11 @@
 
 #include "ocudu/adt/span.h"
 #include "ocudu/phy/upper/log_likelihood_ratio.h"
+#include "ocudu/ran/harq_id.h"
+#include "ocudu/ran/rnti.h"
 #include "ocudu/ran/sch/ldpc_base_graph.h"
 #include "ocudu/ran/sch/modulation_scheme.h"
+#include "ocudu/ran/slot_point.h"
 
 namespace ocudu {
 
@@ -57,6 +60,15 @@ public:
     bool new_data = true;
     /// Flag to denote last repetition (last HARQ transmission in a burst).
     bool last_repetition = true;
+    /// \brief [netsys] RNTI of the transmission.
+    ///
+    /// Together with \ref harq_id, it identifies the HARQ process for the UL bit error measurements. It does not
+    /// affect decoding.
+    rnti_t rnti = rnti_t::INVALID_RNTI;
+    /// [netsys] HARQ process identifier of the transmission. It does not affect decoding.
+    harq_id_t harq_id = INVALID_HARQ_ID;
+    /// [netsys] Slot of the transmission, reported by the UL bit error measurements. It does not affect decoding.
+    slot_point slot;
   };
 
   /// Default destructor.

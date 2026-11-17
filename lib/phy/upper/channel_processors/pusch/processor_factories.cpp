@@ -70,6 +70,15 @@ public:
     }
 
     decoder_pool = std::make_unique<pusch_decoder_impl::codeblock_decoder_pool>(codeblock_decoders);
+
+    // [netsys] Create the UL bit error tracker, shared by all the decoders created by this factory.
+    if (config.bit_error_encoder_factory && config.bit_error_rate_matcher_factory) {
+      bit_error_tracker =
+          std::make_shared<pusch_bit_error_tracker>(pusch_constants::get_max_codeword_size(nof_prb, nof_layers),
+                                                    *config.bit_error_encoder_factory,
+                                                    *config.bit_error_rate_matcher_factory,
+                                                    std::max(1U, config.bit_error_nof_reencoders));
+    }
   }
 
   std::unique_ptr<pusch_decoder> create() override
@@ -80,7 +89,7 @@ public:
     crcs.crc24B = crc_factory->create(crc_generator_poly::CRC24B);
 
     return std::make_unique<pusch_decoder_impl>(
-        segmenter_factory->create(), decoder_pool, std::move(crcs), executor, nof_prb, nof_layers);
+        segmenter_factory->create(), decoder_pool, std::move(crcs), executor, nof_prb, nof_layers, bit_error_tracker);
   }
 
 private:
@@ -90,6 +99,8 @@ private:
   task_executor*                                              executor;
   unsigned                                                    nof_prb;
   unsigned                                                    nof_layers;
+  /// [netsys] UL bit error tracker shared by all the decoders. It is \c nullptr if the measurements are disabled.
+  std::shared_ptr<pusch_bit_error_tracker> bit_error_tracker;
 };
 
 /// HW-accelerated PUSCH decoder factory.

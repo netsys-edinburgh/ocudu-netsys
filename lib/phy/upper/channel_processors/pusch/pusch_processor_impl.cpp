@@ -295,6 +295,11 @@ void pusch_processor_impl::process_data(span<uint8_t>                          d
     decoder_config.new_data            = pdu.codeword->new_data;
     decoder_config.last_repetition     = pdu.codeword->last_repetition;
 
+    // [netsys] HARQ process identity, used by the UL bit error measurements.
+    decoder_config.rnti    = pdu.rnti;
+    decoder_config.harq_id = pdu.harq_id;
+    decoder_config.slot    = pdu.slot;
+
     // Setup decoder.
     decoder_buffer =
         decoder->new_data(data, std::move(rm_buffer), notifier_adaptor.get_sch_data_notifier(), decoder_config);

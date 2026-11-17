@@ -11,6 +11,7 @@
 #include "ocudu/phy/upper/channel_processors/pusch/pusch_decoder_result.h"
 #include "ocudu/phy/upper/rx_buffer.h"
 #include "ocudu/ran/sch/sch_segmentation.h"
+#include <algorithm>
 
 using namespace ocudu;
 
@@ -331,6 +332,9 @@ void pusch_decoder_impl::codeblock_decode(unsigned cb_id)
         logger.error("Not enough codeblock decoder instances (RM only).");
       }
 
+      // [netsys] The data bits were decoded correctly in a previous transmission of this transport block.
+      cb_hard_bits_valid[cb_id] = true;
+
       if (cb_task_counter.fetch_sub(1) == 1) {
         join_and_notify();
       }
@@ -360,6 +364,14 @@ void pusch_decoder_impl::codeblock_decode(unsigned cb_id)
     } else {
       cb_stats[cb_id] = current_config.nof_ldpc_iterations;
     }
+
+    // [netsys] The data bits are valid if the LDPC decoder wrote them. On failure, the decoder returns without writing
+    // them if all the LLRs from the end of the message on are zero (see ldpc_decoder_impl::decode).
+    cb_hard_bits_valid[cb_id] =
+        nof_iters.has_value() ||
+        (decoder_ptr && std::any_of(rm_buffer.begin() + msg_length - 1, rm_buffer.end(), [](log_likelihood_ratio llr) {
+           return llr != 0;
+         }));
 
     if (cb_task_counter.fetch_sub(1) == 1) {
       join_and_notify();
@@ -429,6 +441,11 @@ void pusch_decoder_impl::join_and_notify()
   }
 
   // In case there are multiple codeblocks and at least one has a corrupted codeblock CRC, nothing to do.
+
+  // [netsys] Report the transmission while the LLRs and the receive buffer are still available.
+  if (bit_error_tracker && (current_config.harq_id != INVALID_HARQ_ID)) {
+    report_bit_errors(stats.tb_crc_ok);
+  }
 
   // Transfer last repetition flag, receive buffer ownership and the pointer to the notifier to the stack.
   bool                    last_repetition   = current_config.last_repetition;
@@ -502,4 +519,23 @@ unsigned pusch_decoder_impl::concatenate_codeblocks()
   ocudu_assert(tb_offset == tb_data.size(), "All TB bits should be filled at this point.");
 
   return tb_checksum;
+}
+
+void pusch_decoder_impl::report_bit_errors(bool tb_crc_ok)
+{
+  pusch_bit_error_tracker::tx_context ctx = {.rnti     = current_config.rnti,
+                                             .harq_id  = current_config.harq_id,
+                                             .slot     = current_config.slot,
+                                             .rv       = current_config.rv,
+                                             .new_data = current_config.new_data,
+                                             .tbs      = units::bytes(transport_block.size())};
+
+  span<const described_rx_codeblock> codeblocks = codeblock_llrs;
+
+  if (tb_crc_ok) {
+    bit_error_tracker->on_crc_ok(ctx, codeblocks, *unique_rm_buffer);
+  } else {
+    bit_error_tracker->on_crc_ko(
+        ctx, codeblocks, span<const bool>(cb_hard_bits_valid).first(codeblocks.size()), *unique_rm_buffer);
+  }
 }
