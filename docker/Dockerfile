@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
 # SPDX-FileCopyrightText: Copyright (C) 2026 OCUDU contributors
 # SPDX-License-Identifier: BSD-3-Clause-Open-MPI
@@ -110,13 +111,18 @@ RUN /src/docker/scripts/build_rohc.sh "${ROHC_VERSION}" ${MARCH} ${NUM_JOBS}
 ########################
 FROM builder-base-uhd AS builder-uhd
 
+ARG ENABLE_UHD=On
 ARG UHD_VERSION
 ARG MARCH
 ARG NUM_JOBS
 ARG TARGETARCH
 
-RUN UHD_ARCH=$([ "${TARGETARCH}" = "arm64" ] && echo "-mcpu=${MARCH}" || echo "-march=${MARCH}") && \
-    /src/docker/scripts/build_uhd.sh "${UHD_VERSION}" ${UHD_ARCH} ${NUM_JOBS}
+RUN if [ "$ENABLE_UHD" = "On" ] && [ -n "$UHD_VERSION" ]; then \
+      UHD_ARCH=$([ "${TARGETARCH}" = "arm64" ] && echo "-mcpu=${MARCH}" || echo "-march=${MARCH}") && \
+      /src/docker/scripts/build_uhd.sh "${UHD_VERSION}" ${UHD_ARCH} ${NUM_JOBS}; \
+    else \
+      mkdir -p /opt/uhd/${UHD_VERSION:-disabled}; \
+    fi
 
 
 #########################
@@ -124,12 +130,15 @@ RUN UHD_ARCH=$([ "${TARGETARCH}" = "arm64" ] && echo "-mcpu=${MARCH}" || echo "-
 #########################
 FROM builder-base-dpdk AS builder-dpdk
 
+COPY docker/patches/ /src/docker/patches/
+
 ARG DPDK_VERSION
 ARG MARCH
 ARG NUM_JOBS
 ARG TARGETARCH
 
-RUN DPDK_PLATFORM=$(case "${MARCH}" in *neoverse-n1*) echo n1sdp ;; *) echo "${MARCH}" ;; esac) && \
+RUN --mount=type=cache,target=/root/.cache/ccache \
+    DPDK_PLATFORM=$(case "${MARCH}" in *neoverse-n1*) echo n1sdp ;; *) echo "${MARCH}" ;; esac) && \
     DPDK_ARCH=$([ "${TARGETARCH}" = "arm64" ] && echo "-Dplatform=${DPDK_PLATFORM} -Dmax_numa_nodes=1" || echo "-Dcpu_instruction_set=${MARCH}") && \
     /src/docker/scripts/build_dpdk.sh "${DPDK_VERSION}" "${DPDK_ARCH}" ${NUM_JOBS}
 
@@ -164,7 +173,8 @@ ENV DPDK_DIR=/opt/dpdk/${DPDK_VERSION}
 # Full source added last: source changes only invalidate the compile step below
 ADD . /src
 
-RUN if [ -z "$NUM_JOBS" ]; then NUM_JOBS=$(nproc); fi \
+RUN --mount=type=cache,target=/src/ccache \
+    if [ -z "$NUM_JOBS" ]; then NUM_JOBS=$(nproc); fi \
     && ARCH_FLAG=$([ "${TARGETARCH}" = "arm64" ] && echo "-DMCPU=${MARCH}" || echo "-DMARCH=${MARCH}") \
     && mkdir -p /opt/ocudu/bin \
     && case "${COMPONENT}" in \
@@ -182,6 +192,7 @@ RUN if [ -z "$NUM_JOBS" ]; then NUM_JOBS=$(nproc); fi \
        esac \
     && /src/docker/scripts/builder.sh -c ${COMPILER} -m "-j${NUM_JOBS} ${TARGETS}" \
        -DBUILD_TESTING=False -DENABLE_UHD=${ENABLE_UHD} -DENABLE_DPDK=${ENABLE_DPDK} \
+       -DENABLE_PDSCH_HWACC=On -DENABLE_PUSCH_HWACC=On \
        ${ARCH_FLAG} -DCMAKE_INSTALL_PREFIX=/opt/ocudu ${EXTRA_CMAKE_ARGS} /src \
     && if [ -n "${BIN}" ]; then \
          cp /src/build/${SRC} /opt/ocudu/bin/${BIN}; \
@@ -369,10 +380,8 @@ ADD docker/scripts/install_*.sh docker/scripts/common.sh /usr/local/etc/
 ADD LICENSE /licenses/LICENSE
 RUN chmod +x /usr/local/etc/install_*.sh && \
     ln -sf /usr/local/etc/install_dependencies.sh /usr/local/etc/install_ocudu_dependencies.sh
-ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/opt/rohc/lib/:/opt/rohc/lib64/
-ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/opt/uhd/${UHD_VERSION}/lib/:/opt/uhd/${UHD_VERSION}/lib64/:/opt/uhd/${UHD_VERSION}/lib/x86_64-linux-gnu/:/opt/uhd/${UHD_VERSION}/lib/aarch64-linux-gnu/
-ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/opt/dpdk/${DPDK_VERSION}/lib/:/opt/dpdk/${DPDK_VERSION}/lib64/:/opt/dpdk/${DPDK_VERSION}/lib/x86_64-linux-gnu/:/opt/dpdk/${DPDK_VERSION}/lib/aarch64-linux-gnu/
-ENV PATH=$PATH:/opt/uhd/${UHD_VERSION}/bin/
+ENV LD_LIBRARY_PATH=/opt/rohc/lib/:/opt/rohc/lib64/:/opt/uhd/${UHD_VERSION}/lib/:/opt/uhd/${UHD_VERSION}/lib64/:/opt/uhd/${UHD_VERSION}/lib/x86_64-linux-gnu/:/opt/uhd/${UHD_VERSION}/lib/aarch64-linux-gnu/:/opt/dpdk/${DPDK_VERSION}/lib/:/opt/dpdk/${DPDK_VERSION}/lib64/:/opt/dpdk/${DPDK_VERSION}/lib/x86_64-linux-gnu/:/opt/dpdk/${DPDK_VERSION}/lib/aarch64-linux-gnu/
+ENV PATH=$PATH:/opt/uhd/${UHD_VERSION}/bin/:/opt/dpdk/${DPDK_VERSION}/bin/
 
 # Install base runtime dependencies shared by all targets
 RUN --mount=type=secret,id=rh_entitlement_cert,target=/etc/pki/entitlement/entitlement.pem \

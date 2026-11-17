@@ -25,14 +25,14 @@ install_dependencies_debian_ubuntu() {
     local -a pkgs=()
     local ARCH=""
     local -a build_pkgs=(
-        cmake make gcc g++ pkg-config
-        libfftw3-dev libmbedtls-dev libsctp-dev libyaml-cpp-dev libgtest-dev
+        cmake make gcc g++ pkg-config ccache
+        libfftw3-dev libmbedtls-dev libsctp-dev libyaml-cpp-dev libgtest-dev libzmq3-dev
     )
     # Customer binaries link only the single-precision FFTW, mbedcrypto, SCTP and
     # yaml-cpp shared libraries. Development packages, the mbedTLS TLS/X.509
     # libraries and GoogleTest are build-only and are not shipped at runtime.
     local -a run_pkgs=(
-        libfftw3-single3 libsctp1 libyaml-cpp0.8 libcap2-bin
+        libfftw3-single3 libsctp1 libyaml-cpp0.8 libcap2-bin libzmq5
     )
 
     # Runtime images are only built from Ubuntu 24.04 and newer, where mbedcrypto
@@ -114,10 +114,10 @@ install_dependencies_fedora() {
     local -a pkgs=()
 
     local -a build_pkgs=(
-        cmake make libatomic fftw-devel lksctp-tools-devel yaml-cpp-devel mbedtls-devel gtest-devel
+        cmake ccache make libatomic fftw-devel lksctp-tools-devel yaml-cpp-devel mbedtls-devel gtest-devel zeromq-devel
     )
     local -a run_pkgs=(
-        fftw-libs-single lksctp-tools yaml-cpp mbedtls libcap
+        fftw-libs-single lksctp-tools yaml-cpp mbedtls libcap zeromq
         boost-program-options boost-test
     )
     local -a extra_pkgs=(
@@ -153,10 +153,10 @@ install_dependencies_centos() {
     local -a pkgs=()
 
     local -a build_pkgs=(
-        cmake make libatomic fftw-devel lksctp-tools-devel yaml-cpp-devel mbedtls-devel gtest-devel
+        cmake make libatomic fftw-devel lksctp-tools-devel yaml-cpp-devel mbedtls-devel gtest-devel zeromq-devel
     )
     local -a run_pkgs=(
-        fftw-libs-single lksctp-tools yaml-cpp mbedtls
+        fftw-libs-single lksctp-tools yaml-cpp mbedtls zeromq
         boost-program-options boost-test
     )
     local -a extra_pkgs=(
@@ -191,10 +191,10 @@ install_dependencies_redhat() {
     local -a pkgs=()
 
     local -a build_pkgs=(
-        cmake make libatomic fftw-devel lksctp-tools-devel yaml-cpp-devel mbedtls-devel gtest-devel
+        cmake make libatomic fftw-devel lksctp-tools-devel yaml-cpp-devel mbedtls-devel gtest-devel zeromq-devel
     )
     local -a run_pkgs=(
-        fftw-libs-single lksctp-tools yaml-cpp mbedtls libcap libatomic
+        fftw-libs-single lksctp-tools yaml-cpp mbedtls libcap libatomic zeromq
         boost-program-options boost-test
     )
     local -a extra_pkgs=(
@@ -229,10 +229,10 @@ install_dependencies_arch() {
     local -a pkgs=()
 
     local -a build_pkgs=(
-        cmake fftw mbedtls3 yaml-cpp lksctp-tools gtest pkgconf
+        cmake ccache fftw mbedtls3 yaml-cpp lksctp-tools gtest pkgconf zeromq
     )
     local -a run_pkgs=(
-        fftw mbedtls3 yaml-cpp lksctp-tools libcap
+        fftw mbedtls3 yaml-cpp lksctp-tools libcap zeromq
     )
     local -a extra_pkgs=(
         zeromq libuhd boost dpdk libelf libdwarf elfutils capnproto eigen

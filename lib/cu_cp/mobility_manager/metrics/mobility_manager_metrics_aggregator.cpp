@@ -48,16 +48,30 @@ void mobility_manager_metrics_aggregator::aggregate_successful_intra_gnb_handove
   ++aggregated_mobility_manager_metrics.nof_successful_intra_gnb_handover_preparations;
 }
 
-/// \brief Aggregates the metrics for the requested handover execution.
-void mobility_manager_metrics_aggregator::aggregate_requested_handover_execution()
+void mobility_manager_metrics_aggregator::aggregate_requested_handover_execution(gnb_du_id_t source_du_id)
 {
   ++aggregated_mobility_manager_metrics.nof_handover_executions_requested;
+  aggregate_requested_handover_execution_on_du(source_du_id);
 }
 
-/// \brief Aggregates the metrics for the successful handover execution.
-void mobility_manager_metrics_aggregator::aggregate_successful_handover_execution()
+void mobility_manager_metrics_aggregator::aggregate_requested_handover_execution_on_du(gnb_du_id_t source_du_id)
+{
+  if (source_du_id != gnb_du_id_t::invalid) {
+    ++aggregated_mobility_manager_metrics.per_du_executions[source_du_id].nof_handover_executions_requested;
+  }
+}
+
+void mobility_manager_metrics_aggregator::aggregate_successful_handover_execution(gnb_du_id_t source_du_id)
 {
   ++aggregated_mobility_manager_metrics.nof_successful_handover_executions;
+  aggregate_successful_handover_execution_on_du(source_du_id);
+}
+
+void mobility_manager_metrics_aggregator::aggregate_successful_handover_execution_on_du(gnb_du_id_t source_du_id)
+{
+  if (source_du_id != gnb_du_id_t::invalid) {
+    ++aggregated_mobility_manager_metrics.per_du_executions[source_du_id].nof_successful_handover_executions;
+  }
 }
 
 void mobility_manager_metrics_aggregator::aggregate_intra_gnb_handover_execution_time(
@@ -92,5 +106,7 @@ mobility_management_metrics mobility_manager_metrics_aggregator::request_metrics
         std::chrono::milliseconds{intra_gnb_handover_execution_time_ms.get_max()};
   }
   intra_gnb_handover_execution_time_ms.reset();
+  // netsys: every counter covers one reporting period (the campus5g collectors expect per-period values).
+  aggregated_mobility_manager_metrics = {};
   return metrics;
 }

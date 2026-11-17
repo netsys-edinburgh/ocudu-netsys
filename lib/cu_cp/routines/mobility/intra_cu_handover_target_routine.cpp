@@ -58,7 +58,12 @@ void intra_cu_handover_target_routine::operator()(coro_context<async_task<void>>
     CORO_EARLY_RETURN();
   }
   // Notify mobility manager about successful handover execution.
-  mobility_mng.get_metrics_handler().aggregate_successful_handover_execution();
+  {
+    // netsys: also count the execution on the source DU.
+    auto* src_ue = ue_mng.find_du_ue(request.source_ue_index);
+    mobility_mng.get_metrics_handler().aggregate_successful_handover_execution(src_ue != nullptr ? src_ue->get_du_id()
+                                                                                                 : gnb_du_id_t::invalid);
+  }
   mobility_mng.get_metrics_handler().aggregate_intra_gnb_handover_execution_time(
       std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start_time));
 

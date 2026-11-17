@@ -5,6 +5,10 @@
 
 #pragma once
 
+#include "ocudu/ran/pci.h"
+#include <unordered_map>
+#include <vector>
+
 namespace ocudu {
 
 namespace app_services {
@@ -38,6 +42,7 @@ struct o_cu_up_unit_dependencies {
   dlt_pcap&                                    gtpu_pcap;
   timer_manager&                               timers;
   io_broker&                                   io_brk;
+  std::unordered_map<uint64_t, pci_t>           du_pci_map;
 };
 
 } // namespace ocudu

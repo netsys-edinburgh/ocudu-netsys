@@ -1,0 +1,7 @@
+[submodule "Metrics"]
+	path = Metrics
+	url = git@github.com:netsys-edinburgh/Metrics.git
+
+[submodule "campus5g-ng"]
+	path = campus5g-ng
+	url = git@github.com:netsys-edinburgh/campus5g-ng.git

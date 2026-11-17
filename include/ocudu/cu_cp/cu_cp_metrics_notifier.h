@@ -9,8 +9,34 @@
 #include "ocudu/ran/gnb_du_id.h"
 #include "ocudu/rrc/rrc_metrics.h"
 #include "ocudu/rrc/rrc_ue.h"
+#include "ocudu/ngap/mobility_management_metrics.h"
+#include "ocudu/ran/pci.h"
+#include "ocudu/ran/rnti.h"
+#include "ocudu/support/format/fmt_to_c_str.h"
+#include <optional>
+#include <vector>
 
 namespace ocudu {
+
+/// UE measurement report — per-UE serving + neighbor cell measurements.
+struct cu_cp_ue_meas_report {
+  rnti_t rnti;
+  pci_t  serving_pci;
+
+  struct cell_meas {
+    std::optional<float> rsrp_dbm; ///< SS-RSRP in dBm
+    std::optional<float> rsrq_db;  ///< SS-RSRQ in dB
+    std::optional<float> sinr_db;  ///< SS-SINR in dB
+  };
+
+  cell_meas serving;
+
+  struct neighbor {
+    pci_t     pci;
+    cell_meas meas;
+  };
+  std::vector<neighbor> neighbors;
+};
 
 /// CU-CP Metrics report.
 struct cu_cp_metrics_report {
@@ -23,6 +49,9 @@ struct cu_cp_metrics_report {
     pci_t pci;
     /// RRC connection state of the UE.
     ocucp::rrc_state rrc_connection_state;
+    /// Masked IMEISV of the UE. Present when known from NGAP (initial attach or inter-CU handover);
+    /// preserved across intra-CU handovers so the RNTI→IMEISV mapping is maintained.
+    std::optional<uint64_t> masked_imeisv;
   };
   struct cell_info {
     nr_cell_global_id_t cgi;
@@ -33,13 +62,16 @@ struct cu_cp_metrics_report {
     /// ID of the DU connected to the CU-CP.
     gnb_du_id_t            id;
     std::vector<cell_info> cells;
-    rrc_du_metrics         rrc_metrics;
+
+    rrc_du_metrics                rrc_metrics;
+    du_handover_execution_metrics ho_metrics;
   };
 
-  std::vector<ue_info>        ues;
-  std::vector<du_info>        dus;
-  std::vector<ngap_info>      ngaps;
-  mobility_management_metrics mobility;
+  std::vector<ue_info>              ues;
+  std::vector<du_info>              dus;
+  std::vector<ngap_info>            ngaps;
+  mobility_management_metrics       mobility;
+  std::vector<cu_cp_ue_meas_report> ue_measurements; ///< Latest measurement reports from UEs
 };
 
 /// Interface used by the CU-CP to report metrics.
@@ -52,8 +84,7 @@ public:
   virtual void notify_metrics_report_request(const cu_cp_metrics_report& report) = 0;
 };
 
-inline std::string format_rrc_metrics(const std::vector<cu_cp_metrics_report::du_info>& report,
-                                      const mobility_management_metrics&                mobility_metrics)
+inline std::string format_rrc_metrics(const std::vector<cu_cp_metrics_report::du_info>& report)
 {
   fmt::memory_buffer buffer;
 
@@ -189,28 +220,13 @@ inline std::string format_rrc_metrics(const std::vector<cu_cp_metrics_report::du
     }
     fmt::format_to(std::back_inserter(buffer), " ]");
 
+    fmt::format_to(std::back_inserter(buffer),
+                   " nof_handover_executions_requested={} nof_successful_handover_executions={}",
+                   du_info.ho_metrics.nof_handover_executions_requested,
+                   du_info.ho_metrics.nof_successful_handover_executions);
+
     fmt::format_to(std::back_inserter(buffer), " ],");
   }
-
-  fmt::format_to(std::back_inserter(buffer),
-                 " nof_intra_gnb_handover_preparations_requested={} nof_successful_intra_gnb_handover_preparations={}",
-                 mobility_metrics.nof_intra_gnb_handover_preparations_requested,
-                 mobility_metrics.nof_successful_intra_gnb_handover_preparations);
-  fmt::format_to(std::back_inserter(buffer),
-                 " nof_handover_executions_requested={} nof_successful_handover_executions={}",
-                 mobility_metrics.nof_handover_executions_requested,
-                 mobility_metrics.nof_successful_handover_executions);
-  if (mobility_metrics.mean_intra_gnb_handover_execution_time.has_value() and
-      mobility_metrics.max_intra_gnb_handover_execution_time.has_value()) {
-    fmt::format_to(std::back_inserter(buffer),
-                   " mean_intra_gnb_handover_execution_time={}ms max_intra_gnb_handover_execution_time={}ms",
-                   mobility_metrics.mean_intra_gnb_handover_execution_time->count(),
-                   mobility_metrics.max_intra_gnb_handover_execution_time->count());
-  }
-  fmt::format_to(std::back_inserter(buffer),
-                 " nof_ues_configured_with_intra_gnb_cho={} nof_successful_intra_gnb_cho_executions={}",
-                 mobility_metrics.nof_ues_configured_with_intra_gnb_cho,
-                 mobility_metrics.nof_successful_intra_gnb_cho_executions);
 
   return to_c_str(buffer);
 }

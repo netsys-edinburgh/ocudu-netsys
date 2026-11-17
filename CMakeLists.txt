@@ -70,7 +70,7 @@ option(ENABLE_CUDA           "Enable NVIDIA CUDA acceleration"              OFF)
 option(ENABLE_MKL            "Enable Intel MKL"                             ON)
 option(ENABLE_FFTZ           "Enable AMD Optimized FFT for Zen"             ON)
 option(ENABLE_ARMPL          "Enable ARM performance library"               ON)
-option(ENABLE_DPDK           "Enable DPDK"                                  OFF)
+option(ENABLE_DPDK           "Enable DPDK"                                  ON)
 option(ENABLE_LIBNUMA        "Enable LibNUMA"                               OFF)
 option(ENABLE_EXPORT         "Enable PIC and export libraries"              OFF)
 option(ENABLE_TRX_DRIVER     "Enable Amarisoft TRX driver library"          OFF)
@@ -85,6 +85,7 @@ option(FORCE_DEBUG_INFO      "Add debug information to Release build"       OFF)
 option(ENABLE_OCUDU_TRACY   "Enable using the tracy profiler if available" OFF)
 option(ENABLE_SPLIT_DWARF    "Emit split DWARF (.dwo) objects to cut linker memory use" OFF)
 option(ENABLE_RELATIVE_PATHS "Remap source dir to . in debug info and __FILE__" OFF)
+option(ENABLE_USDT           "Enable USDT/SystemTap tracing probes in upper PHY" OFF)
 if (BUILD_TESTING)
     if (${CMAKE_BUILD_TYPE} STREQUAL "Debug")
         option(TEST_GDB_PRINTERS  "Enable tests for GDB pretty printers"  OFF)
@@ -144,6 +145,18 @@ endif ()
 if (ENABLE_ASAN AND ENABLE_TSAN)
     message(FATAL_ERROR "ASAN and TSAN cannot be enabled at the same time.")
 endif ()
+
+########################################################################
+# ENABLE_USDT
+########################################################################
+if (ENABLE_USDT)
+  find_path(SDT_INCLUDE_DIR sys/sdt.h)
+  if (NOT SDT_INCLUDE_DIR)
+    message(FATAL_ERROR "ENABLE_USDT requires systemtap-sdt-devel (sys/sdt.h not found).")
+  endif ()
+  add_compile_definitions(OCUDU_USDT_ENABLED)
+  message(STATUS "USDT/SystemTap tracing probes enabled (sys/sdt.h found at ${SDT_INCLUDE_DIR}).")
+endif (ENABLE_USDT)
 
 # Hardware acceleration for both PUSCH and PDSCH is enabled by default when using DPDK.
 if (ENABLE_DPDK)
@@ -827,3 +840,8 @@ sbom_add(
     FILE    "${CMAKE_SOURCE_DIR}/LICENSE"
 )
 sbom_finalize(NO_VERIFY)
+
+########################################################################
+# OCUDU PHY TAP
+########################################################################
+add_subdirectory(ocudu_phy_tap)

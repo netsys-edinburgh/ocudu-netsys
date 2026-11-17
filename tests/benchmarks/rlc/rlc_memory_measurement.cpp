@@ -36,6 +36,7 @@ public:
     metrics_collector(std::make_unique<rlc_bearer_metrics_collector>(gnb_du_id_t{},
                                                                      du_ue_index_t{},
                                                                      rb_id_t{},
+                                                                     INVALID_PCI,
                                                                      timer_duration{1},
                                                                      this,
                                                                      ue_executor))
@@ -63,6 +64,7 @@ public:
     metrics_collector(std::make_unique<rlc_bearer_metrics_collector>(gnb_du_id_t{},
                                                                      du_ue_index_t{},
                                                                      rb_id_t{},
+                                                                     INVALID_PCI,
                                                                      timer_duration{1},
                                                                      this,
                                                                      ue_executor))
@@ -94,6 +96,7 @@ public:
     metrics_collector(std::make_unique<rlc_bearer_metrics_collector>(gnb_du_id_t{},
                                                                      du_ue_index_t{},
                                                                      rb_id_t{},
+                                                                     INVALID_PCI,
                                                                      timer_duration{1},
                                                                      this,
                                                                      ue_executor))
@@ -135,6 +138,7 @@ public:
     metrics_collector(std::make_unique<rlc_bearer_metrics_collector>(gnb_du_id_t{},
                                                                      du_ue_index_t{},
                                                                      rb_id_t{},
+                                                                     INVALID_PCI,
                                                                      timer_duration{1},
                                                                      this,
                                                                      ue_executor))

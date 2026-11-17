@@ -183,6 +183,9 @@ void conditional_handover_reconfiguration_routine::operator()(coro_context<async
     }
   }
 
+  // netsys: per-DU count only; the DU-agnostic intra-gNB execution metric does not count conditional handovers.
+  mobility_mng.get_metrics_handler().aggregate_requested_handover_execution_on_du(source_ue.get_du_id());
+
   logger.debug("ue={}: \"{}\" finished successfully", source_ue.get_ue_index(), name());
 
   CORO_RETURN(true);

@@ -39,6 +39,7 @@ struct rlc_entity_creation_message {
   rlc_srb_am_rx_window_seg_pool*       srb_am_rx_pool = nullptr;
   rlc_srb_am_tx_window_seg_pool*       srb_am_tx_pool = nullptr;
   byte_buffer_recycler*                pdu_recycler   = nullptr;
+  pci_t                                pci            = INVALID_PCI;
 };
 
 /// Creates an instance of a RLC bearer

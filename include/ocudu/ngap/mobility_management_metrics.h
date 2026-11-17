@@ -5,10 +5,18 @@
 
 #pragma once
 
+#include "ocudu/ran/gnb_du_id.h"
 #include <chrono>
+#include <map>
 #include <optional>
 
 namespace ocudu {
+
+// Per-DU intra-gNB handover execution counters, see TS 28.552 section 5.1.1.6.2.
+struct du_handover_execution_metrics {
+  unsigned nof_handover_executions_requested  = 0;
+  unsigned nof_successful_handover_executions = 0;
+};
 
 // Mobility Management metrics, see TS 28.552 section 5.1.1.6.
 struct mobility_management_metrics {
@@ -40,6 +48,9 @@ struct mobility_management_metrics {
   // Section 5.1.3.7.1: Intra-gNB handovers in a split gNB deployment.
   unsigned nof_intra_gnb_handover_preparations_requested  = 0;
   unsigned nof_successful_intra_gnb_handover_preparations = 0;
+
+  // Intra-gNB handover executions tracked per source DU (netsys). The DU-agnostic counters above stay as upstream.
+  std::map<gnb_du_id_t, du_handover_execution_metrics> per_du_executions;
 };
 
 } // namespace ocudu

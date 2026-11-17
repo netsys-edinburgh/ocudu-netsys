@@ -46,6 +46,7 @@ cu_up_manager_impl::cu_up_manager_impl(const cu_up_manager_impl_config&       co
   cu_up_id(config.cu_up_id),
   cu_up_name(config.cu_up_name),
   plmns(config.plmns),
+  du_pci_map(config.du_pci_map),
   stop_command(dependencies.stop_command),
   e1aps(dependencies.e1aps),
   qos(config.qos),
@@ -114,7 +115,15 @@ cu_up_manager_impl::handle_bearer_context_setup_request(const e1ap_bearer_contex
     }
   }
 
-  // 3. Create response.
+  // 3. Tag PDCP flows with the serving cell PCI derived from the gNB-DU-ID.
+  if (msg.gnb_du_id.has_value()) {
+    auto it = du_pci_map.find(msg.gnb_du_id.value());
+    if (it != du_pci_map.end()) {
+      ue_ctxt->update_serving_pci(it->second);
+    }
+  }
+
+  // 4. Create response
   response.ue_index = ue_ctxt->get_index();
   response.success  = true;
   return response;
@@ -136,7 +145,7 @@ cu_up_manager_impl::handle_bearer_context_modification_request(const e1ap_bearer
   return execute_and_continue_on_blocking(ue_ctxt->ue_exec_mapper->ctrl_executor(),
                                           exec_mapper.ctrl_executor(),
                                           timers,
-                                          launch_async<cu_up_bearer_context_modification_routine>(*ue_ctxt, msg));
+                                          launch_async<cu_up_bearer_context_modification_routine>(*ue_ctxt, msg, du_pci_map));
 }
 
 async_task<void>

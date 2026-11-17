@@ -6,6 +6,7 @@
 #pragma once
 
 #include "ocudu/ngap/mobility_management_metrics.h"
+#include "ocudu/ran/gnb_du_id.h"
 #include "ocudu/support/math/stats.h"
 
 namespace ocudu::ocucp {
@@ -37,11 +38,20 @@ public:
   /// \brief Aggregates the metrics for the successful intra-gNB handover preparation.
   void aggregate_successful_intra_gnb_handover_preparation();
 
-  /// \brief Aggregates the metrics for the requested handover execution.
-  void aggregate_requested_handover_execution();
+  /// \brief Aggregates the metrics for the requested handover execution, also on the given source DU.
+  /// \param[in] source_du_id Source DU of the handover; gnb_du_id_t::invalid counts only the DU-agnostic metric.
+  void aggregate_requested_handover_execution(gnb_du_id_t source_du_id);
 
-  /// \brief Aggregates the metrics for the successful handover execution.
-  void aggregate_successful_handover_execution();
+  /// \brief Aggregates only the per-DU metric of a requested handover execution (conditional handover, which the
+  /// DU-agnostic intra-gNB handover execution metric does not count).
+  void aggregate_requested_handover_execution_on_du(gnb_du_id_t source_du_id);
+
+  /// \brief Aggregates the metrics for the successful handover execution, also on the given source DU.
+  /// \param[in] source_du_id Source DU of the handover; gnb_du_id_t::invalid counts only the DU-agnostic metric.
+  void aggregate_successful_handover_execution(gnb_du_id_t source_du_id);
+
+  /// \brief Aggregates only the per-DU metric of a successful handover execution (conditional handover).
+  void aggregate_successful_handover_execution_on_du(gnb_du_id_t source_du_id);
 
   /// \brief Aggregates the execution time of a successful intra-gNB handover.
   void aggregate_intra_gnb_handover_execution_time(std::chrono::milliseconds execution_time);
@@ -54,7 +64,7 @@ public:
   /// \brief Aggregates the metrics for the successful intra-gNB conditional handover execution.
   void aggregate_successful_intra_gnb_cho_execution();
 
-  /// \brief Returns the mobility manager metrics and starts a new reporting period for the execution times.
+  /// \brief Returns the mobility manager metrics of the reporting period and starts a new one (all counters reset).
   mobility_management_metrics request_metrics_report();
 
 private:

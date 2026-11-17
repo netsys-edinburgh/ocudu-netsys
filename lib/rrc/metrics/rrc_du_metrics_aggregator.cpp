@@ -149,4 +149,5 @@ void rrc_du_metrics_aggregator::collect_metrics(rrc_du_metrics& metrics)
   connection_metrics.reset();
   inactive_connection_metrics.reset();
   connection_setup_time_ms.reset();
+  connection_reestablishment_metrics = {};
 }

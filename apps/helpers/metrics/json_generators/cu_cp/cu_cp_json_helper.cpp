@@ -112,10 +112,23 @@ void to_json(nlohmann::json& json, const rrc_connection_fail_counter_with_cause&
   }
 }
 
+void to_json(nlohmann::json& json, const cu_cp_metrics_report::cell_info& cell)
+{
+  json["pci"] = cell.pci;
+  json["plmn"] = cell.cgi.plmn_id.to_string();
+  json["nci"]  = cell.cgi.nci.value();
+}
+
 void to_json(nlohmann::json& json, const ocudu::cu_cp_metrics_report::du_info& metrics)
 {
   // RRC-DU metrics.
-  json["gnb_du_id"]                                   = metrics.id;
+  json["gnb_du_id"] = metrics.id;
+  json["cells"]     = metrics.cells;
+
+  nlohmann::json& ho_exec                           = json["handover_execution"];
+  ho_exec["nof_handover_executions_requested"]      = metrics.ho_metrics.nof_handover_executions_requested;
+  ho_exec["nof_successful_handover_executions"]     = metrics.ho_metrics.nof_successful_handover_executions;
+
   nlohmann::json& rrc_connection                      = json["rrc_connection_number"];
   rrc_connection["mean_nof_rrc_connections"]          = metrics.rrc_metrics.mean_nof_rrc_connections;
   rrc_connection["max_nof_rrc_connections"]           = metrics.rrc_metrics.max_nof_rrc_connections;
@@ -184,6 +197,16 @@ void to_json(nlohmann::json& json, const cu_cp_rrc_metrics_json& metrics)
   json["nof_successful_intra_gnb_cho_executions"] = metrics.mobility.nof_successful_intra_gnb_cho_executions;
 }
 
+void to_json(nlohmann::json& json, const cu_cp_metrics_report::ue_info& ue)
+{
+  json["rnti"] = fmt::format("0x{:04x}", static_cast<uint16_t>(ue.rnti));
+  if (ue.masked_imeisv.has_value()) {
+    json["masked_imeisv"] = ue.masked_imeisv.value();
+  }
+  json["du_id"] = static_cast<uint64_t>(ue.du_id);
+  json["pci"]   = ue.pci;
+}
+
 } // namespace ocudu
 
 nlohmann::json ocudu::app_helpers::json_generators::generate(const cu_cp_metrics_report& report)
@@ -199,6 +222,38 @@ nlohmann::json ocudu::app_helpers::json_generators::generate(const cu_cp_metrics
   cu_cp_json["id"]    = "srs-cu-cp";
   cu_cp_json["ngaps"] = ngap_metrics;
   cu_cp_json["rrcs"]  = rrc_metrics;
+  cu_cp_json["ues"]   = report.ues;
+
+  // UE measurement reports.
+  if (!report.ue_measurements.empty()) {
+    nlohmann::json meas_array = nlohmann::json::array();
+    for (const auto& r : report.ue_measurements) {
+      nlohmann::json m;
+      m["rnti"]        = fmt::format("0x{:04x}", static_cast<uint16_t>(r.rnti));
+      m["serving_pci"] = static_cast<int>(r.serving_pci);
+
+      auto write_cell_meas = [](nlohmann::json& j, const cu_cp_ue_meas_report::cell_meas& cm) {
+        if (cm.rsrp_dbm.has_value()) j["rsrp"] = cm.rsrp_dbm.value();
+        if (cm.rsrq_db.has_value())  j["rsrq"] = cm.rsrq_db.value();
+        if (cm.sinr_db.has_value())  j["sinr"] = cm.sinr_db.value();
+      };
+
+      nlohmann::json serving_json;
+      write_cell_meas(serving_json, r.serving);
+      m["serving"] = serving_json;
+
+      nlohmann::json neighbors_array = nlohmann::json::array();
+      for (const auto& nb : r.neighbors) {
+        nlohmann::json n;
+        n["pci"] = static_cast<int>(nb.pci);
+        write_cell_meas(n, nb.meas);
+        neighbors_array.push_back(std::move(n));
+      }
+      m["neighbors"] = neighbors_array;
+      meas_array.push_back(std::move(m));
+    }
+    cu_cp_json["ue_measurements"] = meas_array;
+  }
 
   return json;
 }

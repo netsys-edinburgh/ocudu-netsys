@@ -48,7 +48,8 @@ std::unique_ptr<rlc_entity> ocudu::create_rlc_entity(const rlc_entity_creation_m
                                              *msg.ue_executor,
                                              *msg.timers,
                                              *msg.drb_um_rx_pool,
-                                             *msg.pdu_recycler);
+                                             *msg.pdu_recycler,
+                                             msg.pci);
     case rlc_mode::am:
       return std::make_unique<rlc_am_entity>(msg.gnb_du_id,
                                              msg.ue_index,
@@ -66,7 +67,8 @@ std::unique_ptr<rlc_entity> ocudu::create_rlc_entity(const rlc_entity_creation_m
                                              *msg.timers,
                                              msg.rb_id.is_srb() ? *msg.srb_am_rx_pool : *msg.drb_am_rx_pool,
                                              msg.rb_id.is_srb() ? *msg.srb_am_tx_pool : *msg.drb_am_tx_pool,
-                                             *msg.pdu_recycler);
+                                             *msg.pdu_recycler,
+                                             msg.pci);
     default:
       ocudu_terminate("RLC mode not supported.");
   }

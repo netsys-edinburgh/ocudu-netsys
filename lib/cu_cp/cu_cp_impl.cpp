@@ -221,6 +221,7 @@ cu_cp_impl::cu_cp_impl(const cu_cp_configuration& config_) :
                                                  .du_handler       = du_db,
                                                  .ngap_handler     = ngap_db,
                                                  .mobility_handler = mobility_mng,
+                                                 .meas_handler     = this,
                                                  .logger           = logger}),
   cu_cp_cfgtr(mobility_manager_ev_notifier, du_db, ngap_db, ue_mng)
 {
@@ -755,6 +756,12 @@ async_task<bool> cu_cp_impl::handle_ue_context_transfer(cu_cp_ue_index_t ue_inde
     // Transfer UE AMBR from source UE to new UE.
     ue->set_ue_ambr(source_ue->get_ue_ambr());
 
+    // Carry IMEISV to the new UE so the RNTI-to-IMEISV mapping is preserved after the RNTI change.
+    // The AMF is not contacted during intra-CU handovers, so no new NGAP message carries the IMEISV.
+    if (source_ue->get_masked_imeisv().has_value()) {
+      ue->set_masked_imeisv(source_ue->get_masked_imeisv());
+    }
+
     return true;
   };
 
@@ -819,6 +826,13 @@ void cu_cp_impl::handle_cho_reconfiguration_sent(const cu_cp_cho_target_request&
 
   cu_cp_ue* ue = ue_mng.find_du_ue(request.target_ue_index);
 
+  {
+    auto* src_ue = ue_mng.find_du_ue(request.source_ue_index);
+    if (src_ue != nullptr) {
+      mobility_mng.get_metrics_handler().aggregate_requested_handover_execution(src_ue->get_du_id());
+    }
+  }
+
   // Schedule conditional_handover_target_routine on the target UE's task scheduler.
   ue->get_task_sched().schedule_async_task(launch_async<conditional_handover_target_routine>(
       request, ue_mng, du_db, cu_up_db, *this, *this, mobility_mng, logger));
@@ -871,6 +885,17 @@ async_task<bool> cu_cp_impl::handle_handover_ue_context_push(cu_cp_ue_index_t so
     // Transfer location reporting configuration and UE AMBR from source UE to target UE.
     ue->get_location_manager().set_config(source_ue->get_location_manager().get_config());
     ue->set_ue_ambr(source_ue->get_ue_ambr());
+
+    // Carry IMEISV across the handover. The AMF is not contacted during an intra-CU
+    // handover, so no further NGAP message supplies it; without this the target context
+    // starts blank and the RNTI-to-IMEISV mapping is lost for the rest of the session.
+    if (source_ue->get_masked_imeisv().has_value()) {
+      ue->set_masked_imeisv(source_ue->get_masked_imeisv());
+    } else {
+      logger.info("ue={}: no MaskedIMEISV on source ue={} to carry across handover",
+                  target_ue_index,
+                  source_ue_index);
+    }
 
     return true;
   };
@@ -1099,6 +1124,22 @@ cu_cp_impl::handle_new_initial_context_setup_request(const ngap_init_context_set
           CORO_BEGIN(ctx);
           CORO_RETURN(make_unexpected(ngap_init_context_setup_failure{}));
         });
+  }
+
+  // Store the masked IMEISV signalled by the AMF. It is decoded into the request by
+  // ngap_asn1_helpers, but no routine consumes it, so without this the UE context keeps
+  // masked_imeisv unset for every normally-attached UE and the CU-CP metrics report omits the
+  // field. Only inter-CU handover targets used to populate it, which cannot occur in a
+  // single-CU deployment.
+  if (request.masked_imeisv.has_value()) {
+    ue->set_masked_imeisv(request.masked_imeisv);
+    logger.info("ue={}: stored MaskedIMEISV=0x{:x} from Initial Context Setup",
+                request.ue_index,
+                request.masked_imeisv.value());
+  } else {
+    logger.warning("ue={}: AMF sent no MaskedIMEISV in Initial Context Setup; this UE will "
+                   "have no RNTI-to-IMEISV mapping for the whole session",
+                   request.ue_index);
   }
 
   return launch_async<initial_context_setup_routine>(request,
@@ -1492,6 +1533,8 @@ void cu_cp_impl::handle_xnap_handover_success_received(cu_cp_ue_index_t         
   // guard timer on the paths above that bail out, leaving the CHO neither completed nor cancelled.
   ue->get_cho_context()->cho_execution_timer.stop();
 
+  mobility_mng.get_metrics_handler().aggregate_successful_handover_execution(ue->get_du_id());
+
   ue->get_task_sched().schedule_async_task(launch_async<inter_cu_conditional_handover_source_completion_routine>(
       source_ue_index, winner_cgi, ue_mng, cu_up_db, winner_xnap, &xnap_db, *this, logger));
 }
@@ -1819,9 +1862,91 @@ cu_cp_impl::handle_measurement_config_request(cu_cp_ue_index_t                  
   return cell_meas_mng.get_measurement_config(ue_index, nci, current_meas_config, cond_meas, candidate_pcis);
 }
 
+/// Convert raw 3GPP NR measurement quantity (uint8) to float.
+/// Returns nullopt when value == 0 (indicating "out of range / not available").
+static std::optional<float> nr_rsrp_to_dbm(std::optional<uint8_t> raw)
+{
+  if (!raw.has_value() || raw.value() == 0) {
+    return std::nullopt;
+  }
+  return static_cast<float>(raw.value()) - 156.0f; // TS 38.133 Table 10.1.6.1-1
+}
+
+static std::optional<float> nr_rsrq_to_db(std::optional<uint8_t> raw)
+{
+  if (!raw.has_value() || raw.value() == 0) {
+    return std::nullopt;
+  }
+  return (static_cast<float>(raw.value()) - 87.0f) * 0.5f; // TS 38.133 Table 10.1.7.1-1
+}
+
+static std::optional<float> nr_sinr_to_db(std::optional<uint8_t> raw)
+{
+  if (!raw.has_value() || raw.value() == 0) {
+    return std::nullopt;
+  }
+  return (static_cast<float>(raw.value()) - 46.0f) * 0.5f; // TS 38.133 Table 10.1.8.1-1
+}
+
+static cu_cp_ue_meas_report::cell_meas extract_cell_meas(const rrc_meas_quant_results& q)
+{
+  cu_cp_ue_meas_report::cell_meas meas;
+  meas.rsrp_dbm = nr_rsrp_to_dbm(q.rsrp);
+  meas.rsrq_db  = nr_rsrq_to_db(q.rsrq);
+  meas.sinr_db  = nr_sinr_to_db(q.sinr);
+  return meas;
+}
+
 void cu_cp_impl::handle_measurement_report(cu_cp_ue_index_t ue_index, const rrc_meas_results& meas_results)
 {
   cell_meas_mng.report_measurement(ue_index, meas_results);
+
+  // Buffer measurement report for metrics export.
+  cu_cp_ue* ue = ue_mng.find_du_ue(ue_index);
+  if (ue == nullptr) {
+    return;
+  }
+
+  cu_cp_ue_meas_report report;
+  report.rnti        = ue->get_c_rnti();
+  report.serving_pci = ue->get_pci();
+
+  // Serving cell measurements (first entry in serving MO list).
+  if (!meas_results.meas_result_serving_mo_list.empty()) {
+    const auto& serv_mo = *meas_results.meas_result_serving_mo_list.begin();
+    const auto& ssb     = serv_mo.meas_result_serving_cell.cell_results.results_ssb_cell;
+    if (ssb.has_value()) {
+      report.serving = extract_cell_meas(ssb.value());
+    }
+  }
+
+  // Neighbor cell measurements.
+  if (meas_results.meas_result_neigh_cells.has_value()) {
+    for (const auto& neighbor : meas_results.meas_result_neigh_cells->meas_result_list_nr) {
+      if (!neighbor.pci.has_value()) {
+        continue;
+      }
+      const auto& ssb = neighbor.cell_results.results_ssb_cell;
+      if (!ssb.has_value()) {
+        continue;
+      }
+      cu_cp_ue_meas_report::neighbor neighbor_report;
+      neighbor_report.pci  = neighbor.pci.value();
+      neighbor_report.meas = extract_cell_meas(ssb.value());
+      report.neighbors.push_back(std::move(neighbor_report));
+    }
+  }
+
+  std::lock_guard<std::mutex> lock(meas_buf_mutex);
+  meas_buf.push_back(std::move(report));
+}
+
+std::vector<cu_cp_ue_meas_report> cu_cp_impl::drain_ue_measurements()
+{
+  std::lock_guard<std::mutex> lock(meas_buf_mutex);
+  std::vector<cu_cp_ue_meas_report> measurements;
+  measurements.swap(meas_buf);
+  return measurements;
 }
 
 bool cu_cp_impl::handle_cell_config_update_request(nr_cell_identity nci, const serving_cell_meas_config& serv_cell_cfg)

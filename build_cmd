@@ -1,0 +1,4 @@
+cd build
+# all do make -j never make of part of code
+make -j
+

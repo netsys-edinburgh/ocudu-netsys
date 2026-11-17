@@ -23,6 +23,7 @@ struct e1ap_bearer_context_setup_request {
   std::optional<std::chrono::seconds>                                     ue_inactivity_timer;
   /// Set when the source forwards over a direct path (TS 37.483 section 9.3.1.98).
   std::optional<bool> direct_forwarding_path_available;
+  std::optional<uint64_t>                                                 gnb_du_id;
 };
 
 /// \brief Response to a bearer context setup request including UE index for E1AP map.
