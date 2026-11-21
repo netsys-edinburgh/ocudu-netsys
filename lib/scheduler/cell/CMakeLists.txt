@@ -9,3 +9,5 @@ add_library(sched_cell OBJECT
         resource_grid.cpp
         scheduler_prb.cpp
         cell_harq_manager.cpp)
+# [netsys] The HARQ manager reports the per-TB HARQ statistics to the dumper.
+target_link_libraries(sched_cell sched_harq_tb_dump)

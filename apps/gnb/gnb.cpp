@@ -45,6 +45,7 @@
 #include "ocudu/gtpu/gtpu_teid_pool_factory.h"
 #include "ocudu/instrumentation/traces/scheduler_event_tracer.h"
 #include "ocudu/ngap/gateways/n2_connection_client_factory.h"
+#include "ocudu/scheduler/harq_tb_dump_session.h"
 #include "ocudu/support/backtrace.h"
 #include "ocudu/support/config_parsers.h"
 #include "ocudu/support/cpu_features.h"
@@ -333,6 +334,10 @@ int main(int argc, char** argv)
                              gnb_cfg.trace_cfg.nof_tracing_events_before_severe,
                              gnb_logger);
   }
+
+  // [netsys] Start the HARQ TB dump if harq_tb_dump is configured. It is created before the EAL and the worker threads,
+  // so that its threads do not inherit their CPU affinity, and it is destroyed after all of them.
+  harq_tb_dump_session harq_tb_dump(gnb_cfg.harq_tb_dump_address);
 
 #ifdef DPDK_FOUND
   std::unique_ptr<dpdk::dpdk_eal> eal;

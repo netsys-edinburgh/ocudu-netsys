@@ -3,6 +3,7 @@
 // Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
 
 #include "cell_harq_manager.h"
+#include "../logging/harq_tb_dumper.h"
 #include "ocudu/scheduler/resource_grid_util.h"
 #include "ocudu/scheduler/result/pdsch_info.h"
 #include "ocudu/scheduler/result/pusch_info.h"
@@ -160,21 +161,6 @@ static constexpr unsigned MAX_RETX_TIMEOUT = NOF_SFNS / 2;
 // [netsys] Per-TB HARQ statistics: number of reTxs and time from the first transmission to the final ACK/CRC.
 namespace {
 
-/// [netsys] Creates the logger used for the HARQ statistics and enables its info level.
-ocudulog::basic_logger& create_harq_stats_logger()
-{
-  ocudulog::basic_logger& logger = ocudulog::fetch_basic_logger("HARQSTAT");
-  logger.set_level(ocudulog::basic_levels::info);
-  return logger;
-}
-
-/// [netsys] Returns the HARQ statistics logger. It is created only once, on the first call.
-ocudulog::basic_logger& harq_stats_logger()
-{
-  static ocudulog::basic_logger& logger = create_harq_stats_logger();
-  return logger;
-}
-
 /// [netsys] Converts a number of slots to a duration, using the numerology of \c ref.
 std::chrono::microseconds slots_to_duration(slot_difference nof_slots, slot_point ref)
 {
@@ -182,32 +168,37 @@ std::chrono::microseconds slots_to_duration(slot_difference nof_slots, slot_poin
   return std::chrono::microseconds{nof_slots * 1000 / static_cast<int>(ref.nof_slots_per_subframe())};
 }
 
-/// [netsys] Logs the final outcome of the TB held by HARQ process \c h.
+/// [netsys] Queues the final outcome of the TB held by HARQ process \c h, if the HARQ dump is enabled.
 template <typename HarqType>
-void report_tb_outcome(const HarqType& h, bool is_dl, const char* result)
+void report_tb_outcome(const HarqType& h, bool is_dl, harq_tb_result result)
 {
-  ocudulog::basic_logger& logger = harq_stats_logger();
-  if (not logger.info.enabled() or not h.slot_first_tx.valid()) {
+  harq_tb_dumper* dumper = harq_tb_dumper::get();
+  if (dumper == nullptr or not h.slot_first_tx.valid()) {
     return;
   }
 
   // Time from the first transmission to the slot at which the last ACK/CRC was received over the air.
-  const slot_difference     nof_slots = h.slot_ack - h.slot_first_tx;
-  std::chrono::microseconds t_ack     = slots_to_duration(nof_slots, h.slot_first_tx);
+  const slot_difference           nof_slots = h.slot_ack - h.slot_first_tx;
+  const std::chrono::microseconds t_ack     = slots_to_duration(nof_slots, h.slot_first_tx);
+  const auto                      wall_time = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::system_clock::now().time_since_epoch());
 
-  logger.info("HARQ_TB dir={} ue={} rnti={} h_id={} result={} nof_retxs={} max_retxs={} tbs={} first_tx={} "
-              "ack_slot={} t_ack_us={}",
-              is_dl ? "DL" : "UL",
-              h.ue_idx,
-              h.rnti,
-              h.h_id,
-              result,
-              static_cast<unsigned>(h.nof_retxs),
-              static_cast<unsigned>(h.max_nof_harq_retxs),
-              h.prev_tx_params.tbs,
-              h.slot_first_tx,
-              h.slot_ack,
-              t_ack.count());
+  harq_tb_record record{};
+  record.wall_time_ns   = static_cast<uint64_t>(wall_time.count());
+  record.first_tx_count = h.slot_first_tx.count();
+  record.ack_count      = h.slot_ack.count();
+  record.tbs_bytes      = h.prev_tx_params.tbs.value();
+  record.t_ack_us       = static_cast<uint32_t>(t_ack.count());
+  record.rnti           = static_cast<uint16_t>(h.rnti);
+  record.ue_index       = static_cast<uint16_t>(h.ue_idx);
+  record.h_id           = static_cast<uint8_t>(h.h_id);
+  record.dir            = is_dl ? harq_tb_direction::dl : harq_tb_direction::ul;
+  record.result         = result;
+  record.nof_retxs      = h.nof_retxs;
+  record.max_retxs      = h.max_nof_harq_retxs;
+  record.numerology     = static_cast<uint8_t>(h.slot_first_tx.numerology());
+
+  dumper->push(record);
 }
 
 } // namespace
@@ -298,7 +289,7 @@ void cell_harq_repository<IsDl>::handle_harq_ack_timeout(harq_type& h, slot_poin
 
   if (h.status == harq_state_t::pending_retx) {
     // This HARQ is being starved by the scheduler.
-    report_tb_outcome(h, IsDl, "retx_timeout"); // [netsys]
+    report_tb_outcome(h, IsDl, harq_tb_result::retx_timeout); // [netsys]
     logger.info("rnti={} h_id={}: Discarding {} HARQ. Cause: The scheduler took too long to reschedule this HARQ "
                 "process ({} slots elapsed since last NOK).",
                 h.rnti,
@@ -310,7 +301,7 @@ void cell_harq_repository<IsDl>::handle_harq_ack_timeout(harq_type& h, slot_poin
     timeout_notifier.on_retx_timeout(h.ue_idx, IsDl);
   } else {
     // The UCI outcome was never propagated to the HARQ.
-    report_tb_outcome(h, IsDl, "feedback_timeout"); // [netsys]
+    report_tb_outcome(h, IsDl, harq_tb_result::feedback_timeout); // [netsys]
     logger.warning("rnti={} h_id={}: Discarding {} HARQ. Cause: Timeout was reached ({} slots) to receive the "
                    "respective HARQ-ACK indication from lower layers (HARQ-ACK slot={})",
                    h.rnti,
@@ -506,9 +497,9 @@ void cell_harq_repository<IsDl>::handle_ack(harq_type& h, bool ack)
 
   // [netsys] Report TBs that were ACKed after at least one reTx, and TBs that are dropped after the last reTx.
   if (ack and h.nof_retxs > 0) {
-    report_tb_outcome(h, IsDl, "ack");
+    report_tb_outcome(h, IsDl, harq_tb_result::ack);
   } else if (not ack and h.nof_retxs >= h.max_nof_harq_retxs) {
-    report_tb_outcome(h, IsDl, h.retxs_cancelled ? "cancelled" : "max_retx");
+    report_tb_outcome(h, IsDl, h.retxs_cancelled ? harq_tb_result::cancelled : harq_tb_result::max_retx);
   }
 
   if (ack or h.nof_retxs >= h.max_nof_harq_retxs) {
@@ -663,7 +654,7 @@ void cell_harq_repository<IsDl>::cancel_retxs(harq_type& h)
   }
   if (h.status == harq_state_t::pending_retx) {
     // If a retx is pending, do not allow it to take place.
-    report_tb_outcome(h, IsDl, "cancelled"); // [netsys]
+    report_tb_outcome(h, IsDl, harq_tb_result::cancelled); // [netsys]
     dealloc_harq(h);
     return;
   }
@@ -717,7 +708,7 @@ void harq_utils::base_harq_process_handle<IsDl>::reset()
 {
   // [netsys] A TB that already had reTxs is being dropped (e.g. its reTx grant could not be allocated).
   if (impl->status != harq_state_t::empty and impl->nof_retxs > 0) {
-    report_tb_outcome(*impl, IsDl, "reset");
+    report_tb_outcome(*impl, IsDl, harq_tb_result::reset);
   }
   harq_repo->dealloc_harq(*impl);
 }

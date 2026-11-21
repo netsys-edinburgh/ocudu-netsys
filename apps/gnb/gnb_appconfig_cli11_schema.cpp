@@ -48,6 +48,12 @@ void ocudu::configure_cli11_with_gnb_appconfig_schema(CLI::App& app, gnb_appconf
       ->capture_default_str()
       ->check(CLI::Range(22, 32));
   add_option(app, "--ran_node_name", gnb_cfg.ran_node_name, "RAN node name")->capture_default_str();
+  // [netsys] Per-TB HARQ statistics dump.
+  add_option(app,
+             "--harq_tb_dump",
+             gnb_cfg.harq_tb_dump_address,
+             "ZeroMQ address to bind for the per-TB HARQ statistics dump. Disabled if empty")
+      ->capture_default_str();
 
   // Loggers section.
   configure_cli11_with_logger_appconfig_schema(app, gnb_cfg.log_cfg);

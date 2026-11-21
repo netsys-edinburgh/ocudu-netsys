@@ -57,6 +57,10 @@ void ocudu::fill_gnb_appconfig_in_yaml_schema(YAML::Node& node, const gnb_appcon
   node["gnb_id"]            = config.gnb_id.id;
   node["gnb_id_bit_length"] = static_cast<unsigned>(config.gnb_id.bit_length);
   node["ran_node_name"]     = config.ran_node_name;
+  // [netsys] Per-TB HARQ statistics dump.
+  if (!config.harq_tb_dump_address.empty()) {
+    node["harq_tb_dump"] = config.harq_tb_dump_address;
+  }
 
   app_services::fill_app_resource_usage_config_in_yaml_schema(node, config.metrics_cfg.rusage_config);
   app_services::fill_metrics_appconfig_in_yaml_schema(node, config.metrics_cfg.metrics_service_cfg);
