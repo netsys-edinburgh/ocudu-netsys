@@ -55,8 +55,10 @@ rlc_tx_am_entity::rlc_tx_am_entity(gnb_du_id_t                          gnb_du_i
 {
   metrics_low.metrics_set_mode(rlc_mode::am);
 
-  // [netsys] Enable the info level of the RLC statistics logger, independently of the RLC logger level.
-  stats_logger.get_basic_logger().set_level(ocudulog::basic_levels::info);
+  // [netsys] The RLC statistics are disabled unless configured. The level must always be set, because a logger that is
+  // never configured has all its channels enabled.
+  stats_logger.get_basic_logger().set_level(cfg.enable_retx_stats ? ocudulog::basic_levels::info
+                                                                  : ocudulog::basic_levels::none);
 
   // check PDCP SN length
   ocudu_assert(config.pdcp_sn_len == pdcp_sn_size::size12bits || config.pdcp_sn_len == pdcp_sn_size::size18bits,

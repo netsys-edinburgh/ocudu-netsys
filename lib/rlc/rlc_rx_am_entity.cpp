@@ -34,8 +34,10 @@ rlc_rx_am_entity::rlc_rx_am_entity(gnb_du_id_t                       gnb_du_id,
 {
   metrics.metrics_set_mode(rlc_mode::am);
 
-  // [netsys] Enable the info level of the RLC statistics logger, independently of the RLC logger level.
-  stats_logger.get_basic_logger().set_level(ocudulog::basic_levels::info);
+  // [netsys] The RLC statistics are disabled unless configured. The level must always be set, because a logger that is
+  // never configured has all its channels enabled.
+  stats_logger.get_basic_logger().set_level(cfg.enable_retx_stats ? ocudulog::basic_levels::info
+                                                                  : ocudulog::basic_levels::none);
 
   // check status_prohibit_timer
   ocudu_assert(status_prohibit_timer.is_valid(), "Cannot create RLC RX AM, status_prohibit_timer not configured.");
@@ -566,7 +568,7 @@ expected<byte_buffer_chain> rlc_rx_am_entity::reassemble_sdu(rlc_rx_am_sdu_info&
 void rlc_rx_am_entity::refresh_status_report()
 {
   // [netsys] Generation time of this STATUS report, used as the NACK time of the SNs NACKed in it.
-  const auto t_now = std::chrono::steady_clock::now();
+  const auto t_now = cfg.enable_retx_stats ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 
   status_owned_by_writer->reset();
   /*
@@ -587,7 +589,9 @@ void rlc_rx_am_entity::refresh_status_report()
       logger.log_debug("SDU complete. sn={}", i);
     } else {
       // [netsys] SN i is NACKed in this report. try_emplace does not overwrite, so the first NACK time is kept.
-      first_nack_time.try_emplace(i, t_now);
+      if (cfg.enable_retx_stats) {
+        first_nack_time.try_emplace(i, t_now);
+      }
       if (not rx_window.has_sn(i)) {
         // No segment received, NACK the whole SDU
         rlc_am_status_nack nack;

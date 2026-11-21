@@ -20,6 +20,8 @@ static void fill_du_high_metrics_layers_section(YAML::Node node, const du_high_u
   node["enable_rlc"]      = config.enable_rlc;
   node["enable_mac"]      = config.enable_mac;
   node["enable_du_proc"]  = config.enable_du_proc;
+  // [netsys] Per-SDU RLC reTx statistics.
+  node["enable_rlc_retx_stats"] = config.enable_rlc_retx_stats;
 }
 
 static void fill_du_high_metrics_section(YAML::Node node, const du_high_unit_metrics_config& config)

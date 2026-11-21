@@ -2883,6 +2883,10 @@ static void configure_cli11_metrics_layers_args(CLI::App& app, du_high_unit_metr
   add_option(
       app, "--enable_du_proc", metrics_params.enable_du_proc, "Enable DU management and control procedure metrics")
       ->capture_default_str();
+  // [netsys] Per-SDU RLC reTx statistics.
+  add_option(
+      app, "--enable_rlc_retx_stats", metrics_params.enable_rlc_retx_stats, "Enable per-SDU RLC reTx statistics logs")
+      ->capture_default_str();
 }
 
 static void configure_cli11_metrics_args(CLI::App& app, du_high_unit_metrics_config& metrics_params)
