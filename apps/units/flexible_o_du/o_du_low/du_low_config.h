@@ -76,6 +76,8 @@ struct du_low_unit_expert_upper_phy_config {
   bool enable_phy_tap = false;
   /// PHY tap plugin arguments.
   std::string phy_tap_arguments;
+  /// [netsys] Enables the per-TB UL bit error statistics of the software PUSCH decoder.
+  bool enable_ul_bit_error_stats = false;
 };
 
 /// DU low receive symbols print trigger configuration.

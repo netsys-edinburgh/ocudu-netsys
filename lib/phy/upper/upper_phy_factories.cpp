@@ -805,15 +805,18 @@ create_ul_processor_factory(const upper_phy_factory_configuration& config,
     decoder_config.nof_layers                = config.pusch_max_nof_layers;
 
     // [netsys] LDPC encoder and rate matcher used by the UL bit error measurements to regenerate the transmitted
-    // codeblocks. A transport block can complete its decoding in a PUSCH or in a PUSCH decoder executor thread.
-    decoder_config.bit_error_encoder_factory = create_ldpc_encoder_factory_sw(config.ldpc_encoder_type);
-    report_fatal_error_if_not(decoder_config.bit_error_encoder_factory,
-                              "Invalid LDPC encoder factory of type {}.",
-                              config.ldpc_encoder_type);
-    decoder_config.bit_error_rate_matcher_factory = create_ldpc_rate_matcher_factory_sw();
-    report_fatal_error_if_not(decoder_config.bit_error_rate_matcher_factory, "Invalid LDPC rate matcher factory.");
-    decoder_config.bit_error_nof_reencoders = dependencies.executors.pusch_executor.max_concurrency +
-                                              dependencies.executors.pusch_decoder_executor.max_concurrency;
+    // codeblocks. A transport block can complete its decoding in a PUSCH or in a PUSCH decoder executor thread. The
+    // measurements are disabled unless configured: without these factories, no bit error tracker is created.
+    if (config.enable_ul_bit_error_stats) {
+      decoder_config.bit_error_encoder_factory = create_ldpc_encoder_factory_sw(config.ldpc_encoder_type);
+      report_fatal_error_if_not(decoder_config.bit_error_encoder_factory,
+                                "Invalid LDPC encoder factory of type {}.",
+                                config.ldpc_encoder_type);
+      decoder_config.bit_error_rate_matcher_factory = create_ldpc_rate_matcher_factory_sw();
+      report_fatal_error_if_not(decoder_config.bit_error_rate_matcher_factory, "Invalid LDPC rate matcher factory.");
+      decoder_config.bit_error_nof_reencoders = dependencies.executors.pusch_executor.max_concurrency +
+                                                dependencies.executors.pusch_decoder_executor.max_concurrency;
+    }
 
     if (metric_notifier) {
       decoder_config.decoder_factory = create_ldpc_decoder_metric_decorator_factory(

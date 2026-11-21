@@ -278,6 +278,12 @@ static void configure_cli11_expert_phy_args(CLI::App& app, du_low_unit_expert_up
              expert_phy_params.phy_tap_arguments,
              "PHY tap plugin argument string passed during construction.")
       ->capture_default_str();
+  // [netsys] Per-TB UL bit error statistics.
+  add_option(app,
+             "--enable_ul_bit_error_stats",
+             expert_phy_params.enable_ul_bit_error_stats,
+             "Enables the per-TB UL bit error statistics of the software PUSCH decoder.")
+      ->capture_default_str();
 }
 
 #ifdef DPDK_FOUND

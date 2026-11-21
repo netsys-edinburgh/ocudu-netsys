@@ -287,6 +287,8 @@ struct upper_phy_factory_configuration {
   std::optional<std::string> phy_tap_arguments;
   /// Informs the PHY tap plugin if the TDD configuration if present.
   std::optional<tdd_ul_dl_config_common> phy_tap_tdd_pattern;
+  /// [netsys] Enables the per-TB UL bit error statistics of the software PUSCH decoder (UL_BITERR log lines).
+  bool enable_ul_bit_error_stats = false;
   /// \brief LDPC encoder type.
   ///
   /// Use of these options:
