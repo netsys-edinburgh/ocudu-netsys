@@ -83,7 +83,7 @@ jobs:
             elif [ "$BRANCH_NAME" == "test" ]; then
               tags="${{ env.PREFIX }}-${DATE_TAG},${{ env.PREFIX }}-next"
             elif [ "$BRANCH_NAME" == "mac-measurement" ]; then
-              tags="${{ env.PREFIX }}-${DATE_TAG},${{ env.PREFIX }}-mac-measurement"
+              tags="ghcr.io/netsys-edinburgh/${{ matrix.REPOSITORY }}:mac-measurement"
             fi
           fi
           tags="${tags//:-/:}"
