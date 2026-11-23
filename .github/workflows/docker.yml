@@ -8,6 +8,7 @@ on:
     branches:
       - main
       - test
+      - mac-measurement
   release:
     types: [published]
 
@@ -81,6 +82,8 @@ jobs:
               tags="${{ env.PREFIX }}-${DATE_TAG},${{ env.PREFIX }}-latest"
             elif [ "$BRANCH_NAME" == "test" ]; then
               tags="${{ env.PREFIX }}-${DATE_TAG},${{ env.PREFIX }}-next"
+            elif [ "$BRANCH_NAME" == "mac-measurement" ]; then
+              tags="${{ env.PREFIX }}-${DATE_TAG},${{ env.PREFIX }}-mac-measurement"
             fi
           fi
           tags="${tags//:-/:}"
