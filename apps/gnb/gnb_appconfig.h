@@ -46,6 +46,9 @@ struct gnb_appconfig {
   std::string ran_node_name = "gnb01";
   /// [netsys] ZeroMQ address of the per-TB HARQ statistics dump, e.g. "tcp://127.0.0.1:5557". Empty means disabled.
   std::string harq_tb_dump_address;
+  /// [netsys] ZeroMQ address of the per-SDU RLC AM reTx statistics dump, e.g. "tcp://127.0.0.1:5556". Empty means
+  /// disabled.
+  std::string rlc_sdu_dump_address;
   /// Buffer pool configuration.
   app_services::buffer_pool_appconfig buffer_pool_config;
   /// Expert configuration.

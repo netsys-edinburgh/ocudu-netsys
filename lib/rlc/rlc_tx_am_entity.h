@@ -8,6 +8,7 @@
 #include "rlc_am_pdu.h"
 #include "rlc_pdu_recycler.h"
 #include "rlc_retx_queue.h"
+#include "rlc_sdu_dumper.h"
 #include "rlc_sdu_queue_lockfree.h"
 #include "rlc_tx_entity.h"
 #include "ocudu/rlc/rlc_window_seg_pools.h"
@@ -151,8 +152,8 @@ private:
 
   bool max_retx_reached = false;
 
-  /// [netsys] Dedicated logger for per-SDU RLC reTx statistics. Uses the same prefix as the RLC bearer logger.
-  rlc_bearer_logger stats_logger;
+  /// [netsys] DU UE index, reported in the per-SDU RLC reTx statistics.
+  du_ue_index_t stats_ue_index;
 
 public:
   rlc_tx_am_entity(gnb_du_id_t                          gnb_du_id,
@@ -353,11 +354,12 @@ private:
   /// \param sn The SN of the PDU to check
   void check_sn_reached_max_retx(uint32_t sn);
 
-  /// [netsys] Logs the outcome of the SDU with the given SN, which must still be in the TX window.
+  /// [netsys] Reports the outcome of the SDU with the given SN to the RLC SDU dump, if it is enabled. The SDU must
+  /// still be in the TX window.
   /// \param sn SN of the SDU.
-  /// \param result Outcome of the SDU (e.g. "ack" or "max_retx").
+  /// \param result Outcome of the SDU.
   /// \param t_now Time at which the outcome was determined.
-  void report_sdu_outcome(uint32_t sn, const char* result, std::chrono::steady_clock::time_point t_now);
+  void report_sdu_outcome(uint32_t sn, rlc_sdu_result result, std::chrono::steady_clock::time_point t_now);
 
   /// Called whenever the buffer state has been changed by upper layers (i.e new SDU or SDU discard) or the size of the
   /// own status PDU has changed so that lower layers need to be informed about the new buffer state. This function

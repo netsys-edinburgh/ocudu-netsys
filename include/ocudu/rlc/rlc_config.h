@@ -658,8 +658,6 @@ struct rlc_rx_am_config {
   // Implementation-specific parameters that are not specified by 3GPP
   /// Maximum number of visited SNs in the RX window when building a status report.
   std::optional<uint32_t> max_sn_per_status;
-  /// [netsys] Enables the per-SDU UL RLC reTx statistics (RLC_UL_SDU log lines).
-  bool enable_retx_stats = false;
 };
 
 /// \brief Configurable Tx parameters for RLC AM
@@ -683,8 +681,6 @@ struct rlc_tx_am_config {
   uint32_t queue_size;       ///< SDU queue size in PDUs
   uint32_t queue_size_bytes; ///< SDU queue size in bytes
   uint32_t max_window; ///< Custom parameter to limit the maximum window size for memory reasons. 0 means no limit.
-  /// [netsys] Enables the per-SDU DL RLC reTx statistics (RLC_SDU log lines).
-  bool enable_retx_stats = false;
 };
 
 /// \brief Configurable parameters for RLC AM

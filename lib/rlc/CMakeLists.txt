@@ -14,7 +14,9 @@ set(SOURCES
   rlc_rx_am_entity.cpp
   rlc_rx_tm_entity.cpp
   rlc_rx_um_entity.cpp
+  rlc_sdu_dumper.cpp
 )
 
 add_library(ocudu_rlc STATIC ${SOURCES})
-target_link_libraries(ocudu_rlc ocudu_instrumentation ocudu_support ocudu_pcap)
+# [netsys] netsys_stats streams the per-SDU RLC AM reTx statistics.
+target_link_libraries(ocudu_rlc ocudu_instrumentation ocudu_support ocudu_pcap netsys_stats)

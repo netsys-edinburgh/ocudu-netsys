@@ -1565,17 +1565,6 @@ void ocudu::generate_du_high_config(odu::du_high_configuration& du_hi_cfg, const
   du_hi_cfg.ran.mac_cfg.initial_crnti = to_rnti(0x4601);
   du_hi_cfg.ran.sched_cfg             = generate_scheduler_expert_config(du_high_unit_cfg);
 
-  // [netsys] Propagate the RLC reTx statistics switch to the RLC configuration of all the SRBs and DRBs.
-  const bool enable_rlc_retx_stats = du_high_unit_cfg.metrics.layers_cfg.enable_rlc_retx_stats;
-  for (auto& srb_entry : du_hi_cfg.ran.srbs) {
-    srb_entry.second.rlc.am.tx.enable_retx_stats = enable_rlc_retx_stats;
-    srb_entry.second.rlc.am.rx.enable_retx_stats = enable_rlc_retx_stats;
-  }
-  for (auto& qos_entry : du_hi_cfg.ran.qos) {
-    qos_entry.second.rlc.am.tx.enable_retx_stats = enable_rlc_retx_stats;
-    qos_entry.second.rlc.am.rx.enable_retx_stats = enable_rlc_retx_stats;
-  }
-
   du_hi_cfg.rlc.drb_rx_window_seg_size      = du_high_unit_cfg.rlc_cfg.drb_rx_window_seg_size;
   du_hi_cfg.rlc.drb_rx_window_seg_pool_size = du_high_unit_cfg.rlc_cfg.drb_rx_window_seg_pool_size;
   du_hi_cfg.rlc.drb_tx_window_seg_size      = du_high_unit_cfg.rlc_cfg.drb_tx_window_seg_size;

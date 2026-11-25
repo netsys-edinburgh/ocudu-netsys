@@ -30,14 +30,10 @@ rlc_rx_am_entity::rlc_rx_am_entity(gnb_du_id_t                       gnb_du_id,
   reassembly_timer(ue_timer_factory.create_timer()),
   ue_executor(ue_executor_),
   pcap_context(ue_index, rb_id, config),
-  stats_logger("RLCSTAT", {gnb_du_id, ue_index, rb_id, "UL"})
+  stats_ue_index(ue_index),
+  stats_rb_id(rb_id)
 {
   metrics.metrics_set_mode(rlc_mode::am);
-
-  // [netsys] The RLC statistics are disabled unless configured. The level must always be set, because a logger that is
-  // never configured has all its channels enabled.
-  stats_logger.get_basic_logger().set_level(cfg.enable_retx_stats ? ocudulog::basic_levels::info
-                                                                  : ocudulog::basic_levels::none);
 
   // check status_prohibit_timer
   ocudu_assert(status_prohibit_timer.is_valid(), "Cannot create RLC RX AM, status_prohibit_timer not configured.");
@@ -203,21 +199,14 @@ void rlc_rx_am_entity::handle_data_pdu(byte_buffer_slice buf)
    * - if all bytes of the RLC SDU with SN = x are received:
    */
   if (rx_window.has_sn(header.sn) && rx_window[header.sn].fully_received) {
-    // [netsys] Report SNs that were NACKed before being fully received, and forget their NACK time.
-    auto nack_it = first_nack_time.find(header.sn);
-    if (nack_it != first_nack_time.end()) {
-      const auto t_us =
-          std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nack_it->second);
-      stats_logger.log_info("RLC_UL_SDU sn={} t_nack_to_rx_us={}", header.sn, t_us.count());
-      first_nack_time.erase(nack_it);
-    }
-
     /*
      * - reassemble the RLC SDU from AMD PDU(s) with SN = x, remove RLC headers when doing so and deliver
      *   the reassembled RLC SDU to upper layer;
      */
     rlc_rx_am_sdu_info&         sdu_info = rx_window[header.sn];
     expected<byte_buffer_chain> sdu      = reassemble_sdu(sdu_info, header.sn);
+    // [netsys] Report the SDU if its SN was NACKed before. This is done after the reassembly, to know its length.
+    report_recovered_sdu(header.sn, sdu.has_value() ? sdu.value().length() : 0);
     if (!sdu) {
       logger.log_error("Dropped SDU, failed to reassemble. sn={}", header.sn);
       metrics.metrics_add_lost_pdus(1);
@@ -523,6 +512,36 @@ void rlc_rx_am_entity::update_segment_inventory(rlc_rx_am_sdu_info& rx_sdu) cons
   rx_sdu.fully_received = false;
 }
 
+void rlc_rx_am_entity::report_recovered_sdu(uint32_t sn, size_t sdu_len)
+{
+  // Most SNs are never NACKed, so skip the lookup when there is nothing to find.
+  if (first_nack_time.empty()) {
+    return;
+  }
+  auto nack_it = first_nack_time.find(sn);
+  if (nack_it == first_nack_time.end()) {
+    return;
+  }
+  const std::chrono::steady_clock::time_point t_first_nack = nack_it->second;
+  first_nack_time.erase(nack_it);
+
+  rlc_sdu_dumper* dumper = rlc_sdu_dumper::get();
+  if (dumper == nullptr) {
+    return;
+  }
+
+  // Time from the generation of the first STATUS report that NACKed the SN until its full reception.
+  const auto t_us =
+      std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t_first_nack);
+
+  rlc_sdu_record record = make_rlc_sdu_record(stats_ue_index, stats_rb_id, rlc_sdu_direction::ul);
+  record.t_us           = static_cast<uint32_t>(t_us.count());
+  record.sn             = sn;
+  record.sdu_len        = static_cast<uint32_t>(sdu_len);
+  record.result         = rlc_sdu_result::recovered;
+  dumper->push(record);
+}
+
 expected<byte_buffer_chain> rlc_rx_am_entity::reassemble_sdu(rlc_rx_am_sdu_info& sdu_info, uint32_t sn)
 {
   // Sanity check
@@ -567,8 +586,10 @@ expected<byte_buffer_chain> rlc_rx_am_entity::reassemble_sdu(rlc_rx_am_sdu_info&
 
 void rlc_rx_am_entity::refresh_status_report()
 {
-  // [netsys] Generation time of this STATUS report, used as the NACK time of the SNs NACKed in it.
-  const auto t_now = cfg.enable_retx_stats ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+  // [netsys] Generation time of this STATUS report, used as the NACK time of the SNs NACKed in it. The NACK times are
+  // only tracked while the RLC SDU dump is enabled.
+  const bool stats_enabled = rlc_sdu_dumper::get() != nullptr;
+  const auto t_now         = stats_enabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 
   status_owned_by_writer->reset();
   /*
@@ -589,7 +610,7 @@ void rlc_rx_am_entity::refresh_status_report()
       logger.log_debug("SDU complete. sn={}", i);
     } else {
       // [netsys] SN i is NACKed in this report. try_emplace does not overwrite, so the first NACK time is kept.
-      if (cfg.enable_retx_stats) {
+      if (stats_enabled) {
         first_nack_time.try_emplace(i, t_now);
       }
       if (not rx_window.has_sn(i)) {

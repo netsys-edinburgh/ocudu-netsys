@@ -1489,8 +1489,6 @@ struct du_high_unit_metrics_layer_config {
   bool enable_mac          = false;
   /// Enable DU management and control procedure metrics.
   bool enable_du_proc = false;
-  /// [netsys] Enable the per-SDU RLC reTx statistics. It is independent of \c enable_rlc.
-  bool enable_rlc_retx_stats = false;
 
   /// Returns true if one or more layers are enabled, otherwise false.
   bool are_metrics_enabled() const { return enable_scheduler || enable_rlc || enable_mac || enable_du_proc; }

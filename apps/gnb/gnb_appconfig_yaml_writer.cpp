@@ -61,6 +61,10 @@ void ocudu::fill_gnb_appconfig_in_yaml_schema(YAML::Node& node, const gnb_appcon
   if (!config.harq_tb_dump_address.empty()) {
     node["harq_tb_dump"] = config.harq_tb_dump_address;
   }
+  // [netsys] Per-SDU RLC AM reTx statistics dump.
+  if (!config.rlc_sdu_dump_address.empty()) {
+    node["rlc_sdu_dump"] = config.rlc_sdu_dump_address;
+  }
 
   app_services::fill_app_resource_usage_config_in_yaml_schema(node, config.metrics_cfg.rusage_config);
   app_services::fill_metrics_appconfig_in_yaml_schema(node, config.metrics_cfg.metrics_service_cfg);

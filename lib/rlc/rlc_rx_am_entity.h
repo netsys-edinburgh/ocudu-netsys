@@ -7,6 +7,7 @@
 #include "rlc_am_interconnect.h"
 #include "rlc_am_pdu.h"
 #include "rlc_rx_entity.h"
+#include "rlc_sdu_dumper.h"
 #include "ocudu/adt/expected.h"
 #include "ocudu/rlc/rlc_window_seg_pools.h"
 #include "ocudu/support/executors/task_executor.h"
@@ -133,12 +134,20 @@ private:
 
   bool stopped = false;
 
-  /// [netsys] Dedicated logger for per-SDU UL RLC reTx statistics. Uses the same prefix as the RLC bearer logger.
-  rlc_bearer_logger stats_logger;
+  /// [netsys] DU UE index and radio bearer, reported in the per-SDU RLC reTx statistics.
+  du_ue_index_t stats_ue_index;
+  rb_id_t       stats_rb_id;
 
   /// [netsys] Time at which each SN was first NACKed in a generated STATUS report. Entries are removed once the SN is
   /// fully received. Only accessed from the ue_executor.
   std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> first_nack_time;
+
+  /// \brief [netsys] Reports a fully received SDU to the RLC SDU dump, if its SN was NACKed before.
+  ///
+  /// It also forgets the NACK time of the SN.
+  /// \param sn      SN of the SDU.
+  /// \param sdu_len Length of the reassembled SDU, in bytes, or zero if the reassembly failed.
+  void report_recovered_sdu(uint32_t sn, size_t sdu_len);
 
 public:
   rlc_rx_am_entity(gnb_du_id_t                       gnb_du_id,

@@ -51,14 +51,9 @@ rlc_tx_am_entity::rlc_tx_am_entity(gnb_du_id_t                          gnb_du_i
   pcell_executor(pcell_executor_),
   ue_executor(ue_executor_),
   pcap_context(ue_index, rb_id_, config),
-  stats_logger("RLCSTAT", {gnb_du_id, ue_index, rb_id_, "DL"})
+  stats_ue_index(ue_index)
 {
   metrics_low.metrics_set_mode(rlc_mode::am);
-
-  // [netsys] The RLC statistics are disabled unless configured. The level must always be set, because a logger that is
-  // never configured has all its channels enabled.
-  stats_logger.get_basic_logger().set_level(cfg.enable_retx_stats ? ocudulog::basic_levels::info
-                                                                  : ocudulog::basic_levels::none);
 
   // check PDCP SN length
   ocudu_assert(config.pdcp_sn_len == pdcp_sn_size::size12bits || config.pdcp_sn_len == pdcp_sn_size::size18bits,
@@ -773,7 +768,7 @@ void rlc_tx_am_entity::handle_status_pdu(rlc_am_status_pdu status) noexcept OCUD
       metrics_low.metrics_add_ack_latency_ms(ack_latency.count());
       // [netsys] Report SDUs ACKed after at least one reTx. Must be done before the SDU is moved out below.
       if (sdu_info.retx_count != RETX_COUNT_NOT_STARTED) {
-        report_sdu_outcome(sn, "ack", t_start);
+        report_sdu_outcome(sn, rlc_sdu_result::ack, t_start);
       }
       // move the PDU's byte_buffer from tx_window into pdu_recycler (if possible) for deletion off the critical path.
       if (!pdu_recycler.add_discarded_pdu(std::move(sdu_info.sdu))) {
@@ -1003,17 +998,18 @@ void rlc_tx_am_entity::check_sn_reached_max_retx(uint32_t sn)
 {
   if (tx_window[sn].retx_count == cfg.max_retx_thresh) {
     logger.log_info("Reached maximum number of RETX. sn={} retx_count={}", sn, tx_window[sn].retx_count);
-    report_sdu_outcome(sn, "max_retx", std::chrono::steady_clock::now()); // [netsys]
+    report_sdu_outcome(sn, rlc_sdu_result::max_retx, std::chrono::steady_clock::now()); // [netsys]
     upper_cn.on_max_retx(rb_id);
   }
 }
 
 // [netsys] Per-SDU RLC reTx statistics: number of reTxs and time from the first transmission to the outcome.
 void rlc_tx_am_entity::report_sdu_outcome(uint32_t                              sn,
-                                          const char*                           result,
+                                          rlc_sdu_result                        result,
                                           std::chrono::steady_clock::time_point t_now)
 {
-  if (not stats_logger.get_basic_logger().info.enabled()) {
+  rlc_sdu_dumper* dumper = rlc_sdu_dumper::get();
+  if (dumper == nullptr) {
     return;
   }
 
@@ -1025,13 +1021,14 @@ void rlc_tx_am_entity::report_sdu_outcome(uint32_t                              
   // Time from the first transmission of the SDU (or of its first segment) until the outcome.
   const auto t_us = std::chrono::duration_cast<std::chrono::microseconds>(t_now - sdu_info.time_of_departure);
 
-  stats_logger.log_info("RLC_SDU sn={} result={} nof_retxs={} max_retx_thresh={} sdu_len={} t_us={}",
-                        sn,
-                        result,
-                        nof_retxs,
-                        cfg.max_retx_thresh,
-                        sdu_info.sdu.length(),
-                        t_us.count());
+  rlc_sdu_record record  = make_rlc_sdu_record(stats_ue_index, rb_id, rlc_sdu_direction::dl);
+  record.t_us            = static_cast<uint32_t>(t_us.count());
+  record.sn              = sn;
+  record.sdu_len         = static_cast<uint32_t>(sdu_info.sdu.length());
+  record.result          = result;
+  record.nof_retxs       = static_cast<uint8_t>(nof_retxs);
+  record.max_retx_thresh = static_cast<uint8_t>(cfg.max_retx_thresh);
+  dumper->push(record);
 }
 
 void rlc_tx_am_entity::handle_changed_buffer_state()
