@@ -1,25 +1,27 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
 # SPDX-License-Identifier: BSD-3-Clause-Open-MPI
-"""Consumer of the per-TB HARQ statistics streamed by the gNB (`harq_tb_dump` option).
+"""Consumer of a gNB statistics stream: per-TB HARQ (`harq_tb_dump` option) or per-SDU RLC (`rlc_sdu_dump` option).
 
-It connects a ZeroMQ PULL socket to the gNB and appends every received record to
-`<out-dir>/harq_tb_<start time>.bin`. A .json file with the same name summarizes the run: number of records and
-batches, lost batches (gaps in the batch sequence number), records dropped by the gNB, and gNB restarts. It is
-rewritten periodically and when the consumer stops, on Ctrl+C or SIGTERM.
+It connects a ZeroMQ PULL socket to the gNB and detects the stream from the magic number of the first batch. It then
+appends every received record to `<out-dir>/<stream>_<start time>.bin`, e.g. `harq_tb_20261125_101500.bin`. A .json
+file with the same name summarizes the run: number of records and batches, lost batches (gaps in the batch sequence
+number), records dropped by the gNB, and gNB restarts. It is rewritten periodically and when the consumer stops, on
+Ctrl+C or SIGTERM. Run one consumer per stream.
 
-Connect only one consumer at a time: a ZeroMQ PUSH socket distributes the batches among all the connected consumers
-instead of copying them, so each consumer would only get a part of the data.
+Connect only one consumer at a time to each stream: a ZeroMQ PUSH socket distributes the batches among all the
+connected consumers instead of copying them, so each consumer would only get a part of the data.
 
 Usage:
     pip install pyzmq
-    python3 harq_tb_consumer.py tcp://127.0.0.1:5555 --out-dir /data/harq_dump
+    python3 stats_consumer.py tcp://127.0.0.1:5555 --out-dir /data/harq_dump    # HARQ
+    python3 stats_consumer.py tcp://127.0.0.1:5556 --out-dir /data/rlc_dump     # RLC
 
     # Record for 10 minutes and stop:
-    python3 harq_tb_consumer.py tcp://127.0.0.1:5555 --out-dir /data/harq_dump --duration 600
+    python3 stats_consumer.py tcp://127.0.0.1:5555 --out-dir /data/harq_dump --duration 600
 
     # Run in the background, e.g. inside a Kubernetes sidecar, and stop it later:
-    nohup python3 harq_tb_consumer.py tcp://127.0.0.1:5555 --out-dir /data/harq_dump \\
+    nohup python3 stats_consumer.py tcp://127.0.0.1:5555 --out-dir /data/harq_dump \\
         --pid-file /data/harq_dump/consumer.pid > /data/harq_dump/consumer.log 2>&1 &
     kill -TERM "$(cat /data/harq_dump/consumer.pid)"
 """
@@ -35,7 +37,7 @@ from pathlib import Path
 
 import zmq
 
-import harq_tb_format as htf
+import stats_format
 
 #: Maximum time to wait for a message before checking the stop conditions, in milliseconds.
 POLL_TIMEOUT_MS = 500
@@ -48,11 +50,12 @@ def now_iso() -> str:
 class RunSummary:
     """Keeps the statistics of a run, which are saved to the .json file."""
 
-    def __init__(self, address: str, bin_path: Path):
+    def __init__(self, address: str, bin_path: Path, stream):
         self.info = {
-            "format_version": htf.VERSION,
-            "record_size": htf.RECORD_SIZE,
-            "record_fields": list(htf.RECORD_FIELDS),
+            "stream": stream.NAME,
+            "format_version": stream.VERSION,
+            "record_size": stream.RECORD_SIZE,
+            "record_fields": list(stream.RECORD_FIELDS),
             "address": address,
             "bin_file": bin_path.name,
             "start_time": now_iso(),
@@ -119,9 +122,9 @@ class RunSummary:
         os.replace(tmp_path, path)
 
 
-def make_base_path(out_dir: Path) -> Path:
+def make_base_path(out_dir: Path, stream) -> Path:
     """Returns a base file name, without extension, that is not used yet."""
-    base = out_dir / f"harq_tb_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    base = out_dir / f"{stream.NAME}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     candidate = base
     index = 1
     while candidate.with_name(candidate.name + ".bin").exists():
@@ -132,7 +135,7 @@ def make_base_path(out_dir: Path) -> Path:
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("address", help="ZeroMQ address of the gNB, e.g. tcp://127.0.0.1:5555")
+    parser.add_argument("address", help="ZeroMQ address of the gNB stream, e.g. tcp://127.0.0.1:5555")
     parser.add_argument("--out-dir", required=True, type=Path, help="Directory where the .bin and .json files go")
     parser.add_argument("--duration", type=float, default=None, help="Stop after this many seconds")
     parser.add_argument("--status-period", type=float, default=10.0, help="Seconds between status lines")
@@ -143,10 +146,6 @@ def parse_args():
 def main() -> int:
     args = parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    base_path = make_base_path(args.out_dir)
-    bin_path = base_path.with_name(base_path.name + ".bin")
-    json_path = base_path.with_name(base_path.name + ".json")
-    summary = RunSummary(args.address, bin_path)
 
     if args.pid_file:
         args.pid_file.write_text(f"{os.getpid()}\n")
@@ -166,72 +165,105 @@ def main() -> int:
     socket.connect(args.address)
     poller = zmq.Poller()
     poller.register(socket, zmq.POLLIN)
-    print(f"Connecting to {args.address}, writing {bin_path}. Press Ctrl+C to stop.", file=sys.stderr)
+    print(f"Connecting to {args.address}, writing to {args.out_dir}. Press Ctrl+C to stop.", file=sys.stderr)
 
     start = time.monotonic()
     deadline = start + args.duration if args.duration else None
     next_status = start + args.status_period
     warned_errors = set()
+    nof_malformed_before_first_batch = 0
+
+    # The files are created with the first valid batch, which tells the stream.
+    stream = None
+    bin_file = None
+    bin_path = None
+    json_path = None
+    summary = None
 
     try:
-        with open(bin_path, "wb") as bin_file:
-            while not stop_requested and (deadline is None or time.monotonic() < deadline):
+        while not stop_requested and (deadline is None or time.monotonic() < deadline):
+            try:
+                events = dict(poller.poll(POLL_TIMEOUT_MS))
+            except zmq.ZMQError as exc:
+                if exc.errno == zmq.EINTR:
+                    continue
+                raise
+
+            if socket in events:
+                parts = socket.recv_multipart(zmq.NOBLOCK)
                 try:
-                    events = dict(poller.poll(POLL_TIMEOUT_MS))
-                except zmq.ZMQError as exc:
-                    if exc.errno == zmq.EINTR:
-                        continue
-                    raise
-
-                if socket in events:
-                    parts = socket.recv_multipart(zmq.NOBLOCK)
-                    try:
-                        if len(parts) != 2:
-                            raise htf.FormatError(f"message has {len(parts)} parts instead of 2")
-                        header = htf.parse_header(parts[0])
-                        payload = parts[1]
-                        if len(payload) != header["nof_records"] * htf.RECORD_SIZE:
-                            raise htf.FormatError(
-                                f"payload has {len(payload)} bytes for {header['nof_records']} records"
-                            )
-                    except htf.FormatError as exc:
+                    if len(parts) != 2:
+                        raise stats_format.FormatError(f"message has {len(parts)} parts instead of 2")
+                    header, batch_stream = stats_format.parse_header(parts[0])
+                    payload = parts[1]
+                    if len(payload) != header["nof_records"] * batch_stream.RECORD_SIZE:
+                        raise stats_format.FormatError(
+                            f"payload has {len(payload)} bytes for {header['nof_records']} records"
+                        )
+                    if stream is not None and batch_stream is not stream:
+                        raise stats_format.FormatError(
+                            f"received a {batch_stream.NAME} batch on the {stream.NAME} stream"
+                        )
+                except stats_format.FormatError as exc:
+                    if summary is None:
+                        nof_malformed_before_first_batch += 1
+                    else:
                         summary.info["nof_malformed_messages"] += 1
-                        if str(exc) not in warned_errors:
-                            warned_errors.add(str(exc))
-                            print(f"WARNING: skipping malformed message: {exc}", file=sys.stderr)
-                        continue
+                    if str(exc) not in warned_errors:
+                        warned_errors.add(str(exc))
+                        print(f"WARNING: skipping malformed message: {exc}", file=sys.stderr)
+                    continue
 
-                    # Flush every batch, so that the data is on disk even if the consumer is killed.
-                    bin_file.write(payload)
-                    bin_file.flush()
-                    lost = summary.on_batch(header)
-                    if lost:
-                        print(f"WARNING: {lost} batch(es) lost before seq={header['seq']}", file=sys.stderr)
+                if stream is None:
+                    stream = batch_stream
+                    base_path = make_base_path(args.out_dir, stream)
+                    bin_path = base_path.with_name(base_path.name + ".bin")
+                    json_path = base_path.with_name(base_path.name + ".json")
+                    bin_file = open(bin_path, "wb")
+                    summary = RunSummary(args.address, bin_path, stream)
+                    summary.info["nof_malformed_messages"] = nof_malformed_before_first_batch
+                    print(f"Receiving the {stream.NAME} stream, writing {bin_path}", file=sys.stderr)
 
-                now = time.monotonic()
-                if now >= next_status:
-                    next_status = now + args.status_period
+                # Flush every batch, so that the data is on disk even if the consumer is killed.
+                bin_file.write(payload)
+                bin_file.flush()
+                lost = summary.on_batch(header)
+                if lost:
+                    print(f"WARNING: {lost} batch(es) lost before seq={header['seq']}", file=sys.stderr)
+
+            now = time.monotonic()
+            if now >= next_status:
+                next_status = now + args.status_period
+                if summary is None:
+                    print(f"[{now - start:7.0f}s] waiting for the first batch", file=sys.stderr)
+                else:
                     info = summary.info
                     print(
-                        f"[{now - start:7.0f}s] records={info['nof_records']} batches={info['nof_batches']} "
-                        f"lost_batches={info['nof_lost_batches']} "
+                        f"[{now - start:7.0f}s] {stream.NAME}: records={info['nof_records']} "
+                        f"batches={info['nof_batches']} lost_batches={info['nof_lost_batches']} "
                         f"dropped_by_gnb={summary.nof_dropped_during_run()} "
                         f"gnb_sessions={len(info['gnb_sessions'])}",
                         file=sys.stderr,
                     )
                     summary.save(json_path)
     finally:
-        summary.info["end_time"] = now_iso()
-        summary.save(json_path)
+        if summary is not None:
+            summary.info["end_time"] = now_iso()
+            summary.save(json_path)
+            bin_file.close()
         socket.close(linger=0)
         context.term()
         if args.pid_file:
             args.pid_file.unlink(missing_ok=True)
 
+    if summary is None:
+        print("Stopped. No batch was received, so no file was written.", file=sys.stderr)
+        return 0
+
     info = summary.info
     print(
-        f"Stopped. {info['nof_records']} records in {info['nof_batches']} batches written to {bin_path}. "
-        f"Lost batches: {info['nof_lost_batches']}. "
+        f"Stopped. {info['nof_records']} {stream.NAME} records in {info['nof_batches']} batches written to "
+        f"{bin_path}. Lost batches: {info['nof_lost_batches']}. "
         f"Records dropped by the gNB during the run: {summary.nof_dropped_during_run()}.",
         file=sys.stderr,
     )

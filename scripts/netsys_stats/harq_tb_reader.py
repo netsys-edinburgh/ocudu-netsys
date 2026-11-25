@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
 # SPDX-License-Identifier: BSD-3-Clause-Open-MPI
-"""Reads the per-TB HARQ statistics saved by harq_tb_consumer.py, prints a summary and optionally exports a CSV file.
+"""Reads the per-TB HARQ statistics saved by stats_consumer.py, prints a summary and optionally exports a CSV file.
 
 For each direction, the summary shows the number of TBs per outcome and, for the TBs that were recovered by HARQ
 reTxs (result=ack), the distribution of the number of reTxs and of the time from the first transmission to the
@@ -16,14 +16,13 @@ Usage:
 
 import argparse
 import csv
-import json
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 
 import harq_tb_format as htf
+import stats_format
 
 #: Columns of the exported CSV file, in order.
 CSV_COLUMNS = (
@@ -44,60 +43,15 @@ CSV_COLUMNS = (
 )
 
 
-def find_bin_files(paths):
-    """Expands directories into the .bin files they contain."""
-    files = []
-    for path in paths:
-        if path.is_dir():
-            files.extend(sorted(path.glob("harq_tb_*.bin")))
-        else:
-            files.append(path)
-    return files
-
-
-def load_records(bin_path: Path) -> np.ndarray:
-    """Loads the records of one .bin file. A truncated last record, e.g. from a killed consumer, is ignored."""
-    size = bin_path.stat().st_size
-    if size % htf.RECORD_SIZE:
-        print(f"WARNING: {bin_path} ends with {size % htf.RECORD_SIZE} bytes of a truncated record", file=sys.stderr)
-    return np.fromfile(bin_path, dtype=htf.record_dtype(), count=size // htf.RECORD_SIZE)
-
-
-def report_run_info(bin_path: Path) -> None:
-    """Prints the warnings found in the .json file of a run, if present."""
-    json_path = bin_path.with_suffix(".json")
-    if not json_path.exists():
-        print(f"{bin_path.name}: no .json file found, completeness unknown")
-        return
-    info = json.loads(json_path.read_text())
-    sessions = info.get("gnb_sessions", [])
-    dropped_before = sessions[0]["first_nof_dropped_total"] if sessions else 0
-    print(
-        f"{bin_path.name}: {info['start_time']} to {info['end_time'] or 'not stopped cleanly'}, "
-        f"{info['nof_records']} records, {len(sessions)} gNB session(s)"
-    )
-    if info["nof_lost_batches"]:
-        print(f"  WARNING: {info['nof_lost_batches']} batch(es) lost in transit")
-    if info.get("nof_dropped_during_run"):
-        print(f"  WARNING: {info['nof_dropped_during_run']} record(s) dropped by the gNB while recording")
-    if dropped_before:
-        print(f"  Note: {dropped_before} record(s) dropped by the gNB before the consumer connected")
-    if info["nof_malformed_messages"]:
-        print(f"  WARNING: {info['nof_malformed_messages']} malformed message(s) skipped")
-
-
-def format_time(wall_time_ns: int) -> str:
-    return datetime.fromtimestamp(wall_time_ns / 1e9, tz=timezone.utc).isoformat(timespec="milliseconds")
-
-
 def print_summary(records: np.ndarray) -> None:
     if records.size == 0:
         print("No records.")
         return
 
     print(
-        f"\n{records.size} records from {format_time(int(records['wall_time_ns'].min()))} "
-        f"to {format_time(int(records['wall_time_ns'].max()))}, {np.unique(records['rnti']).size} RNTI(s)"
+        f"\n{records.size} records from {stats_format.format_time(int(records['wall_time_ns'].min()))} "
+        f"to {stats_format.format_time(int(records['wall_time_ns'].max()))}, "
+        f"{np.unique(records['rnti']).size} RNTI(s)"
     )
 
     for dir_value, dir_name in htf.DIRECTIONS.items():
@@ -117,12 +71,7 @@ def print_summary(records: np.ndarray) -> None:
         retxs, counts = np.unique(acked["nof_retxs"], return_counts=True)
         for value, count in zip(retxs, counts):
             print(f"    nof_retxs={value}: {count:>8}  ({100 * count / acked.size:5.1f}%)")
-        t_ack_ms = acked["t_ack_us"] / 1000.0
-        p50, p90, p99 = np.percentile(t_ack_ms, [50, 90, 99])
-        print(
-            f"    t_ack: mean={t_ack_ms.mean():.2f} ms  p50={p50:.2f} ms  p90={p90:.2f} ms  "
-            f"p99={p99:.2f} ms  max={t_ack_ms.max():.2f} ms"
-        )
+        stats_format.print_time_stats("t_ack", acked["t_ack_us"])
 
 
 def export_csv(records: np.ndarray, csv_path: Path) -> None:
@@ -156,15 +105,15 @@ def main() -> int:
     parser.add_argument("--csv", type=Path, default=None, help="Export all the records to this CSV file")
     args = parser.parse_args()
 
-    bin_files = find_bin_files(args.paths)
+    bin_files = stats_format.find_bin_files(args.paths, htf)
     if not bin_files:
-        print("No .bin files found.", file=sys.stderr)
+        print("No harq_tb .bin files found.", file=sys.stderr)
         return 1
 
     all_records = []
     for bin_path in bin_files:
-        report_run_info(bin_path)
-        all_records.append(load_records(bin_path))
+        stats_format.report_run_info(bin_path)
+        all_records.append(stats_format.load_records(bin_path, htf))
     records = np.concatenate(all_records)
 
     print_summary(records)
