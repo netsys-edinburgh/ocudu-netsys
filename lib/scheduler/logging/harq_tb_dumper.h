@@ -2,26 +2,26 @@
 // SPDX-License-Identifier: BSD-3-Clause-Open-MPI
 
 /// \file
-/// \brief [netsys] Streaming of the per-TB HARQ statistics over ZeroMQ, and its wire format.
+/// \brief [netsys] Streaming of the per-TB HARQ statistics over ZeroMQ, and its record format.
 ///
-/// Each ZeroMQ message has two parts: a \ref harq_tb_batch_header followed by \c nof_records consecutive
-/// \ref harq_tb_record objects. All the fields are little-endian. Any change to these types must be reflected in the
-/// consumer script, and any incompatible change must also increase \ref harq_tb_batch_header::version.
+/// Each ZeroMQ message has two parts: a \ref stats_batch_header with \ref harq_tb_dump_magic and
+/// \ref harq_tb_dump_version, followed by \c nof_records consecutive \ref harq_tb_record objects. All the fields are
+/// little-endian. Any change to these types must be reflected in the consumer script, and any incompatible change must
+/// also increase \ref harq_tb_dump_version.
 
 #pragma once
 
-#include "ocudu/adt/mpmc_queue.h"
-#include "ocudu/adt/span.h"
-#include "ocudu/support/executors/unique_thread.h"
-#include <array>
-#include <atomic>
-#include <chrono>
-#include <cstddef>
+#include "ocudu/support/netsys_stats/binary_stats_dumper.h"
 #include <cstdint>
 #include <string>
 #include <type_traits>
 
 namespace ocudu {
+
+/// [netsys] Magic number of the HARQ TB stream ("HARQ" in ASCII).
+inline constexpr uint32_t harq_tb_dump_magic = 0x48415251;
+/// [netsys] Wire format version of \ref harq_tb_record.
+inline constexpr uint16_t harq_tb_dump_version = 1;
 
 /// [netsys] Direction of a transport block. The values are part of the wire format.
 enum class harq_tb_direction : uint8_t { dl = 0, ul = 1 };
@@ -74,110 +74,30 @@ struct harq_tb_record {
   uint8_t numerology;
 };
 
-/// [netsys] Header of one batch of records, sent as the first part of each ZeroMQ message.
-struct harq_tb_batch_header {
-  /// Magic number identifying this message type ("HARQ" in ASCII).
-  uint32_t magic = 0x48415251;
-  /// Wire format version.
-  uint16_t version = 1;
-  /// Size of each record, in bytes.
-  uint16_t record_size = sizeof(harq_tb_record);
-  /// Number of records in this batch.
-  uint32_t nof_records = 0;
-  /// Batch sequence number, starting at zero. A gap means that batches were lost.
-  uint64_t seq = 0;
-  /// Total number of records dropped by the gNB since it started.
-  uint64_t nof_dropped_total = 0;
-};
-
 #pragma pack(pop)
 
 static_assert(sizeof(harq_tb_record) == 34, "Unexpected harq_tb_record size. Update the consumer script.");
-static_assert(sizeof(harq_tb_batch_header) == 28, "Unexpected harq_tb_batch_header size. Update the consumer script.");
 static_assert(std::is_trivially_copyable_v<harq_tb_record>, "harq_tb_record must be sent as raw bytes.");
-static_assert(std::is_trivially_copyable_v<harq_tb_batch_header>, "harq_tb_batch_header must be sent as raw bytes.");
 
 /// \brief [netsys] Streams the per-TB HARQ statistics to an external consumer.
 ///
-/// The real-time scheduler threads only copy a fixed-size record into a lock-free queue. A background thread groups the
-/// queued records into batches and sends them through a ZeroMQ PUSH socket without ever blocking on the consumer.
-class harq_tb_dumper
+/// The real-time scheduler threads only copy a record into a lock-free queue, see \ref binary_stats_dumper.
+class harq_tb_dumper : public binary_stats_dumper<harq_tb_record>
 {
 public:
-  /// \brief Creates the ZeroMQ PUSH socket and binds it to the given address.
+  /// \brief Creates the ZeroMQ socket of the stream and binds it to the given address.
   ///
-  /// It must be called before the real-time threads are created, because the internal ZeroMQ threads inherit the
-  /// scheduling priority and CPU affinity of the calling thread. A failure to bind is a fatal error.
-  ///
-  /// \param[in] address ZeroMQ address to bind, e.g. "tcp://127.0.0.1:5557".
-  explicit harq_tb_dumper(const std::string& address);
-
-  /// Stops the background thread and closes the ZeroMQ socket.
-  ~harq_tb_dumper();
+  /// \param[in] address ZeroMQ address to bind, e.g. "tcp://127.0.0.1:5555".
+  explicit harq_tb_dumper(const std::string& address) :
+    binary_stats_dumper("harq_tb_dump", address, harq_tb_dump_magic, harq_tb_dump_version)
+  {
+  }
 
   /// \brief Gets the dumper in use. It can be called from any thread.
   ///
   /// \return A pointer to the dumper owned by the active \ref harq_tb_dump_session, or \c nullptr if the dump is
   /// disabled.
   static harq_tb_dumper* get() noexcept;
-
-  /// \brief Starts the background thread.
-  ///
-  /// It must be called before the real-time threads are created, because the new thread inherits the scheduling
-  /// priority and CPU affinity of the calling thread.
-  void start();
-
-  /// Stops the background thread, after sending the records that are still in the queue.
-  void stop();
-
-  /// \brief Queues one record for transmission.
-  ///
-  /// It can be called concurrently from several threads. It never blocks and never allocates memory. If the queue is
-  /// full, the record is dropped and counted in \ref nof_dropped.
-  ///
-  /// \param[in] record Record to queue.
-  void push(const harq_tb_record& record) noexcept;
-
-private:
-  /// Maximum number of records waiting to be sent.
-  static constexpr size_t queue_capacity = 16384;
-  /// Maximum number of records in one batch.
-  static constexpr size_t max_batch_size = 512;
-  /// Maximum time that a record waits in an incomplete batch before being sent.
-  static constexpr std::chrono::milliseconds flush_period{100};
-  /// Sleep time of the background thread while the current batch is not ready to be sent.
-  static constexpr std::chrono::milliseconds poll_period{10};
-  /// Maximum number of batches that ZeroMQ buffers for a slow consumer.
-  static constexpr int zmq_send_hwm = 256;
-  /// Maximum time that ZeroMQ keeps trying to deliver the pending batches after the socket is closed.
-  static constexpr std::chrono::milliseconds zmq_linger_period{1000};
-
-  using record_queue = concurrent_queue<harq_tb_record,
-                                        concurrent_queue_policy::lockfree_mpmc,
-                                        concurrent_queue_wait_policy::non_blocking>;
-
-  /// Body of the background thread.
-  void run();
-
-  /// Sends one batch of records. Only called from the background thread.
-  void send_batch(span<const harq_tb_record> records);
-
-  /// Records waiting to be sent.
-  record_queue queue;
-  /// Total number of records dropped since the start.
-  std::atomic<uint64_t> nof_dropped{0};
-  /// Batch being assembled. Only accessed from the background thread.
-  std::array<harq_tb_record, max_batch_size> batch{};
-  /// Sequence number of the next batch. Only accessed from the background thread.
-  uint64_t next_seq = 0;
-  /// ZeroMQ context.
-  void* zmq_context = nullptr;
-  /// ZeroMQ PUSH socket. While the background thread is running, only that thread uses it.
-  void* zmq_push_socket = nullptr;
-  /// True while the background thread must keep running.
-  std::atomic<bool> running{false};
-  /// Background thread.
-  unique_thread worker;
 };
 
 } // namespace ocudu

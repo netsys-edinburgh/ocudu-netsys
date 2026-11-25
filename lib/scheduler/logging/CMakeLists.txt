@@ -8,4 +8,4 @@ target_link_libraries(scheduler_logger ocudu_sched ocudu_ran ocudu_support ocudu
 
 # [netsys] Per-TB HARQ statistics dump over ZeroMQ.
 add_library(sched_harq_tb_dump STATIC harq_tb_dumper.cpp)
-target_link_libraries(sched_harq_tb_dump ocudu_support fmt zmq)
+target_link_libraries(sched_harq_tb_dump netsys_stats fmt)

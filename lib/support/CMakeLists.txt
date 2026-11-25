@@ -4,6 +4,7 @@
 
 add_subdirectory(versioning)
 add_subdirectory(math)
+add_subdirectory(netsys_stats)
 
 add_library(ocudu_yaml_util STATIC config_yaml.cpp)
 target_link_libraries(ocudu_yaml_util PRIVATE ocudu::yaml-cpp)
